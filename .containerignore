@@ -1,0 +1,8 @@
+.git
+output
+.gitignore
+.containerignore
+README.md
+stack_decisions.md
+LICENSE
+run.sh

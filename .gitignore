@@ -1,0 +1,17 @@
+# Output artifacts
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db

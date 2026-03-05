@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE="${SCRIPT_DIR}/e2e_workspace"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WORKSPACE="${SCRIPT_DIR}/workspace"
 TIMEOUT=600  # 10 minutes
 
 GOAL='Build a two-step data pipeline: 1. Fetch JSON from http://api.open-notify.org/astros.json and save to raw_astros.json. 2. Read raw_astros.json, extract the astronaut count, and write "There are currently X astronauts in space." to summary.txt.'
@@ -12,7 +13,7 @@ echo "  UAS End-to-End Test"
 echo "============================================================"
 
 # --- Clean previous test artifacts ---
-echo "Cleaning e2e_workspace..."
+echo "Cleaning workspace..."
 rm -rf "$WORKSPACE"
 mkdir -p "$WORKSPACE"
 
@@ -42,7 +43,7 @@ export UAS_WORKSPACE="$WORKSPACE"
 export UAS_SANDBOX_MODE="local"
 
 EXIT_CODE=0
-cd "$SCRIPT_DIR"
+cd "$REPO_ROOT"
 timeout "${TIMEOUT}" python3 -m architect.main 2>&1 || EXIT_CODE=$?
 
 echo ""

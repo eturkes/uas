@@ -11,7 +11,8 @@ import subprocess
 import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKSPACE = os.path.join(SCRIPT_DIR, "e2e_workspace")
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+WORKSPACE = os.path.join(SCRIPT_DIR, "workspace")
 TIMEOUT = 600  # 10 minutes max
 
 
@@ -19,8 +20,8 @@ def main():
     # Clean up from previous runs
     for path in [
         WORKSPACE,
-        os.path.join(SCRIPT_DIR, "e2e_step1.txt"),
-        os.path.join(SCRIPT_DIR, "e2e_step2.txt"),
+        os.path.join(SCRIPT_DIR, "step1.txt"),
+        os.path.join(SCRIPT_DIR, "step2.txt"),
     ]:
         if os.path.isdir(path):
             shutil.rmtree(path)
@@ -30,10 +31,10 @@ def main():
     os.makedirs(WORKSPACE, exist_ok=True)
 
     goal = (
-        "Step 1: Write a file named 'e2e_step1.txt' containing the word 'HELLO' "
+        "Step 1: Write a file named 'step1.txt' containing the word 'HELLO' "
         "to /workspace. "
-        "Step 2: Read 'e2e_step1.txt' from /workspace and write a new file "
-        "'e2e_step2.txt' to /workspace containing 'HELLO WORLD'."
+        "Step 2: Read 'step1.txt' from /workspace and write a new file "
+        "'step2.txt' to /workspace containing 'HELLO WORLD'."
     )
 
     env = os.environ.copy()
@@ -54,7 +55,7 @@ def main():
         result = subprocess.run(
             [sys.executable, "-m", "architect.main"],
             env=env,
-            cwd=SCRIPT_DIR,
+            cwd=REPO_ROOT,
             timeout=TIMEOUT,
             stdin=subprocess.DEVNULL,
         )
@@ -68,33 +69,33 @@ def main():
     print(f"\nArchitect exited with code: {result.returncode}")
 
     # Copy results from workspace to project root
-    for fname in ["e2e_step1.txt", "e2e_step2.txt"]:
+    for fname in ["step1.txt", "step2.txt"]:
         src = os.path.join(WORKSPACE, fname)
         if os.path.exists(src):
             shutil.copy(src, os.path.join(SCRIPT_DIR, fname))
             print(f"  Copied {fname} to project root")
 
     # Verify results
-    step1_path = os.path.join(SCRIPT_DIR, "e2e_step1.txt")
-    step2_path = os.path.join(SCRIPT_DIR, "e2e_step2.txt")
+    step1_path = os.path.join(SCRIPT_DIR, "step1.txt")
+    step2_path = os.path.join(SCRIPT_DIR, "step2.txt")
 
     if os.path.exists(step1_path):
         content = open(step1_path).read().strip()
-        print(f"  e2e_step1.txt: {content!r}")
+        print(f"  step1.txt: {content!r}")
     else:
-        print("  e2e_step1.txt: NOT FOUND")
+        print("  step1.txt: NOT FOUND")
 
     if os.path.exists(step2_path):
         content = open(step2_path).read().strip()
         if "HELLO WORLD" in content:
-            print(f"  e2e_step2.txt: {content!r}")
+            print(f"  step2.txt: {content!r}")
             print("\nE2E TEST PASSED")
             return 0
         else:
-            print(f"\nE2E TEST FAILED: e2e_step2.txt contains {content!r}, expected 'HELLO WORLD'")
+            print(f"\nE2E TEST FAILED: step2.txt contains {content!r}, expected 'HELLO WORLD'")
             return 1
     else:
-        print("\nE2E TEST FAILED: e2e_step2.txt was not created")
+        print("\nE2E TEST FAILED: step2.txt was not created")
         return 1
 
 

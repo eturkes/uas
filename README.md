@@ -45,7 +45,7 @@ cp -r ~/.claude .uas_auth
 
 ```bash
 # Quick test from the repo (first run requires interactive auth):
-bash test/run.sh
+bash e2e/smoke_test.sh
 ```
 
 ### Resuming a Run
@@ -105,8 +105,8 @@ The JSON file contains the goal, overall status (`completed`, `failed`, or
 UAS_SANDBOX_MODE=local UAS_GOAL="your goal" python3 -m architect.main
 
 # Or run the E2E tests:
-python3 e2e_test.py          # Simple two-step test
-./run_e2e_test.sh            # Full pipeline test (fetches live data)
+python3 e2e/local_test.py    # Simple two-step test
+bash e2e/live_test.sh        # Full pipeline test (fetches live data)
 ```
 
 When `UAS_GOAL` or `UAS_TASK` is set, the entrypoint skips the
@@ -125,7 +125,6 @@ interactive Claude Code setup and proceeds directly to execution.
 ├── entrypoint.sh             # Two-stage entrypoint (setup then run)
 ├── Containerfile             # Image (Podman + Python + Claude Code CLI)
 ├── requirements.txt          # Python dependencies
-├── PLAN.md                   # Improvement plan (step-by-step roadmap)
 ├── architect/                # Architect Agent (installed to /uas)
 │   ├── main.py               # Controller loop
 │   ├── planner.py            # LLM task decomposition + rewrite
@@ -140,10 +139,10 @@ interactive Claude Code setup and proceeds directly to execution.
 ├── tests/                    # Unit tests (pytest)
 │   ├── conftest.py           # Shared fixtures
 │   └── test_*.py             # Test modules
-├── test/
-│   └── run.sh                # Smoke test (creates hello.txt via container)
-├── e2e_test.py               # E2E test (local mode, two-step task)
-└── run_e2e_test.sh           # E2E test (full pipeline, live data)
+└── e2e/                      # Integration / E2E tests
+    ├── smoke_test.sh          # Container smoke test (creates hello.txt)
+    ├── local_test.py          # Local two-step test (no containers)
+    └── live_test.sh           # Full pipeline test (fetches live data)
 ```
 
 ## Architecture

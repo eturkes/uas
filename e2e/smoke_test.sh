@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Simple smoke test for UAS.
-# Run from the repo root: bash test/run.sh
+# Run from the repo root: bash e2e/smoke_test.sh
 #
 # What it does:
 #   Asks UAS to create a single file (hello.txt) with known content.
@@ -24,7 +24,7 @@ echo "  Goal: ${GOAL}"
 echo "  Working directory: ${SCRIPT_DIR}"
 echo ""
 
-# Run UAS from inside the test/ directory so .uas_auth/ lands here
+# Run UAS from inside the e2e/ directory so .uas_auth/ lands here
 cd "$SCRIPT_DIR"
 
 # Re-install wrapper to pick up any script changes

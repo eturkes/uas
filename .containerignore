@@ -3,11 +3,9 @@
 .containerignore
 README.md
 LICENSE
-e2e_test.py
-run_e2e_test.sh
 start_orchestrator.sh
 install.sh
-test/
+e2e/
 tests/
 architect_state/
 ARCHITECT_BLOCKER.md

@@ -4,7 +4,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 
 SANDBOX_IMAGE_NAME = "uas-sandbox"
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"

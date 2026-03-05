@@ -1,9 +1,9 @@
-# Output artifacts
-output/
-
 # Architect runtime state
 architect_state/
 ARCHITECT_BLOCKER.md
+
+# Sandbox build artifact
+Sandbox.Dockerfile
 
 # E2E test artifacts
 e2e_workspace/
@@ -13,6 +13,7 @@ e2e_step*.txt
 test/hello.txt
 test/.uas_auth/
 test/architect_state/
+test/ARCHITECT_BLOCKER.md
 
 # Project-level auth (contains secrets)
 .uas_auth/

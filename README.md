@@ -73,6 +73,8 @@ interactive Claude Code setup and proceeds directly to execution.
 ├── install.sh                # Builds image and installs `uas` CLI
 ├── start_orchestrator.sh     # Alternative: build and launch manually
 ├── entrypoint.sh             # Two-stage entrypoint (setup then run)
+├── Containerfile             # Image (Podman + Python + Claude Code CLI)
+├── requirements.txt          # Python dependencies
 ├── architect/                # Architect Agent (installed to /uas)
 │   ├── main.py               # Controller loop
 │   ├── planner.py            # LLM task decomposition + rewrite
@@ -84,16 +86,10 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── llm_client.py         # Claude Code CLI subprocess wrapper
 │   ├── sandbox.py            # Nested Podman sandbox execution
 │   └── parser.py             # Code extraction from LLM responses
-├── Containerfile             # Image (Podman + Python + Claude Code CLI)
 ├── test/
 │   └── run.sh                # Smoke test (creates hello.txt via container)
-├── e2e_test.py               # End-to-end test (local mode, simple)
-├── run_e2e_test.sh           # End-to-end test (full pipeline, live data)
-├── final_architecture_report.md  # Auth and test harness report
-├── bug_fix_report.md         # Detailed bug analysis and fixes
-├── architect_design.md       # Architect architecture documentation
-├── orchestrator_design.md    # Orchestrator architecture documentation
-└── stack_decisions.md        # Stack rationale
+├── e2e_test.py               # E2E test (local mode, two-step task)
+└── run_e2e_test.sh           # E2E test (full pipeline, live data)
 ```
 
 ## Architecture
@@ -119,13 +115,67 @@ installed inside the container. Authentication is persisted to
 `$PWD/.uas_auth/` via bind mount, so interactive login is only
 required once per project.
 
-Steps share a persistent `/workspace` directory. The Architect
-captures stdout from each step and injects it as context into
-dependent steps. If a step fails after all Orchestrator retries,
-the Architect rewrites the spec up to 2 times before halting with
-`ARCHITECT_BLOCKER.md`.
+### Architect Agent
 
-See [architect_design.md](architect_design.md) and [orchestrator_design.md](orchestrator_design.md) for full details.
+The Architect takes a natural-language goal, uses the LLM to decompose it
+into atomic steps, generates a UAS markdown spec for each, and drives
+the Orchestrator to execute them sequentially.
+
+**Planning:** The Planner sends the goal to the LLM with a structured prompt
+that enforces self-contained steps with `title`, `description`, and
+`depends_on` fields (JSON array).
+
+**Context propagation:** When step N depends on step M, the Architect
+captures sandbox stdout from step M and injects it as literal context
+into step N's task description.
+
+**Self-correction:** If the Orchestrator fails a step (after its own 3
+internal retries), the Architect rewrites the spec up to 2 times by
+sending the LLM the original task plus truncated error output. If all
+rewrites are exhausted, it halts with `ARCHITECT_BLOCKER.md`.
+
+**State:** All state is persisted to `architect_state/plan_state.json`
+after every significant event (step start, completion, failure, rewrite).
+
+### Orchestrator (Build-Run-Evaluate Loop)
+
+```
+1. Receive task (CLI arg / env var / stdin)
+2. Verify nested Podman works (trivial print statement)
+3. For attempt = 1..3:
+   a. Build prompt (include previous error if retrying)
+   b. Send prompt to LLM -> receive response
+   c. Extract code block from response
+   d. Execute code in sandbox container
+   e. If exit_code == 0 -> SUCCESS, stop
+   f. Else -> feed error back into prompt, retry
+4. If all 3 attempts fail -> exit with error
+```
+
+### Security Model
+
+| Layer | Control |
+|---|---|
+| Host <-> Orchestrator | `--privileged` grants kernel capabilities for nested namespaces. No host socket mounted. |
+| Orchestrator <-> Sandbox | `--network=none`, `--read-only` filesystem, `--memory=256m`, `--cpus=1`, 60s timeout. Script bind-mounted read-only. |
+| LLM-generated code | Never executed in the Orchestrator process. Always runs inside the nested sandbox. |
+
+`--privileged` is required because Podman-in-Podman needs `CAP_SYS_ADMIN`
+and `/dev/fuse` access to create inner container namespaces. The vfs
+storage driver is used for the inner Podman for maximum compatibility
+in nested scenarios.
+
+## Environment Variables
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `UAS_GOAL` | Goal for the Architect Agent | *(prompted)* |
+| `UAS_TASK` | Task for the Orchestrator | *(prompted)* |
+| `UAS_SANDBOX_MODE` | `container` or `local` | `container` |
+| `UAS_WORKSPACE` | Workspace directory path | `/workspace` |
+| `UAS_SANDBOX_IMAGE` | Sandbox container image | `python:3.12-slim` |
+| `UAS_SANDBOX_TIMEOUT` | Sandbox execution timeout (seconds) | `60` |
+| `ANTHROPIC_API_KEY` | Anthropic API key | *(uses Claude CLI auth)* |
 
 ## License
 

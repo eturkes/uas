@@ -1,15 +1,9 @@
 """LLM-based task decomposition into atomic steps."""
 
 import json
-import os
 import re
-import sys
 
-
-def _get_llm_client():
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-    from orchestrator.llm_client import get_llm_client
-    return get_llm_client()
+from orchestrator.llm_client import get_llm_client
 
 DECOMPOSITION_PROMPT = """\
 You are a task decomposition engine. Given a high-level goal, break it into \
@@ -68,7 +62,7 @@ def parse_steps_json(response: str) -> list[dict]:
 
 
 def decompose_goal(goal: str) -> list[dict]:
-    client = _get_llm_client()
+    client = get_llm_client()
     prompt = DECOMPOSITION_PROMPT.format(goal=goal)
     response = client.generate(prompt)
     steps = parse_steps_json(response)
@@ -82,7 +76,7 @@ def decompose_goal(goal: str) -> list[dict]:
 
 
 def rewrite_task(step: dict, orchestrator_stdout: str, orchestrator_stderr: str) -> str:
-    client = _get_llm_client()
+    client = get_llm_client()
     prompt = (
         "A code-generation task was sent to an orchestrator but failed after "
         "3 attempts. Analyze the failure and provide an improved task description.\n\n"

@@ -1,6 +1,7 @@
 """LLM client via the Claude Code CLI subprocess wrapper."""
 
 import os
+import shutil
 import subprocess
 
 CLAUDE_TIMEOUT = 120
@@ -14,21 +15,27 @@ class ClaudeCodeClient:
 
     def generate(self, prompt: str) -> str:
         """Send a prompt to Claude Code CLI and return the text response."""
-        # Remove CLAUDECODE env var to prevent nested-session detection,
-        # and strip other session-specific vars that leak from parent.
-        env = {
-            k: v for k, v in os.environ.items()
-            if k not in ("CLAUDECODE", "CLAUDE_CODE_SESSION")
-        }
+        # Resolve the absolute path to the claude binary so subprocess
+        # never fails due to a missing or overwritten PATH.
+        claude_path = shutil.which("claude")
+        if claude_path:
+            cmd = [claude_path, "-p", prompt, "--dangerously-skip-permissions"]
+        else:
+            cmd = [
+                "npx", "-y", "@anthropic-ai/claude-code",
+                "-p", prompt, "--dangerously-skip-permissions",
+            ]
+
+        # Copy the full current environment to preserve PATH and other vars.
+        # Only strip session-specific vars that cause nested-session detection.
+        env = os.environ.copy()
+        env.pop("CLAUDECODE", None)
+        env.pop("CLAUDE_CODE_SESSION", None)
         env["IS_SANDBOX"] = "1"
+
         try:
             result = subprocess.run(
-                [
-                    "claude",
-                    "-p",
-                    prompt,
-                    "--dangerously-skip-permissions",
-                ],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
@@ -39,10 +46,9 @@ class ClaudeCodeClient:
             raise RuntimeError(
                 f"Claude Code CLI timed out after {self.timeout} seconds."
             )
-        except FileNotFoundError:
+        except FileNotFoundError as e:
             raise RuntimeError(
-                "Claude Code CLI not found. Ensure @anthropic-ai/claude-code "
-                "is installed globally."
+                f"Claude CLI executable not found in PATH: {e}"
             )
 
         if result.returncode != 0:

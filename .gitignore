@@ -7,6 +7,7 @@ Sandbox.Dockerfile
 
 # Integration test runtime artifacts
 integration/workspace/
+integration/eval_results.json
 integration/step*.txt
 integration/hello.txt
 integration/.uas_auth/

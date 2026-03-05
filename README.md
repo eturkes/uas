@@ -104,9 +104,11 @@ The JSON file contains the goal, overall status (`completed`, `failed`, or
 # Run without containers (uses local Python + Claude Code CLI):
 UAS_SANDBOX_MODE=local UAS_GOAL="your goal" python3 -m architect.main
 
-# Or run the integration tests:
-python3 integration/local_test.py   # Simple two-step test
-bash integration/live_test.sh       # Full pipeline test (fetches live data)
+# Or run the prompt evaluation suite:
+python3 integration/eval.py                # Run all prompt cases
+python3 integration/eval.py -k hello       # Run cases matching 'hello'
+python3 integration/eval.py --list         # List available cases
+python3 integration/eval.py -v             # Verbose (show architect logs)
 ```
 
 When `UAS_GOAL` or `UAS_TASK` is set, the entrypoint skips the
@@ -141,8 +143,8 @@ interactive Claude Code setup and proceeds directly to execution.
 │   └── test_*.py             # Test modules
 └── integration/              # Integration tests
     ├── smoke_test.sh          # Container smoke test (creates hello.txt)
-    ├── local_test.py          # Local two-step test (no containers)
-    └── live_test.sh           # Full pipeline test (fetches live data)
+    ├── eval.py                # Prompt evaluation runner
+    └── prompts.json           # Prompt cases with goals and checks
 ```
 
 ## Architecture

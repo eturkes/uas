@@ -42,6 +42,7 @@ fi
 exec "$ENGINE" run --rm \
     "${TTY_ARGS[@]+"${TTY_ARGS[@]}"}" \
     --privileged \
+    -e IS_SANDBOX=1 \
     "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \
     "$IMAGE_NAME" \
     "$@"

@@ -26,4 +26,6 @@ RUN chmod +x entrypoint.sh
 VOLUME /workspace
 WORKDIR /workspace
 
+ENV IS_SANDBOX=1
+
 ENTRYPOINT ["/uas/entrypoint.sh"]

@@ -20,6 +20,7 @@ class ClaudeCodeClient:
             k: v for k, v in os.environ.items()
             if k not in ("CLAUDECODE", "CLAUDE_CODE_SESSION")
         }
+        env["IS_SANDBOX"] = "1"
         try:
             result = subprocess.run(
                 [

@@ -58,6 +58,7 @@ fi
 
 exec "$ENGINE" run --rm -it \
     --privileged \
+    -e IS_SANDBOX=1 \
     -v "$PWD:/workspace" \
     -w /workspace \
     uas-engine:latest \

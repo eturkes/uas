@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Prompt evaluation system for UAS.
 
-Runs prompt cases through the Architect Agent in local mode,
-checks expected outcomes, and generates an assessment report.
+Runs prompt cases through the Architect Agent, checks expected outcomes,
+and generates an assessment report. Uses container isolation by default.
 
 Usage:
-    python3 integration/eval.py                # Run all cases
+    python3 integration/eval.py                # Run all cases (container mode)
     python3 integration/eval.py -k hello       # Run cases matching 'hello'
     python3 integration/eval.py --list         # List available cases
     python3 integration/eval.py -v             # Verbose (show architect logs)
+    python3 integration/eval.py --local        # Use local subprocess mode
     python3 integration/eval.py --clean        # Remove previous workspaces first
 """
 
@@ -41,7 +42,7 @@ def load_prompts(filter_pattern=None):
     return prompts
 
 
-def run_case(case, verbose=False):
+def run_case(case, verbose=False, local=False):
     """Run a single prompt case and return results."""
     name = case["name"]
     goal = case["goal"]
@@ -69,9 +70,10 @@ def run_case(case, verbose=False):
     env = os.environ.copy()
     env["UAS_GOAL"] = goal
     env["UAS_WORKSPACE"] = workspace
-    env["UAS_SANDBOX_MODE"] = "local"
     env["UAS_OUTPUT"] = output_file
     env["PYTHONPATH"] = REPO_ROOT
+    if local:
+        env["UAS_SANDBOX_MODE"] = "local"
     if verbose:
         env["UAS_VERBOSE"] = "1"
 
@@ -205,6 +207,8 @@ def main():
                         help="Show architect output")
     parser.add_argument("--list", action="store_true",
                         help="List available cases and exit")
+    parser.add_argument("--local", action="store_true",
+                        help="Use local subprocess instead of containers")
     parser.add_argument("--clean", action="store_true",
                         help="Remove previous workspaces before running")
     args = parser.parse_args()
@@ -233,7 +237,7 @@ def main():
         label = case["goal"][:70]
         print(f"[{i}/{len(cases)}] {case['name']}: {label}...",
               file=sys.stderr)
-        result = run_case(case, verbose=args.verbose)
+        result = run_case(case, verbose=args.verbose, local=args.local)
         results.append(result)
         status = "PASS" if result["passed"] else "FAIL"
         print(f"        -> {status} ({result.get('elapsed', 0):.1f}s)",

@@ -24,6 +24,7 @@ import time
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 WORKSPACES_DIR = os.path.join(SCRIPT_DIR, "workspace")
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 PROMPTS_FILE = os.path.join(SCRIPT_DIR, "prompts.json")
 RESULTS_FILE = os.path.join(SCRIPT_DIR, "eval_results.json")
 DEFAULT_TIMEOUT = 600
@@ -50,6 +51,18 @@ def run_case(case, verbose=False):
     if os.path.exists(workspace):
         shutil.rmtree(workspace)
     os.makedirs(workspace)
+
+    # Copy setup files into workspace
+    for filename in case.get("setup_files", []):
+        src = os.path.join(DATA_DIR, filename)
+        if not os.path.exists(src):
+            return {
+                "name": name, "goal": goal, "workspace": workspace,
+                "checks": [], "passed": False,
+                "error": f"Setup file missing: data/{filename}",
+                "elapsed": 0,
+            }
+        shutil.copy2(src, os.path.join(workspace, filename))
 
     output_file = os.path.join(workspace, "output.json")
 
@@ -203,7 +216,9 @@ def main():
     if args.list:
         for c in cases:
             checks = ", ".join(ch["type"] for ch in c.get("checks", []))
-            print(f"  {c['name']:<25} [{checks}]")
+            setup = c.get("setup_files", [])
+            tag = " (needs data/)" if setup else ""
+            print(f"  {c['name']:<25} [{checks}]{tag}")
             print(f"    {c['goal'][:80]}")
         return 0
 

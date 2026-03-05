@@ -36,5 +36,18 @@
       {"type": "file_contains", "path": "fibonacci.json", "pattern": "1, 1, 2, 3, 5, 8, 13, 21, 34"}
     ],
     "timeout": 300
+  },
+  {
+    "name": "ebay-ddr4-price",
+    "goal": "What is the average price of DDR4 RAM on eBay in the US right now?",
+    "checks": [],
+    "timeout": 600
+  },
+  {
+    "name": "sci-rehab-dashboard",
+    "goal": "I have a database of spinal cord injury rehabilitation data of which the headers are stored in the .xlsx file of this directory. Because the data is confidential, I want you to simulate what the data likely looks like. Be accurate and use the network to research if needed to improve your simulation accuracy. Then create a comprehensive dashboard that analyzes the simulation dataset in a way that addresses the questions a clinician would ask of it, but also go above and beyond conventional analysis to deliver something truly remarkable. Write your code in a way that when it's complete, the real data can easily be dropped in and the code executed such that an LLM never touches the real data.",
+    "setup_files": ["SCI_DATABASE_HEADER.xlsx"],
+    "checks": [],
+    "timeout": 900
   }
 ]

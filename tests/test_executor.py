@@ -8,8 +8,12 @@ import pytest
 from architect.executor import (
     run_orchestrator,
     extract_sandbox_stdout,
+    extract_sandbox_stderr,
+    extract_workspace_files,
+    truncate_output,
     find_engine,
     RUN_TIMEOUT,
+    MAX_CONTEXT_LENGTH,
 )
 
 
@@ -115,3 +119,144 @@ class TestFindEngine:
     def test_returns_none_when_neither(self, mock_which):
         mock_which.return_value = None
         assert find_engine() is None
+
+
+class TestExtractSandboxStderr:
+    def test_basic_stderr(self):
+        log = "stderr:\nsome warning\nExit code: 0"
+        assert extract_sandbox_stderr(log) == "some warning"
+
+    def test_inline_stderr(self):
+        log = "stderr: warning msg\nExit code: 0"
+        assert extract_sandbox_stderr(log) == "warning msg"
+
+    def test_multiline_stderr(self):
+        log = "stderr:\nwarn1\nwarn2\nExit code: 0"
+        assert extract_sandbox_stderr(log) == "warn1\nwarn2"
+
+    def test_stderr_terminated_by_stdout(self):
+        log = "stderr:\nwarn\nstdout:\nresult"
+        assert extract_sandbox_stderr(log) == "warn"
+
+    def test_no_stderr_returns_empty(self):
+        log = "stdout:\nresult\nExit code: 0"
+        assert extract_sandbox_stderr(log) == ""
+
+    def test_empty_string(self):
+        assert extract_sandbox_stderr("") == ""
+
+    def test_realistic_output_with_both(self):
+        log = (
+            "--- Attempt 1/3 ---\n"
+            "Querying LLM...\n"
+            "Executing in sandbox...\n"
+            "Exit code: 0\n"
+            "stdout:\nHello, World!\n"
+            "stderr:\nDeprecationWarning: use new API\n"
+            "\nSUCCESS on attempt 1."
+        )
+        assert extract_sandbox_stderr(log) == "DeprecationWarning: use new API"
+
+    def test_last_stderr_block_on_retry(self):
+        log = (
+            "--- Attempt 1/3 ---\n"
+            "stderr:\nfirst error\n"
+            "FAILED on attempt 1.\n"
+            "--- Attempt 2/3 ---\n"
+            "stderr:\nsecond error\n"
+            "SUCCESS on attempt 2."
+        )
+        assert extract_sandbox_stderr(log) == "second error"
+
+
+class TestTruncateOutput:
+    def test_below_limit(self):
+        assert truncate_output("short text") == "short text"
+
+    def test_at_limit(self):
+        text = "x" * MAX_CONTEXT_LENGTH
+        assert truncate_output(text) == text
+
+    def test_above_limit(self):
+        text = "x" * (MAX_CONTEXT_LENGTH + 100)
+        result = truncate_output(text)
+        assert len(result) < len(text)
+        assert result.startswith("x" * MAX_CONTEXT_LENGTH)
+        assert "truncated" in result
+        assert str(len(text)) in result
+
+    def test_custom_limit(self):
+        result = truncate_output("hello world", max_length=5)
+        assert result.startswith("hello")
+        assert "truncated" in result
+        assert "11" in result
+
+    def test_empty_string(self):
+        assert truncate_output("") == ""
+
+
+class TestExtractWorkspaceFiles:
+    def test_single_file(self):
+        log = "Written to /workspace/output.txt"
+        assert extract_workspace_files(log) == ["/workspace/output.txt"]
+
+    def test_multiple_files(self):
+        log = (
+            "Saved /workspace/data.json\n"
+            "Created /workspace/results/report.csv\n"
+        )
+        files = extract_workspace_files(log)
+        assert "/workspace/data.json" in files
+        assert "/workspace/results/report.csv" in files
+
+    def test_deduplicates(self):
+        log = (
+            "Reading /workspace/input.txt\n"
+            "Processing /workspace/input.txt\n"
+        )
+        files = extract_workspace_files(log)
+        assert files == ["/workspace/input.txt"]
+
+    def test_strips_trailing_punctuation(self):
+        log = "File saved to /workspace/out.txt."
+        assert extract_workspace_files(log) == ["/workspace/out.txt"]
+
+    def test_no_files(self):
+        log = "No file operations performed"
+        assert extract_workspace_files(log) == []
+
+    def test_empty_string(self):
+        assert extract_workspace_files("") == []
+
+    def test_realistic_orchestrator_output(self):
+        log = (
+            "--- Attempt 1/3 ---\n"
+            "Querying LLM...\n"
+            "Executing in sandbox...\n"
+            "Exit code: 0\n"
+            "stdout:\n"
+            "Wrote results to /workspace/analysis.json\n"
+            "Summary saved to /workspace/summary.txt\n"
+            "stderr:\n"
+            "Processing complete\n"
+            "SUCCESS on attempt 1."
+        )
+        files = extract_workspace_files(log)
+        assert "/workspace/analysis.json" in files
+        assert "/workspace/summary.txt" in files
+
+
+class TestStdoutTruncation:
+    def test_long_stdout_is_truncated(self):
+        content = "x" * 5000
+        log = f"stdout:\n{content}\nExit code: 0"
+        result = extract_sandbox_stdout(log)
+        assert "truncated" in result
+        assert len(result) < len(content)
+
+    def test_long_stderr_is_truncated(self):
+        content = "y" * 5000
+        log = f"stderr:\n{content}\nExit code: 0"
+        result = extract_sandbox_stderr(log)
+        assert "truncated" in result
+        assert len(result) < len(content)

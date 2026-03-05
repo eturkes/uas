@@ -15,7 +15,12 @@ import time
 from .state import init_state, save_state, load_state, add_steps
 from .planner import decompose_goal, rewrite_task, topological_sort
 from .spec_generator import generate_spec, build_task_from_spec
-from .executor import run_orchestrator, extract_sandbox_stdout
+from .executor import (
+    run_orchestrator,
+    extract_sandbox_stdout,
+    extract_sandbox_stderr,
+    extract_workspace_files,
+)
 
 MAX_SPEC_REWRITES = 2
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
@@ -74,13 +79,29 @@ def get_goal(args) -> str:
 
 
 def build_context(step: dict, completed_outputs: dict) -> str:
-    """Build context string from outputs of dependency steps."""
+    """Build context string from outputs of dependency steps.
+
+    Each entry in completed_outputs can be a plain string (legacy) or a
+    dict with 'stdout', 'stderr', and 'files' keys.
+    """
     if not step["depends_on"]:
         return ""
     parts = []
     for dep_id in step["depends_on"]:
         output = completed_outputs.get(dep_id, "")
-        if output:
+        if isinstance(output, dict):
+            stdout = output.get("stdout", "")
+            stderr = output.get("stderr", "")
+            files = output.get("files", [])
+            if stdout:
+                parts.append(f"Output from step {dep_id} (stdout): {stdout}")
+            if stderr:
+                parts.append(f"Output from step {dep_id} (stderr): {stderr}")
+            if files:
+                parts.append(
+                    f"Files from step {dep_id}: {', '.join(files)}"
+                )
+        elif output:
             parts.append(f"Output from step {dep_id}: {output}")
     return "\n".join(parts)
 
@@ -192,6 +213,10 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         if result["exit_code"] == 0:
             step["status"] = "completed"
             step["output"] = extract_sandbox_stdout(result["stderr"])
+            step["stderr_output"] = extract_sandbox_stderr(result["stderr"])
+            step["files_written"] = extract_workspace_files(
+                result["stderr"]
+            )
             step["error"] = ""
             step["elapsed"] = time.monotonic() - step_start
             _save_state_threadsafe(state)
@@ -325,7 +350,11 @@ def main():
             if step["status"] == "completed":
                 logger.info("  Skipping step %s (already completed): %s",
                             step["id"], step["title"])
-                completed_outputs[step["id"]] = step["output"]
+                completed_outputs[step["id"]] = {
+                    "stdout": step.get("output", ""),
+                    "stderr": step.get("stderr_output", ""),
+                    "files": step.get("files_written", []),
+                }
             else:
                 pending.append(step)
 
@@ -346,7 +375,11 @@ def main():
                 logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
                 sys.exit(1)
             progress_counts["completed"] += 1
-            completed_outputs[step["id"]] = step["output"]
+            completed_outputs[step["id"]] = {
+                "stdout": step.get("output", ""),
+                "stderr": step.get("stderr_output", ""),
+                "files": step.get("files_written", []),
+            }
         else:
             # Multiple independent steps — run in parallel
             logger.info("  Running %d independent steps in parallel: %s",
@@ -374,7 +407,11 @@ def main():
                         success = False
                     if success:
                         progress_counts["completed"] += 1
-                        completed_outputs[step["id"]] = step["output"]
+                        completed_outputs[step["id"]] = {
+                            "stdout": step.get("output", ""),
+                            "stderr": step.get("stderr_output", ""),
+                            "files": step.get("files_written", []),
+                        }
                     elif failed_step is None:
                         progress_counts["failed"] += 1
                         failed_step = step

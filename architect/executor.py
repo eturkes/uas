@@ -2,12 +2,14 @@
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import uuid
 
 SANDBOX_IMAGE_NAME = "uas-sandbox"
+MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "4000"))
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
 RUN_TIMEOUT = 600  # 10 minutes max per orchestrator invocation
 EXECUTION_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
@@ -248,27 +250,62 @@ def _run_container(task: str) -> dict:
         }
 
 
+_STDOUT_PATTERN = re.compile(
+    r"^stdout:[ \t]*\n?(.*?)(?=^(?:stderr:|Exit code:|SUCCESS|FAILED|--- Attempt)|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+_STDERR_PATTERN = re.compile(
+    r"^stderr:[ \t]*\n?(.*?)(?=^(?:stdout:|Exit code:|SUCCESS|FAILED|--- Attempt)|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+_FILES_PATTERN = re.compile(r"(/workspace/[\w./\-]+)")
+
+
+def truncate_output(text: str, max_length: int = MAX_CONTEXT_LENGTH) -> str:
+    """Truncate text to max_length, appending a note if truncated."""
+    if len(text) <= max_length:
+        return text
+    return text[:max_length] + f"\n... [truncated, {len(text)} chars total]"
+
+
 def extract_sandbox_stdout(orchestrator_output: str) -> str:
     """Extract the sandbox script's stdout from orchestrator log.
 
-    The orchestrator sends log messages to stderr, so this function
-    parses the orchestrator's stderr output for stdout/stderr markers.
+    Uses regex-based extraction. If multiple stdout blocks exist (from
+    retries), returns the last one. Output is truncated to
+    MAX_CONTEXT_LENGTH.
     """
-    lines = orchestrator_output.split("\n")
-    captured = []
-    capturing = False
-    for line in lines:
-        if line.startswith("stdout:"):
-            capturing = True
-            captured = []
-            # Handle inline content after "stdout:"
-            rest = line[len("stdout:"):].strip()
-            if rest:
-                captured.append(rest)
-            continue
-        if capturing:
-            if line.startswith(("stderr:", "Exit code:", "SUCCESS", "FAILED", "--- Attempt")):
-                capturing = False
-            else:
-                captured.append(line)
-    return "\n".join(captured).strip()
+    matches = list(_STDOUT_PATTERN.finditer(orchestrator_output))
+    if not matches:
+        return ""
+    result = matches[-1].group(1).strip()
+    return truncate_output(result)
+
+
+def extract_sandbox_stderr(orchestrator_output: str) -> str:
+    """Extract the sandbox script's stderr from orchestrator log.
+
+    Uses regex-based extraction. If multiple stderr blocks exist (from
+    retries), returns the last one. Output is truncated to
+    MAX_CONTEXT_LENGTH.
+    """
+    matches = list(_STDERR_PATTERN.finditer(orchestrator_output))
+    if not matches:
+        return ""
+    result = matches[-1].group(1).strip()
+    return truncate_output(result)
+
+
+def extract_workspace_files(orchestrator_output: str) -> list[str]:
+    """Extract file paths under /workspace/ mentioned in orchestrator output."""
+    matches = _FILES_PATTERN.findall(orchestrator_output)
+    seen = set()
+    files = []
+    for m in matches:
+        m = m.rstrip(".,;:)'\"")
+        if m not in seen:
+            seen.add(m)
+            files.append(m)
+    return files

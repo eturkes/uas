@@ -57,15 +57,12 @@ if [ -z "$ENGINE" ]; then
 fi
 
 AUTH_DIR="$PWD/.uas_auth"
-AUTH_ARGS=()
-if [ -d "$AUTH_DIR" ]; then
-    AUTH_ARGS=("-v" "$AUTH_DIR:/root/.claude:Z")
-fi
+mkdir -p "$AUTH_DIR"
 
 exec "$ENGINE" run --rm -it \
     --privileged \
     -e IS_SANDBOX=1 \
-    "${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"}" \
+    -v "$AUTH_DIR:/root/.claude:Z" \
     -v "$PWD:/workspace" \
     -w /workspace \
     uas-engine:latest \

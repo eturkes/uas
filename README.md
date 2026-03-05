@@ -41,6 +41,13 @@ To pre-seed auth for CI or automated use, copy your host Claude config:
 cp -r ~/.claude .uas_auth
 ```
 
+### Smoke Test
+
+```bash
+# Quick test from the repo (first run requires interactive auth):
+bash test/run.sh
+```
+
 ### Non-Interactive / Local Mode
 
 ```bash
@@ -78,6 +85,8 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── sandbox.py            # Nested Podman sandbox execution
 │   └── parser.py             # Code extraction from LLM responses
 ├── Containerfile             # Image (Podman + Python + Claude Code CLI)
+├── test/
+│   └── run.sh                # Smoke test (creates hello.txt via container)
 ├── e2e_test.py               # End-to-end test (local mode, simple)
 ├── run_e2e_test.sh           # End-to-end test (full pipeline, live data)
 ├── final_architecture_report.md  # Auth and test harness report

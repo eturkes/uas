@@ -50,10 +50,10 @@ class TestParseStepsJson:
 
 class TestDecompositionPromptConstraints:
     def test_full_network_access(self):
-        assert "full network access" in DECOMPOSITION_PROMPT
+        assert "unrestricted network access" in DECOMPOSITION_PROMPT
 
     def test_can_install_packages(self):
-        assert "install packages freely" in DECOMPOSITION_PROMPT
+        assert "Install any packages" in DECOMPOSITION_PROMPT
 
     def test_observable_stdout(self):
         assert "produce observable output to stdout" in DECOMPOSITION_PROMPT

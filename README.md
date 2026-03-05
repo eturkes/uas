@@ -211,14 +211,9 @@ after every significant event (step start, completion, failure, rewrite).
 
 | Layer | Control |
 |---|---|
-| Host <-> Orchestrator | `--privileged` grants kernel capabilities for nested namespaces. No host socket mounted. |
-| Orchestrator <-> Sandbox | `--network=none`, `--read-only` filesystem, `--memory=256m`, `--cpus=1`, 60s timeout. Script bind-mounted read-only. |
-| LLM-generated code | Never executed in the Orchestrator process. Always runs inside the nested sandbox. |
-
-`--privileged` is required because Podman-in-Podman needs `CAP_SYS_ADMIN`
-and `/dev/fuse` access to create inner container namespaces. The vfs
-storage driver is used for the inner Podman for maximum compatibility
-in nested scenarios.
+| Host <-> Container | Only the workspace directory is mounted writable. Auth credentials are mounted read-only. No other host paths are exposed. |
+| Container environment | Full network access, no memory or CPU limits, writable filesystem. Each task runs in its own isolated container. |
+| LLM-generated code | Never executed on the host. Always runs inside a container. |
 
 ## Logging
 

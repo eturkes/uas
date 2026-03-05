@@ -28,8 +28,8 @@ class TestBuildPrompt:
 
     def test_includes_sandbox_constraints(self):
         prompt = build_prompt("any task", attempt=1)
-        assert "full network access" in prompt
-        assert "install packages freely" in prompt
+        assert "unrestricted network access" in prompt
+        assert "Install any packages" in prompt
 
     def test_with_previous_error(self):
         prompt = build_prompt("fix it", attempt=2, previous_error="NameError: x")

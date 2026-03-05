@@ -45,7 +45,7 @@ def get_task(args) -> str:
 
 def build_prompt(task: str, attempt: int, previous_error: str | None = None) -> str:
     prompt = """\
-You are a Python code generator running inside a sandboxed container.
+You are a Python code generator running inside an isolated container.
 
 ## Instructions
 - Respond with a SINGLE fenced code block tagged as ```python.
@@ -53,7 +53,7 @@ You are a Python code generator running inside a sandboxed container.
 - The script must be complete and self-contained (all imports included).
 
 ## Environment
-- Python 3.x is available.
+- Python 3.x is available with full root access.
 - The workspace directory is in the WORKSPACE environment variable.
 - Always resolve file paths relative to the workspace:
   ```python
@@ -61,8 +61,9 @@ You are a Python code generator running inside a sandboxed container.
   workspace = os.environ.get("WORKSPACE", "/workspace")
   path = os.path.join(workspace, "myfile.txt")
   ```
-- The script runs inside a sandboxed container with full network access.
-- You may install packages freely (e.g. pip install) and use any libraries needed.
+- Full unrestricted network access. Fetch URLs, call APIs, scrape sites freely.
+- Install any packages you need without hesitation (pip install, apt-get install, etc.).
+- You have complete autonomy within this environment. No resource limits.
 - Output results to stdout/stderr.
 
 ## Constraints

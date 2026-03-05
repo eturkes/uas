@@ -24,10 +24,15 @@ def find_engine() -> str | None:
     return None
 
 
+def _in_container() -> bool:
+    """Detect if we're running inside a container."""
+    return os.path.exists("/run/.containerenv") or os.path.exists("/.dockerenv")
+
+
 def _podman_cmd(engine: str, *args: str) -> list[str]:
-    """Build a podman/docker command with --storage-driver=vfs for podman."""
+    """Build a podman/docker command, adding --storage-driver=vfs when inside a container."""
     cmd = [engine]
-    if engine == "podman":
+    if engine == "podman" and _in_container():
         cmd.append("--storage-driver=vfs")
     cmd.extend(args)
     return cmd
@@ -55,7 +60,10 @@ def ensure_image(engine: str):
     dockerfile_content = (
         f"FROM {SANDBOX_BASE_IMAGE}\n"
         "RUN apt-get update && apt-get install -y --no-install-recommends "
-        "nodejs npm && rm -rf /var/lib/apt/lists/*\n"
+        "ca-certificates curl && rm -rf /var/lib/apt/lists/*\n"
+        "RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - "
+        "&& apt-get install -y --no-install-recommends nodejs "
+        "&& rm -rf /var/lib/apt/lists/*\n"
         "RUN npm install -g @anthropic-ai/claude-code\n"
         "WORKDIR /uas\n"
         "COPY orchestrator/ ./orchestrator/\n"

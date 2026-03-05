@@ -1,10 +1,13 @@
 """LLM client via the Claude Code CLI subprocess wrapper."""
 
+import logging
 import os
 import shutil
 import subprocess
 
 CLAUDE_TIMEOUT = 120
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeCodeClient:
@@ -62,5 +65,5 @@ class ClaudeCodeClient:
 
 def get_llm_client() -> ClaudeCodeClient:
     """Factory: return a ClaudeCodeClient instance."""
-    print("Using Claude Code CLI")
+    logger.info("Using Claude Code CLI")
     return ClaudeCodeClient()

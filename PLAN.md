@@ -18,7 +18,7 @@ Each step is self-contained and completable in a single session.
 - Verify `.gitignore` covers `tests/` artifacts (e.g. `.pytest_cache/`).
 - **Test**: `python -m pytest tests/ -v`
 
-### Step 2: Add structured logging `[ ]`
+### Step 2: Add structured logging `[x]`
 
 - Replace all `print()` calls with Python `logging` module.
 - Configure log levels: DEBUG for code dumps, INFO for progress, ERROR for failures.

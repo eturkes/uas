@@ -1,5 +1,6 @@
 """Interface to the Orchestrator: local subprocess or container modes."""
 
+import logging
 import os
 import shutil
 import subprocess
@@ -9,6 +10,8 @@ SANDBOX_IMAGE_NAME = "uas-sandbox"
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
 RUN_TIMEOUT = 600  # 10 minutes max per orchestrator invocation
 EXECUTION_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
+
+logger = logging.getLogger(__name__)
 
 
 def find_engine() -> str | None:
@@ -62,7 +65,7 @@ def ensure_image(engine: str):
         with open(dockerfile_path, "w") as f:
             f.write(dockerfile_content)
 
-        print("  Building lightweight sandbox image (first run)...")
+        logger.info("  Building lightweight sandbox image (first run)...")
         try:
             subprocess.run(
                 _podman_cmd(
@@ -75,12 +78,13 @@ def ensure_image(engine: str):
                 text=True,
             )
         except subprocess.CalledProcessError as e:
-            print(f"  ERROR: Sandbox image build failed (exit {e.returncode}).",
-                  file=sys.stderr)
+            logger.error(
+                "  Sandbox image build failed (exit %d).", e.returncode
+            )
             if e.stderr:
-                print(f"  Podman stderr:\n{e.stderr}", file=sys.stderr)
+                logger.error("  Podman stderr:\n%s", e.stderr)
             if e.stdout:
-                print(f"  Podman stdout:\n{e.stdout}", file=sys.stderr)
+                logger.error("  Podman stdout:\n%s", e.stdout)
             raise
     finally:
         if os.path.exists(dockerfile_path):
@@ -201,12 +205,13 @@ def _run_container(task: str) -> dict:
             "stderr": result.stderr,
         }
     except subprocess.CalledProcessError as e:
-        print(f"  ERROR: Container run failed (exit {e.returncode}).",
-              file=sys.stderr)
+        logger.error(
+            "  Container run failed (exit %d).", e.returncode
+        )
         if e.stderr:
-            print(f"  Podman stderr:\n{e.stderr}", file=sys.stderr)
+            logger.error("  Podman stderr:\n%s", e.stderr)
         if e.stdout:
-            print(f"  Podman stdout:\n{e.stdout}", file=sys.stderr)
+            logger.error("  Podman stdout:\n%s", e.stdout)
         return {
             "exit_code": e.returncode,
             "stdout": e.stdout or "",
@@ -221,7 +226,11 @@ def _run_container(task: str) -> dict:
 
 
 def extract_sandbox_stdout(orchestrator_output: str) -> str:
-    """Extract the sandbox script's stdout from orchestrator log."""
+    """Extract the sandbox script's stdout from orchestrator log.
+
+    The orchestrator sends log messages to stderr, so this function
+    parses the orchestrator's stderr output for stdout/stderr markers.
+    """
     lines = orchestrator_output.split("\n")
     captured = []
     capturing = False

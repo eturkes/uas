@@ -4,6 +4,8 @@ Takes an abstract human goal, decomposes it into atomic steps,
 generates UAS-compliant specs, and drives the Orchestrator to execute them.
 """
 
+import argparse
+import logging
 import os
 import sys
 
@@ -15,14 +17,31 @@ from .executor import run_orchestrator, extract_sandbox_stdout
 MAX_SPEC_REWRITES = 2
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 
+logger = logging.getLogger(__name__)
 
-def get_goal() -> str:
-    if len(sys.argv) > 1:
-        return " ".join(sys.argv[1:])
+
+def configure_logging(verbose: bool = False):
+    """Configure logging: INFO by default, DEBUG with --verbose. Logs go to stderr."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, stream=sys.stderr, format="%(message)s")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="UAS Architect Agent")
+    parser.add_argument("goal", nargs="*", help="Goal to accomplish")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Enable debug output"
+    )
+    return parser.parse_args()
+
+
+def get_goal(args) -> str:
+    if args.goal:
+        return " ".join(args.goal)
     goal = os.environ.get("UAS_GOAL")
     if goal:
         return goal
-    print("Enter your goal (submit with Ctrl+D):")
+    print("Enter your goal (submit with Ctrl+D):", file=sys.stderr)
     return sys.stdin.read().strip()
 
 
@@ -54,7 +73,7 @@ def create_blocker(state: dict, step: dict):
         f.write("1. Simplify the goal.\n")
         f.write("2. Provide missing credentials or resources.\n")
         f.write("3. Manually fix the failing step and re-run.\n")
-    print(f"\nBlocker written to {blocker_path}")
+    logger.info("Blocker written to %s", blocker_path)
 
 
 def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
@@ -69,17 +88,17 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
         label = f"Step {step['id']}/{total}: {step['title']}"
         if spec_attempt > 0:
             label += f" (rewrite {spec_attempt}/{MAX_SPEC_REWRITES})"
-        print(f"\n{'='*60}")
-        print(f"  {label}")
-        print(f"{'='*60}")
+        logger.info("\n%s", "=" * 60)
+        logger.info("  %s", label)
+        logger.info("%s", "=" * 60)
 
         # Generate UAS spec
         spec_file = generate_spec(step, total, context)
-        print(f"  Spec written: {spec_file}")
+        logger.info("  Spec written: %s", spec_file)
 
         # Build task for Orchestrator
         task = build_task_from_spec(step, context)
-        print(f"  Sending to Orchestrator...")
+        logger.info("  Sending to Orchestrator...")
 
         # Execute
         step["status"] = "executing"
@@ -87,16 +106,16 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
 
         result = run_orchestrator(task)
 
-        print(f"  Orchestrator exit code: {result['exit_code']}")
+        logger.info("  Orchestrator exit code: %s", result["exit_code"])
 
         if result["exit_code"] == 0:
             step["status"] = "completed"
-            step["output"] = extract_sandbox_stdout(result["stdout"])
+            step["output"] = extract_sandbox_stdout(result["stderr"])
             step["error"] = ""
             save_state(state)
-            print(f"  Step {step['id']} SUCCEEDED.")
+            logger.info("  Step %s SUCCEEDED.", step["id"])
             if step["output"]:
-                print(f"  Output: {step['output'][:200]}")
+                logger.info("  Output: %s", step["output"][:200])
             return True
 
         # Failed
@@ -105,51 +124,61 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
         step["status"] = "failed"
         save_state(state)
 
-        print(f"  Step {step['id']} FAILED.")
-        print(f"  Error: {error_info[:300]}")
+        logger.error("  Step %s FAILED.", step["id"])
+        logger.error("  Error: %s", error_info[:300])
 
         if spec_attempt < MAX_SPEC_REWRITES:
-            print(f"  Rewriting spec (rewrite {spec_attempt + 1}/{MAX_SPEC_REWRITES})...")
+            logger.info(
+                "  Rewriting spec (rewrite %d/%d)...",
+                spec_attempt + 1,
+                MAX_SPEC_REWRITES,
+            )
             step["description"] = rewrite_task(
                 step, result["stdout"], result["stderr"]
             )
             step["rewrites"] = spec_attempt + 1
             save_state(state)
         else:
-            print(f"  Exhausted all spec rewrites for step {step['id']}.")
+            logger.error(
+                "  Exhausted all spec rewrites for step %s.", step["id"]
+            )
 
     return False
 
 
 def main():
-    goal = get_goal()
+    args = parse_args()
+    verbose = args.verbose or os.environ.get("UAS_VERBOSE", "").lower() in (
+        "1", "true", "yes",
+    )
+    configure_logging(verbose)
+
+    goal = get_goal(args)
     if not goal:
-        print("ERROR: No goal provided.", file=sys.stderr)
+        logger.error("No goal provided.")
         sys.exit(1)
 
-    print(f"Goal: {goal}")
-    print()
+    logger.info("Goal: %s\n", goal)
 
     # Phase 1: Decompose
-    print("Phase 1: Decomposing goal into atomic steps...")
+    logger.info("Phase 1: Decomposing goal into atomic steps...")
     state = init_state(goal)
     try:
         steps = decompose_goal(goal)
     except Exception as e:
-        print(f"ERROR: Failed to decompose goal: {e}", file=sys.stderr)
+        logger.error("Failed to decompose goal: %s", e)
         state["status"] = "failed"
         save_state(state)
         sys.exit(1)
 
     state = add_steps(state, steps)
-    print(f"  Decomposed into {len(steps)} step(s):")
+    logger.info("  Decomposed into %d step(s):", len(steps))
     for s in state["steps"]:
         deps = f" (depends on {s['depends_on']})" if s["depends_on"] else ""
-        print(f"    {s['id']}. {s['title']}{deps}")
-    print()
+        logger.info("    %s. %s%s", s["id"], s["title"], deps)
 
     # Phase 2: Execute
-    print("Phase 2: Executing steps via Orchestrator...")
+    logger.info("\nPhase 2: Executing steps via Orchestrator...")
     completed_outputs = {}
 
     for step in state["steps"]:
@@ -158,18 +187,24 @@ def main():
             state["status"] = "blocked"
             save_state(state)
             create_blocker(state, step)
-            print(f"\nHALTED: Step {step['id']} failed irrecoverably.")
+            logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
             sys.exit(1)
         completed_outputs[step["id"]] = step["output"]
 
     # All done
     state["status"] = "completed"
     save_state(state)
-    print(f"\n{'='*60}")
-    print("  ALL STEPS COMPLETED SUCCESSFULLY")
-    print(f"{'='*60}")
-    print(f"State saved to: {os.path.join('architect_state', 'plan_state.json')}")
-    print(f"Specs saved to: {os.path.join('architect_state', 'specs')}/")
+    logger.info("\n%s", "=" * 60)
+    logger.info("  ALL STEPS COMPLETED SUCCESSFULLY")
+    logger.info("%s", "=" * 60)
+    logger.info(
+        "State saved to: %s",
+        os.path.join("architect_state", "plan_state.json"),
+    )
+    logger.info(
+        "Specs saved to: %s/",
+        os.path.join("architect_state", "specs"),
+    )
 
 
 if __name__ == "__main__":

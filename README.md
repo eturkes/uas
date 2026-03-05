@@ -165,6 +165,24 @@ and `/dev/fuse` access to create inner container namespaces. The vfs
 storage driver is used for the inner Podman for maximum compatibility
 in nested scenarios.
 
+## Logging
+
+All log output goes to **stderr**, keeping stdout clean for piping.
+By default only INFO-level messages (progress and results) are shown.
+Pass `-v` / `--verbose` to enable DEBUG output (includes generated code
+dumps and full sandbox output):
+
+```bash
+# Verbose architect run:
+python3 -m architect.main -v "your goal"
+
+# Verbose orchestrator run:
+python3 -m orchestrator.main -v "your task"
+
+# Or via environment variable:
+UAS_VERBOSE=1 python3 -m architect.main "your goal"
+```
+
 ## Environment Variables
 
 | Variable | Purpose | Default |
@@ -175,6 +193,7 @@ in nested scenarios.
 | `UAS_WORKSPACE` | Workspace directory path | `/workspace` |
 | `UAS_SANDBOX_IMAGE` | Sandbox container image | `python:3.12-slim` |
 | `UAS_SANDBOX_TIMEOUT` | Sandbox execution timeout (seconds) | `60` |
+| `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `ANTHROPIC_API_KEY` | Anthropic API key | *(uses Claude CLI auth)* |
 
 ## License

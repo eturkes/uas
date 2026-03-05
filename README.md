@@ -83,6 +83,21 @@ UAS_DRY_RUN=1 uas "your goal"
 Dry-run mode runs Phase 1 (decomposition) and prints the step DAG with titles,
 descriptions, and dependency structure, then exits without executing anything.
 
+### JSON Output
+
+Write a machine-readable JSON summary of the run:
+
+```bash
+# Via CLI flag:
+uas -o results.json "your goal"
+
+# Or via environment variable:
+UAS_OUTPUT=results.json uas "your goal"
+```
+
+The JSON file contains the goal, overall status (`completed`, `failed`, or
+`blocked`), per-step results with elapsed times, and the total elapsed time.
+
 ### Non-Interactive / Local Mode
 
 ```bash
@@ -230,6 +245,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_SANDBOX_TIMEOUT` | Sandbox execution timeout (seconds) | `60` |
 | `UAS_DRY_RUN` | Preview plan without executing (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_RESUME` | Resume from saved state (`1`, `true`, or `yes`) | *(off)* |
+| `UAS_OUTPUT` | Write JSON results summary to this file path | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | `120` |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |

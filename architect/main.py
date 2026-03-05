@@ -6,6 +6,7 @@ generates UAS-compliant specs, and drives the Orchestrator to execute them.
 
 import argparse
 import concurrent.futures
+import json
 import logging
 import os
 import sys
@@ -64,6 +65,10 @@ def parse_args():
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Show the decomposition plan without executing it",
+    )
+    parser.add_argument(
+        "-o", "--output", type=str, default=None,
+        help="Write a JSON results summary to this file",
     )
     return parser.parse_args()
 
@@ -152,6 +157,30 @@ def print_summary(state: dict):
     total_elapsed = state.get("total_elapsed", 0.0)
     print(f"{'─' * 4}  {'─' * 40}  {'─' * 12}  {'─' * 8}", file=sys.stderr)
     print(f"{'':>4}  {'TOTAL':<40}  {'':12}  {total_elapsed:>7.1f}s", file=sys.stderr)
+
+
+def write_json_output(state: dict, output_path: str):
+    """Write a structured JSON summary of the run to the given path."""
+    summary = {
+        "goal": state.get("goal", ""),
+        "status": state.get("status", "unknown"),
+        "steps": [
+            {
+                "id": s["id"],
+                "title": s["title"],
+                "status": s["status"],
+                "elapsed": s.get("elapsed", 0.0),
+            }
+            for s in state.get("steps", [])
+        ],
+        "total_elapsed": state.get("total_elapsed", 0.0),
+    }
+    parent = os.path.dirname(output_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    logger.info("JSON output written to %s", output_path)
 
 
 def create_blocker(state: dict, step: dict):
@@ -283,6 +312,8 @@ def main():
         "1", "true", "yes",
     )
 
+    output_path = args.output or os.environ.get("UAS_OUTPUT") or None
+
     resume = (args.resume or os.environ.get("UAS_RESUME", "").lower() in (
         "1", "true", "yes",
     )) and not args.fresh
@@ -371,6 +402,8 @@ def main():
                 state["status"] = "blocked"
                 save_state(state)
                 create_blocker(state, step)
+                if output_path:
+                    write_json_output(state, output_path)
                 print_summary(state)
                 logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
                 sys.exit(1)
@@ -421,6 +454,8 @@ def main():
                 state["status"] = "blocked"
                 save_state(state)
                 create_blocker(state, failed_step)
+                if output_path:
+                    write_json_output(state, output_path)
                 print_summary(state)
                 logger.error("HALTED: Step %s failed irrecoverably.",
                              failed_step["id"])
@@ -430,6 +465,8 @@ def main():
     state["total_elapsed"] = time.monotonic() - run_start
     state["status"] = "completed"
     save_state(state)
+    if output_path:
+        write_json_output(state, output_path)
     logger.info("\n%s", "=" * 60)
     logger.info("  ALL STEPS COMPLETED SUCCESSFULLY")
     logger.info("%s", "=" * 60)

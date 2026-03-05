@@ -17,6 +17,8 @@ def get_task() -> str:
     task = os.environ.get("UAS_TASK")
     if task:
         return task
+    if not sys.stdin.isatty():
+        return sys.stdin.read().strip()
     print("Enter task (end with Ctrl+D):")
     return sys.stdin.read().strip()
 
@@ -27,7 +29,11 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None) -> 
         "following task.\n"
         "Respond with ONLY a single markdown code block containing the complete "
         "Python script.\n"
-        "Do not include any explanation outside the code block.\n\n"
+        "Do not include any explanation outside the code block.\n"
+        "IMPORTANT: The workspace directory path is available via the WORKSPACE "
+        "environment variable. Always use: "
+        "import os; workspace = os.environ.get('WORKSPACE', '/workspace')\n"
+        "Then build file paths with os.path.join(workspace, filename).\n\n"
         f"Task: {task}\n"
     )
     if previous_error and attempt > 1:

@@ -5,6 +5,10 @@ output/
 architect_state/
 ARCHITECT_BLOCKER.md
 
+# E2E test artifacts
+e2e_workspace/
+e2e_step*.txt
+
 # Python
 __pycache__/
 *.py[cod]

@@ -1,6 +1,10 @@
 # Universal Agentic Specification (UAS)
 
-A two-layer autonomous system that takes abstract human goals and drives them to completion. The **Architect Agent** decomposes goals into atomic steps, generates UAS-compliant specs, and feeds them to the **Execution Orchestrator**, which generates and runs code in a secure Podman-in-Podman sandbox.
+A two-layer autonomous system that takes abstract human goals and drives them to completion. The **Architect Agent** decomposes goals into atomic steps, generates UAS-compliant specs, and feeds them to the **Execution Orchestrator**, which generates and runs code in a sandboxed environment.
+
+Supports two execution modes:
+- **Container mode** (default): Podman-in-Podman sandbox with isolated networking and resource limits.
+- **Local mode** (`UAS_SANDBOX_MODE=local`): Direct subprocess execution for development, testing, and environments without nested container support.
 
 ## Quick Start
 
@@ -19,6 +23,19 @@ uas "your goal here"
 
 The installer places a `uas` wrapper in `~/.local/bin`.
 Ensure that directory is in your `PATH`.
+
+### Non-Interactive / Local Mode
+
+```bash
+# Run without containers (uses local Python + Claude Code CLI):
+UAS_SANDBOX_MODE=local UAS_GOAL="your goal" python3 -m architect.main
+
+# Or run the E2E test:
+python3 e2e_test.py
+```
+
+When `UAS_GOAL` or `UAS_TASK` is set, the entrypoint skips the
+interactive Claude Code setup and proceeds directly to execution.
 
 ## Requirements
 
@@ -43,6 +60,8 @@ Ensure that directory is in your `PATH`.
 │   ├── sandbox.py            # Nested Podman sandbox execution
 │   └── parser.py             # Code extraction from LLM responses
 ├── Containerfile             # Image (Podman + Python + Claude Code CLI)
+├── e2e_test.py               # End-to-end test (local mode)
+├── bug_fix_report.md         # Detailed bug analysis and fixes
 ├── architect_design.md       # Architect architecture documentation
 ├── orchestrator_design.md    # Orchestrator architecture documentation
 └── stack_decisions.md        # Stack rationale
@@ -70,10 +89,11 @@ installed inside the container. No API keys or host-mounted
 auth files are required — authentication happens interactively
 in Stage 1.
 
-The Architect handles multi-step goals by capturing stdout from
-each step and injecting it as context into dependent steps. If a
-step fails after all Orchestrator retries, the Architect rewrites
-the spec up to 2 times before halting with `ARCHITECT_BLOCKER.md`.
+Steps share a persistent `/workspace` directory. The Architect
+captures stdout from each step and injects it as context into
+dependent steps. If a step fails after all Orchestrator retries,
+the Architect rewrites the spec up to 2 times before halting with
+`ARCHITECT_BLOCKER.md`.
 
 See [architect_design.md](architect_design.md) and [orchestrator_design.md](orchestrator_design.md) for full details.
 

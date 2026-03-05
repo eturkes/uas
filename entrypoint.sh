@@ -2,6 +2,16 @@
 set -euo pipefail
 
 # =============================================================================
+# Non-interactive mode: skip Stage 1 when called programmatically
+# =============================================================================
+if [ -n "${UAS_TASK:-}" ] || [ -n "${UAS_GOAL:-}" ]; then
+    echo "Non-interactive mode detected (UAS_TASK or UAS_GOAL set)."
+    echo "Skipping interactive setup."
+    cd /uas
+    exec python3 -m architect.main "$@"
+fi
+
+# =============================================================================
 # Stage 1: Interactive Claude Code Setup
 # =============================================================================
 echo "============================================================"

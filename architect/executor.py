@@ -1,11 +1,13 @@
-"""Interface to the existing Orchestrator via subprocess."""
+"""Interface to the Orchestrator: local subprocess or container modes."""
 
 import os
 import shutil
 import subprocess
+import sys
 
 IMAGE_NAME = "uas-engine"
 RUN_TIMEOUT = 600  # 10 minutes max per orchestrator invocation
+EXECUTION_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
 
 
 def find_engine() -> str | None:
@@ -36,10 +38,46 @@ def ensure_image(engine: str):
 
 
 def run_orchestrator(task: str) -> dict:
-    """Run the Orchestrator container with the given task.
+    """Run the Orchestrator with the given task.
 
     Returns dict with exit_code, stdout, stderr.
     """
+    if EXECUTION_MODE == "local":
+        return _run_local(task)
+    return _run_container(task)
+
+
+def _run_local(task: str) -> dict:
+    """Run the Orchestrator as a local subprocess (no container)."""
+    framework_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    env = os.environ.copy()
+    env["UAS_TASK"] = task
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "orchestrator.main"],
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT,
+            cwd=framework_root,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+        return {
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": f"Orchestrator timed out after {RUN_TIMEOUT}s.",
+        }
+
+
+def _run_container(task: str) -> dict:
+    """Run the Orchestrator inside a container with proper entrypoint and mounts."""
     engine = find_engine()
     if not engine:
         return {
@@ -49,6 +87,8 @@ def run_orchestrator(task: str) -> dict:
         }
 
     ensure_image(engine)
+
+    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
 
     # Pass through API keys and config from host environment
     env_args = []
@@ -63,7 +103,17 @@ def run_orchestrator(task: str) -> dict:
 
     env_args.extend(["-e", f"UAS_TASK={task}"])
 
-    cmd = [engine, "run", "--rm", "--privileged"] + env_args + [IMAGE_NAME]
+    # Override entrypoint to run the Orchestrator directly (not the interactive
+    # entrypoint.sh which launches 'claude' and then the Architect).
+    # Mount workspace so sandbox containers can persist files between steps.
+    cmd = [
+        engine, "run", "--rm", "--privileged",
+        "--entrypoint", "python3",
+        "-v", f"{workspace}:/workspace:Z",
+    ] + env_args + [
+        IMAGE_NAME,
+        "-m", "orchestrator.main",
+    ]
 
     try:
         result = subprocess.run(
@@ -71,6 +121,7 @@ def run_orchestrator(task: str) -> dict:
             capture_output=True,
             text=True,
             timeout=RUN_TIMEOUT,
+            stdin=subprocess.DEVNULL,
         )
         return {
             "exit_code": result.returncode,

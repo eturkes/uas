@@ -32,9 +32,15 @@ for var in UAS_GOAL UAS_TASK UAS_SANDBOX_IMAGE UAS_SANDBOX_TIMEOUT; do
     fi
 done
 
-# --- Launch the Orchestrator with interactive TTY and nested-container privileges ---
+# --- Launch the Orchestrator with nested-container privileges ---
 echo "Launching Orchestrator..."
-exec "$ENGINE" run --rm -it \
+TTY_ARGS=()
+if [ -t 0 ] && [ -t 1 ]; then
+    TTY_ARGS=("-it")
+fi
+
+exec "$ENGINE" run --rm \
+    "${TTY_ARGS[@]+"${TTY_ARGS[@]}"}" \
     --privileged \
     "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \
     "$IMAGE_NAME" \

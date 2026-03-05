@@ -95,8 +95,12 @@ def run_orchestrator(task: str) -> dict:
 
 def _run_local(task: str) -> dict:
     """Run the Orchestrator as a local subprocess (no container)."""
-    framework_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    framework_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    )
     env = os.environ.copy()
+    env["PYTHONPATH"] = framework_root
+    env["IS_SANDBOX"] = "1"
     env["UAS_TASK"] = task
 
     try:
@@ -155,6 +159,8 @@ def _run_container(task: str) -> dict:
             env_args.extend(["-e", f"{var}={val}"])
 
     env_args.extend(["-e", f"UAS_TASK={task}"])
+    env_args.extend(["-e", "PYTHONPATH=/uas"])
+    env_args.extend(["-e", "IS_SANDBOX=1"])
 
     # Force local sandbox mode inside the container since this lightweight
     # image does not have Podman -- the container itself provides isolation.

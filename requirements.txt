@@ -1,1 +1,2 @@
-httpx>=0.27.0
+# No external Python dependencies required.
+# LLM calls are handled via the Claude Code CLI.

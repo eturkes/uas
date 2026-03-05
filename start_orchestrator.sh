@@ -26,15 +26,13 @@ echo "Building Orchestrator image '${IMAGE_NAME}'..."
 
 # --- Pass through relevant environment variables ---
 ENV_ARGS=()
-for var in ANTHROPIC_API_KEY ANTHROPIC_MODEL ANTHROPIC_BASE_URL \
-           OPENAI_API_KEY OPENAI_MODEL OPENAI_BASE_URL \
-           UAS_TASK UAS_SANDBOX_IMAGE UAS_SANDBOX_TIMEOUT; do
+for var in UAS_GOAL UAS_TASK UAS_SANDBOX_IMAGE UAS_SANDBOX_TIMEOUT; do
     if [ -n "${!var:-}" ]; then
         ENV_ARGS+=("-e" "${var}=${!var}")
     fi
 done
 
-# --- Launch the Orchestrator with nested-container privileges ---
+# --- Launch the Orchestrator with interactive TTY and nested-container privileges ---
 echo "Launching Orchestrator..."
 exec "$ENGINE" run --rm -it \
     --privileged \

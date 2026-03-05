@@ -5,24 +5,25 @@ A two-layer autonomous system that takes abstract human goals and drives them to
 ## Quick Start
 
 ```bash
-# Full framework (Architect + Orchestrator):
-ANTHROPIC_API_KEY="sk-..." ./run_framework.sh "Create a text file with 'Hello', then create a second script that reads that file and prints it reversed"
+# Launch the containerized framework:
+./start_orchestrator.sh
 
-# Orchestrator only (single task, mock mode):
-./start_orchestrator.sh "Write a script that prints hello world"
+# On first run you will enter an interactive Claude Code session.
+# Authenticate, configure settings, then type /exit to hand off
+# to the Architect Agent.
 ```
 
 ## Requirements
 
-- Python 3 on the host (for the Architect Agent)
-- [Podman](https://podman.io/) or [Docker](https://www.docker.com/) (for the Orchestrator)
+- [Podman](https://podman.io/) or [Docker](https://www.docker.com/)
 
 ## Project Structure
 
 ```
 .
-├── run_framework.sh          # Entry point: goal in, results out
-├── architect/                # Architect Agent (host-side planner)
+├── start_orchestrator.sh     # Entry point: builds and launches container
+├── entrypoint.sh             # Two-stage entrypoint (setup then run)
+├── architect/                # Architect Agent (runs inside container)
 │   ├── main.py               # Controller loop
 │   ├── planner.py            # LLM task decomposition + rewrite
 │   ├── spec_generator.py     # UAS markdown spec writer
@@ -30,11 +31,10 @@ ANTHROPIC_API_KEY="sk-..." ./run_framework.sh "Create a text file with 'Hello', 
 │   └── state.py              # JSON state persistence
 ├── orchestrator/             # Execution Orchestrator (containerized)
 │   ├── main.py               # Build-Run-Evaluate loop
-│   ├── llm_client.py         # LLM interface (Anthropic/OpenAI/Mock)
+│   ├── llm_client.py         # Claude Code CLI subprocess wrapper
 │   ├── sandbox.py            # Nested Podman sandbox execution
 │   └── parser.py             # Code extraction from LLM responses
-├── Containerfile             # Orchestrator image (Podman + Python)
-├── start_orchestrator.sh     # Orchestrator-only launcher
+├── Containerfile             # Image (Podman + Python + Claude Code CLI)
 ├── architect_design.md       # Architect architecture documentation
 ├── orchestrator_design.md    # Orchestrator architecture documentation
 └── stack_decisions.md        # Stack rationale
@@ -44,18 +44,28 @@ ANTHROPIC_API_KEY="sk-..." ./run_framework.sh "Create a text file with 'Hello', 
 
 ```
 User
- └─ run_framework.sh
-     └─ Architect Agent (host Python)
-         ├─ Planner        -> LLM decomposes goal into steps
-         ├─ Spec Generator  -> writes UAS markdown specs
-         ├─ State Manager   -> tracks plan_state.json
-         └─ Executor        -> invokes Orchestrator container
-              └─ Orchestrator Container (Podman-in-Podman)
-                  ├─ LLM Client -> generates Python code
-                  └─ Sandbox    -> executes in nested container
+ └─ start_orchestrator.sh
+     └─ Container (Podman-in-Podman)
+         ├─ Stage 1: Interactive Claude Code session (auth/setup)
+         └─ Stage 2: Architect Agent
+              ├─ Planner        -> Claude Code decomposes goal
+              ├─ Spec Generator  -> writes UAS markdown specs
+              ├─ State Manager   -> tracks plan_state.json
+              └─ Executor        -> invokes Orchestrator loop
+                   └─ Orchestrator
+                       ├─ LLM Client -> Claude Code CLI wrapper
+                       └─ Sandbox    -> nested Podman container
 ```
 
-The Architect handles multi-step goals by capturing stdout from each step and injecting it as context into dependent steps. If a step fails after all Orchestrator retries, the Architect rewrites the spec up to 2 times before halting with `ARCHITECT_BLOCKER.md`.
+All LLM calls go through the Claude Code CLI (`claude -p`)
+installed inside the container. No API keys or host-mounted
+auth files are required — authentication happens interactively
+in Stage 1.
+
+The Architect handles multi-step goals by capturing stdout from
+each step and injecting it as context into dependent steps. If a
+step fails after all Orchestrator retries, the Architect rewrites
+the spec up to 2 times before halting with `ARCHITECT_BLOCKER.md`.
 
 See [architect_design.md](architect_design.md) and [orchestrator_design.md](orchestrator_design.md) for full details.
 

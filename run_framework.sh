@@ -24,12 +24,6 @@ if [ -z "$ENGINE" ]; then
 fi
 echo "Container engine: ${ENGINE}"
 
-# --- Ensure httpx is available ---
-python3 -c "import httpx" 2>/dev/null || {
-    echo "Installing httpx..."
-    pip3 install --user httpx >/dev/null
-}
-
 # --- Run the Architect Agent ---
 cd "$SCRIPT_DIR"
 exec python3 -m architect.main "$@"

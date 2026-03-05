@@ -8,6 +8,7 @@ run_e2e_test.sh
 start_orchestrator.sh
 install.sh
 test/
+tests/
 architect_state/
 ARCHITECT_BLOCKER.md
 Sandbox.Dockerfile

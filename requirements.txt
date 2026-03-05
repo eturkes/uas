@@ -1,2 +1,5 @@
 # No external Python dependencies required.
 # LLM calls are handled via the Claude Code CLI.
+
+# Testing
+pytest>=7.0

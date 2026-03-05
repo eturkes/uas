@@ -5,7 +5,7 @@ Each step is self-contained and completable in a single session.
 
 ## Steps
 
-### Step 1: Add unit test framework and tests for pure-logic modules `[ ]`
+### Step 1: Add unit test framework and tests for pure-logic modules `[x]`
 
 - Add `pytest` to `requirements.txt`.
 - Create `tests/` directory with `conftest.py`.

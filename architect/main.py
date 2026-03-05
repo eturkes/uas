@@ -22,7 +22,7 @@ def get_goal() -> str:
     goal = os.environ.get("UAS_GOAL")
     if goal:
         return goal
-    print("Enter your goal (end with Ctrl+D):")
+    print("Enter your goal (submit with Ctrl+D):")
     return sys.stdin.read().strip()
 
 

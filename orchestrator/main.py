@@ -19,7 +19,7 @@ def get_task() -> str:
         return task
     if not sys.stdin.isatty():
         return sys.stdin.read().strip()
-    print("Enter task (end with Ctrl+D):")
+    print("Enter task (submit with Ctrl+D):")
     return sys.stdin.read().strip()
 
 

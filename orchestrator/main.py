@@ -43,24 +43,43 @@ def get_task(args) -> str:
 
 
 def build_prompt(task: str, attempt: int, previous_error: str | None = None) -> str:
-    prompt = (
-        "You are a code generator. Write a Python script that accomplishes the "
-        "following task.\n"
-        "Respond with ONLY a single markdown code block containing the complete "
-        "Python script.\n"
-        "Do not include any explanation outside the code block.\n"
-        "IMPORTANT: The workspace directory path is available via the WORKSPACE "
-        "environment variable. Always use: "
-        "import os; workspace = os.environ.get('WORKSPACE', '/workspace')\n"
-        "Then build file paths with os.path.join(workspace, filename).\n\n"
-        f"Task: {task}\n"
-    )
+    prompt = """\
+You are a Python code generator running inside a sandboxed container.
+
+## Instructions
+- Respond with a SINGLE fenced code block tagged as ```python.
+- Do NOT include any explanation, commentary, or text outside the code block.
+- The script must be complete and self-contained (all imports included).
+
+## Environment
+- Python 3.x is available.
+- The workspace directory is in the WORKSPACE environment variable.
+- Always resolve file paths relative to the workspace:
+  ```python
+  import os
+  workspace = os.environ.get("WORKSPACE", "/workspace")
+  path = os.path.join(workspace, "myfile.txt")
+  ```
+- The script runs with no network access and limited to stdout/stderr for output.
+
+## Constraints
+- Exit with code 0 on success, non-zero on failure.
+- Print results to stdout.
+- Print errors to stderr.
+- Do not use input() or any interactive prompts.
+
+## Task
+"""
+    prompt += task + "\n"
+
     if previous_error and attempt > 1:
-        prompt += (
-            f"\nThe previous attempt (attempt {attempt - 1}) failed with this "
-            f"error:\n```\n{previous_error}\n```\n"
-            "Fix the error and provide a corrected script.\n"
-        )
+        prompt += f"""
+## Previous Error (attempt {attempt - 1})
+```
+{previous_error}
+```
+Fix the error above and provide a corrected script.
+"""
     return prompt
 
 

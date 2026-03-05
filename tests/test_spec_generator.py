@@ -37,6 +37,22 @@ class TestGenerateSpec:
         assert "Depends On" in content
         assert "Process the CSV" in content
 
+    def test_spec_no_duplicated_description(self, tmp_workspace):
+        step = {
+            "id": 1,
+            "title": "Do thing",
+            "description": "A unique description here",
+            "status": "pending",
+            "depends_on": [],
+            "spec_file": None,
+        }
+        path = generate_spec(step, total_steps=1)
+        with open(path) as f:
+            content = f.read()
+        # Description should appear once (in Objective), not duplicated in Task
+        assert content.count("A unique description here") == 1
+        assert "Write a Python script" in content
+
     def test_spec_with_context(self, tmp_workspace):
         step = {
             "id": 1,

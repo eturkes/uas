@@ -36,7 +36,7 @@ Each step is self-contained and completable in a single session.
 - Update README.
 - **Test**: `python -m pytest tests/ -v`
 
-### Step 4: Improve Orchestrator prompts and code extraction `[ ]`
+### Step 4: Improve Orchestrator prompts and code extraction `[x]`
 
 - Rewrite `build_prompt()` with a clearer, more structured prompt template.
 - Include Python version, workspace path example code, and explicit constraints.

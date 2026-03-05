@@ -27,7 +27,7 @@ def generate_spec(step: dict, total_steps: int, context: str = "") -> str:
         spec += f"{context}\n\n"
 
     spec += "## Task\n"
-    spec += f"{step['description']}\n\n"
+    spec += f"Write a Python script that accomplishes the objective above.\n\n"
 
     if context:
         spec += "Include this context from previous steps:\n"

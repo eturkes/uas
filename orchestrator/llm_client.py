@@ -59,6 +59,7 @@ class ClaudeCodeClient:
         env.pop("CLAUDECODE", None)
         env.pop("CLAUDE_CODE_SESSION", None)
         env["IS_SANDBOX"] = "1"
+        env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000")
 
         last_error: RuntimeError | None = None
         for attempt in range(1 + MAX_RETRIES):

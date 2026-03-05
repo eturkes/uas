@@ -44,9 +44,14 @@ def ensure_image(engine: str):
 
     framework_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
-    # Dynamically generate a minimal Dockerfile for the sandbox
+    # Dynamically generate a minimal Dockerfile for the sandbox.
+    # Node.js + Claude Code CLI are required so the orchestrator
+    # can call the LLM from inside the container.
     dockerfile_content = (
         f"FROM {SANDBOX_BASE_IMAGE}\n"
+        "RUN apt-get update && apt-get install -y --no-install-recommends "
+        "nodejs npm && rm -rf /var/lib/apt/lists/*\n"
+        "RUN npm install -g @anthropic-ai/claude-code\n"
         "WORKDIR /uas\n"
         "COPY orchestrator/ ./orchestrator/\n"
         "VOLUME /workspace\n"

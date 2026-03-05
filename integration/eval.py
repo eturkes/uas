@@ -14,6 +14,7 @@ Usage:
 """
 
 import argparse
+import glob as globmod
 import json
 import os
 import re
@@ -155,6 +156,16 @@ def run_check(check, workspace):
             "pattern": check["pattern"],
             "passed": matched,
             "detail": detail,
+        }
+
+    if ctype == "glob_exists":
+        pattern = os.path.join(workspace, check["pattern"])
+        matches = globmod.glob(pattern, recursive=True)
+        return {
+            "type": ctype,
+            "pattern": check["pattern"],
+            "passed": len(matches) > 0,
+            "detail": f"found {len(matches)}: {[os.path.relpath(m, workspace) for m in matches[:5]]}" if matches else "no matches",
         }
 
     if ctype == "output_gt":

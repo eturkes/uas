@@ -6,12 +6,12 @@ ARCHITECT_BLOCKER.md
 Sandbox.Dockerfile
 
 # E2E and smoke test artifacts
-e2e/workspace/
-e2e/step*.txt
-e2e/hello.txt
-e2e/.uas_auth/
-e2e/architect_state/
-e2e/ARCHITECT_BLOCKER.md
+integration/workspace/
+integration/step*.txt
+integration/hello.txt
+integration/.uas_auth/
+integration/architect_state/
+integration/ARCHITECT_BLOCKER.md
 
 # Project-level auth (contains secrets)
 .uas_auth/

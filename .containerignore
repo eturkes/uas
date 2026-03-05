@@ -5,7 +5,7 @@ README.md
 LICENSE
 start_orchestrator.sh
 install.sh
-e2e/
+integration/
 tests/
 architect_state/
 ARCHITECT_BLOCKER.md

@@ -11,7 +11,8 @@ RUN npm install -g @anthropic-ai/claude-code
 # Use vfs storage driver -- most reliable for nested container scenarios
 RUN printf '[storage]\ndriver = "vfs"\n' > /etc/containers/storage.conf
 
-WORKDIR /orchestrator
+# Install framework into /uas (immutable application code)
+WORKDIR /uas
 
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
@@ -21,4 +22,8 @@ COPY architect/ ./architect/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
-ENTRYPOINT ["./entrypoint.sh"]
+# /workspace is the user project mount point
+VOLUME /workspace
+WORKDIR /workspace
+
+ENTRYPOINT ["/uas/entrypoint.sh"]

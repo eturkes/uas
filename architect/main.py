@@ -13,7 +13,7 @@ from .spec_generator import generate_spec, build_task_from_spec
 from .executor import run_orchestrator, extract_sandbox_stdout
 
 MAX_SPEC_REWRITES = 2
-PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 
 
 def get_goal() -> str:
@@ -39,7 +39,7 @@ def build_context(step: dict, completed_outputs: dict) -> str:
 
 
 def create_blocker(state: dict, step: dict):
-    blocker_path = os.path.join(PROJECT_ROOT, "ARCHITECT_BLOCKER.md")
+    blocker_path = os.path.join(WORKSPACE, "ARCHITECT_BLOCKER.md")
     with open(blocker_path, "w") as f:
         f.write("# Architect Blocker\n\n")
         f.write(f"**Goal:** {state['goal']}\n\n")

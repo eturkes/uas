@@ -4,8 +4,7 @@ import os
 import shutil
 import subprocess
 
-PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-IMAGE_NAME = "uas-orchestrator"
+IMAGE_NAME = "uas-engine"
 RUN_TIMEOUT = 600  # 10 minutes max per orchestrator invocation
 
 
@@ -22,12 +21,13 @@ def ensure_image(engine: str):
         capture_output=True,
     )
     if check.returncode != 0:
+        framework_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         print("  Building Orchestrator image (first run)...")
         subprocess.run(
             [
                 engine, "build", "-t", IMAGE_NAME,
-                "-f", os.path.join(PROJECT_ROOT, "Containerfile"),
-                PROJECT_ROOT,
+                "-f", os.path.join(framework_root, "Containerfile"),
+                framework_root,
             ],
             check=True,
             capture_output=True,

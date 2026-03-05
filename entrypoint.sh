@@ -29,4 +29,5 @@ echo "  Interactive setup complete. Starting Architect Agent..."
 echo "============================================================"
 echo ""
 
+cd /uas
 exec python3 -m architect.main "$@"

@@ -5,13 +5,20 @@ A two-layer autonomous system that takes abstract human goals and drives them to
 ## Quick Start
 
 ```bash
-# Launch the containerized framework:
-./start_orchestrator.sh
+# Install (builds the container image and creates the `uas` CLI):
+./install.sh
+
+# Run from any project directory:
+cd ~/my-project
+uas "your goal here"
 
 # On first run you will enter an interactive Claude Code session.
 # Authenticate, configure settings, then type /exit to hand off
 # to the Architect Agent.
 ```
+
+The installer places a `uas` wrapper in `~/.local/bin`.
+Ensure that directory is in your `PATH`.
 
 ## Requirements
 
@@ -21,9 +28,10 @@ A two-layer autonomous system that takes abstract human goals and drives them to
 
 ```
 .
-├── start_orchestrator.sh     # Entry point: builds and launches container
+├── install.sh                # Builds image and installs `uas` CLI
+├── start_orchestrator.sh     # Alternative: build and launch manually
 ├── entrypoint.sh             # Two-stage entrypoint (setup then run)
-├── architect/                # Architect Agent (runs inside container)
+├── architect/                # Architect Agent (installed to /uas)
 │   ├── main.py               # Controller loop
 │   ├── planner.py            # LLM task decomposition + rewrite
 │   ├── spec_generator.py     # UAS markdown spec writer
@@ -43,11 +51,11 @@ A two-layer autonomous system that takes abstract human goals and drives them to
 ## Architecture
 
 ```
-User
- └─ start_orchestrator.sh
-     └─ Container (Podman-in-Podman)
+User (any directory)
+ └─ uas "goal"                     # ~/.local/bin/uas wrapper
+     └─ uas-engine:latest           # $PWD mounted to /workspace
          ├─ Stage 1: Interactive Claude Code session (auth/setup)
-         └─ Stage 2: Architect Agent
+         └─ Stage 2: Architect Agent (code in /uas, output in /workspace)
               ├─ Planner        -> Claude Code decomposes goal
               ├─ Spec Generator  -> writes UAS markdown specs
               ├─ State Manager   -> tracks plan_state.json

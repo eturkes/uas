@@ -4,7 +4,8 @@ import json
 import os
 from datetime import datetime, timezone
 
-STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "architect_state")
+WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
+STATE_DIR = os.path.join(WORKSPACE, "architect_state")
 STATE_FILE = os.path.join(STATE_DIR, "plan_state.json")
 SPECS_DIR = os.path.join(STATE_DIR, "specs")
 

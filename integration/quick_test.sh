@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Simple smoke test for UAS.
-# Run from the repo root: bash integration/smoke_test.sh
+# Simple quick test for UAS.
+# Run from the repo root: bash integration/quick_test.sh
 #
 # What it does:
 #   Asks UAS to create a single file (hello.txt) with known content.
@@ -17,7 +17,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GOAL='Create a file called hello.txt containing exactly the text: Hello from UAS'
 
 echo "============================================================"
-echo "  UAS Smoke Test"
+echo "  UAS Quick Test"
 echo "============================================================"
 echo ""
 echo "  Goal: ${GOAL}"

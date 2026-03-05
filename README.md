@@ -41,11 +41,11 @@ To pre-seed auth for CI or automated use, copy your host Claude config:
 cp -r ~/.claude .uas_auth
 ```
 
-### Smoke Test
+### Quick Test
 
 ```bash
 # Quick test from the repo (first run requires interactive auth):
-bash integration/smoke_test.sh
+bash integration/quick_test.sh
 ```
 
 ### Resuming a Run
@@ -143,7 +143,7 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── conftest.py           # Shared fixtures
 │   └── test_*.py             # Test modules
 └── integration/              # Integration tests
-    ├── smoke_test.sh          # Container smoke test (creates hello.txt)
+    ├── quick_test.sh            # Quick test (creates hello.txt)
     ├── eval.py                # Prompt evaluation runner
     └── prompts.json           # Prompt cases with goals and checks
 ```

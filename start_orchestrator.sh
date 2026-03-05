@@ -48,6 +48,8 @@ exec "$ENGINE" run --rm \
     --privileged \
     -e IS_SANDBOX=1 \
     -v "${AUTH_DIR}:/root/.claude:Z" \
+    -v "$PWD:/workspace:Z" \
+    -w /workspace \
     "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \
     "$IMAGE_NAME" \
     "$@"

@@ -63,7 +63,7 @@ exec "$ENGINE" run --rm -it \
     --privileged \
     -e IS_SANDBOX=1 \
     -v "$AUTH_DIR:/root/.claude:Z" \
-    -v "$PWD:/workspace" \
+    -v "$PWD:/workspace:Z" \
     -w /workspace \
     uas-engine:latest \
     "$@"

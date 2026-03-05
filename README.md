@@ -52,7 +52,7 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── main.py               # Controller loop
 │   ├── planner.py            # LLM task decomposition + rewrite
 │   ├── spec_generator.py     # UAS markdown spec writer
-│   ├── executor.py           # Orchestrator subprocess interface
+│   ├── executor.py           # Builds uas-sandbox image, runs Orchestrator
 │   └── state.py              # JSON state persistence
 ├── orchestrator/             # Execution Orchestrator (containerized)
 │   ├── main.py               # Build-Run-Evaluate loop
@@ -79,9 +79,10 @@ User (any directory)
               ├─ Spec Generator  -> writes UAS markdown specs
               ├─ State Manager   -> tracks plan_state.json
               └─ Executor        -> invokes Orchestrator loop
-                   └─ Orchestrator
-                       ├─ LLM Client -> Claude Code CLI wrapper
-                       └─ Sandbox    -> nested Podman container
+                   └─ uas-sandbox (python:3.12-slim)
+                       └─ Orchestrator
+                           ├─ LLM Client -> Claude Code CLI wrapper
+                           └─ Sandbox    -> local subprocess (containerized)
 ```
 
 All LLM calls go through the Claude Code CLI (`claude -p`)

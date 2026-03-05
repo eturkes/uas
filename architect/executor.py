@@ -4,8 +4,10 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
-IMAGE_NAME = "uas-engine"
+SANDBOX_IMAGE_NAME = "uas-sandbox"
+SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
 RUN_TIMEOUT = 600  # 10 minutes max per orchestrator invocation
 EXECUTION_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
 
@@ -17,24 +19,68 @@ def find_engine() -> str | None:
     return None
 
 
+def _podman_cmd(engine: str, *args: str) -> list[str]:
+    """Build a podman/docker command with --storage-driver=vfs for podman."""
+    cmd = [engine]
+    if engine == "podman":
+        cmd.append("--storage-driver=vfs")
+    cmd.extend(args)
+    return cmd
+
+
 def ensure_image(engine: str):
+    """Ensure the lightweight uas-sandbox image exists.
+
+    Builds a minimal Python-based image with just the orchestrator code,
+    NOT the full uas-engine image (which would cause an inception loop
+    when already running inside uas-engine).
+    """
     check = subprocess.run(
-        [engine, "image", "inspect", IMAGE_NAME],
+        _podman_cmd(engine, "image", "inspect", SANDBOX_IMAGE_NAME),
         capture_output=True,
     )
-    if check.returncode != 0:
-        framework_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-        print("  Building Orchestrator image (first run)...")
-        subprocess.run(
-            [
-                engine, "build", "-t", IMAGE_NAME,
-                "-f", os.path.join(framework_root, "Containerfile"),
-                framework_root,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    if check.returncode == 0:
+        return
+
+    framework_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+    # Dynamically generate a minimal Dockerfile for the sandbox
+    dockerfile_content = (
+        f"FROM {SANDBOX_BASE_IMAGE}\n"
+        "WORKDIR /uas\n"
+        "COPY orchestrator/ ./orchestrator/\n"
+        "VOLUME /workspace\n"
+        "WORKDIR /workspace\n"
+    )
+
+    dockerfile_path = os.path.join(framework_root, "Sandbox.Dockerfile")
+    try:
+        with open(dockerfile_path, "w") as f:
+            f.write(dockerfile_content)
+
+        print("  Building lightweight sandbox image (first run)...")
+        try:
+            subprocess.run(
+                _podman_cmd(
+                    engine, "build", "-t", SANDBOX_IMAGE_NAME,
+                    "-f", dockerfile_path,
+                    framework_root,
+                ),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"  ERROR: Sandbox image build failed (exit {e.returncode}).",
+                  file=sys.stderr)
+            if e.stderr:
+                print(f"  Podman stderr:\n{e.stderr}", file=sys.stderr)
+            if e.stdout:
+                print(f"  Podman stdout:\n{e.stdout}", file=sys.stderr)
+            raise
+    finally:
+        if os.path.exists(dockerfile_path):
+            os.unlink(dockerfile_path)
 
 
 def run_orchestrator(task: str) -> dict:
@@ -77,7 +123,7 @@ def _run_local(task: str) -> dict:
 
 
 def _run_container(task: str) -> dict:
-    """Run the Orchestrator inside a container with proper entrypoint and mounts."""
+    """Run the Orchestrator inside a lightweight sandbox container."""
     engine = find_engine()
     if not engine:
         return {
@@ -86,7 +132,14 @@ def _run_container(task: str) -> dict:
             "stderr": "No container engine found (checked podman, docker).",
         }
 
-    ensure_image(engine)
+    try:
+        ensure_image(engine)
+    except subprocess.CalledProcessError:
+        return {
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": "Failed to build sandbox image. See error output above.",
+        }
 
     workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
 
@@ -103,15 +156,16 @@ def _run_container(task: str) -> dict:
 
     env_args.extend(["-e", f"UAS_TASK={task}"])
 
-    # Override entrypoint to run the Orchestrator directly (not the interactive
-    # entrypoint.sh which launches 'claude' and then the Architect).
-    # Mount workspace so sandbox containers can persist files between steps.
-    cmd = [
-        engine, "run", "--rm", "--privileged",
+    # Force local sandbox mode inside the container since this lightweight
+    # image does not have Podman -- the container itself provides isolation.
+    env_args.extend(["-e", "UAS_SANDBOX_MODE=local"])
+
+    cmd = _podman_cmd(
+        engine, "run", "--rm",
         "--entrypoint", "python3",
         "-v", f"{workspace}:/workspace:Z",
-    ] + env_args + [
-        IMAGE_NAME,
+    ) + env_args + [
+        SANDBOX_IMAGE_NAME,
         "-m", "orchestrator.main",
     ]
 
@@ -127,6 +181,18 @@ def _run_container(task: str) -> dict:
             "exit_code": result.returncode,
             "stdout": result.stdout,
             "stderr": result.stderr,
+        }
+    except subprocess.CalledProcessError as e:
+        print(f"  ERROR: Container run failed (exit {e.returncode}).",
+              file=sys.stderr)
+        if e.stderr:
+            print(f"  Podman stderr:\n{e.stderr}", file=sys.stderr)
+        if e.stdout:
+            print(f"  Podman stdout:\n{e.stdout}", file=sys.stderr)
+        return {
+            "exit_code": e.returncode,
+            "stdout": e.stdout or "",
+            "stderr": e.stderr or "",
         }
     except subprocess.TimeoutExpired:
         return {

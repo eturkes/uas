@@ -71,7 +71,8 @@ def _run_container(code: str, timeout: int) -> dict:
     try:
         result = subprocess.run(
             [
-                "podman", "run", "--rm",
+                "podman", "--storage-driver=vfs",
+                "run", "--rm",
                 "--network=none",
                 "--memory=256m",
                 "--cpus=1",
@@ -92,6 +93,12 @@ def _run_container(code: str, timeout: int) -> dict:
             "exit_code": result.returncode,
             "stdout": result.stdout,
             "stderr": result.stderr,
+        }
+    except subprocess.CalledProcessError as e:
+        return {
+            "exit_code": e.returncode,
+            "stdout": e.stdout or "",
+            "stderr": e.stderr or "",
         }
     except subprocess.TimeoutExpired:
         return {

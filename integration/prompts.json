@@ -40,7 +40,9 @@
   {
     "name": "ebay-ddr4-price",
     "goal": "What is the average price of DDR4 RAM on eBay in the US right now?",
-    "checks": [],
+    "checks": [
+      {"type": "output_gt", "value": 0}
+    ],
     "timeout": 600
   },
   {

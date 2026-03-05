@@ -125,6 +125,7 @@ interactive Claude Code setup and proceeds directly to execution.
 ├── entrypoint.sh             # Two-stage entrypoint (setup then run)
 ├── Containerfile             # Image (Podman + Python + Claude Code CLI)
 ├── requirements.txt          # Python dependencies
+├── PLAN.md                   # Improvement plan (step-by-step roadmap)
 ├── architect/                # Architect Agent (installed to /uas)
 │   ├── main.py               # Controller loop
 │   ├── planner.py            # LLM task decomposition + rewrite
@@ -136,6 +137,9 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── llm_client.py         # Claude Code CLI subprocess wrapper
 │   ├── sandbox.py            # Nested Podman sandbox execution
 │   └── parser.py             # Code extraction from LLM responses
+├── tests/                    # Unit tests (pytest)
+│   ├── conftest.py           # Shared fixtures
+│   └── test_*.py             # Test modules
 ├── test/
 │   └── run.sh                # Smoke test (creates hello.txt via container)
 ├── e2e_test.py               # E2E test (local mode, two-step task)
@@ -248,6 +252,8 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_OUTPUT` | Write JSON results summary to this file path | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | `120` |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
+| `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | `4000` |
+| `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | `2000` |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `ANTHROPIC_API_KEY` | Anthropic API key | *(uses Claude CLI auth)* |
 

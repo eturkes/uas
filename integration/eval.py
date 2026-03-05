@@ -71,6 +71,7 @@ def run_case(case, verbose=False):
     env["UAS_WORKSPACE"] = workspace
     env["UAS_SANDBOX_MODE"] = "local"
     env["UAS_OUTPUT"] = output_file
+    env["PYTHONPATH"] = REPO_ROOT
     if verbose:
         env["UAS_VERBOSE"] = "1"
 
@@ -81,7 +82,7 @@ def run_case(case, verbose=False):
         proc = subprocess.run(
             [sys.executable, "-m", "architect.main"],
             env=env,
-            cwd=REPO_ROOT,
+            cwd=workspace,
             timeout=timeout,
             capture_output=not verbose,
             text=True,

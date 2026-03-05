@@ -9,6 +9,9 @@ ARCHITECT_BLOCKER.md
 e2e_workspace/
 e2e_step*.txt
 
+# Project-level auth (contains secrets)
+.uas_auth/
+
 # Python
 __pycache__/
 *.py[cod]

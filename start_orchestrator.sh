@@ -32,6 +32,13 @@ for var in UAS_GOAL UAS_TASK UAS_SANDBOX_IMAGE UAS_SANDBOX_TIMEOUT; do
     fi
 done
 
+# --- Auth mount (if .uas_auth exists in PWD) ---
+AUTH_DIR="${PWD}/.uas_auth"
+AUTH_ARGS=()
+if [ -d "$AUTH_DIR" ]; then
+    AUTH_ARGS=("-v" "${AUTH_DIR}:/root/.claude:Z")
+fi
+
 # --- Launch the Orchestrator with nested-container privileges ---
 echo "Launching Orchestrator..."
 TTY_ARGS=()
@@ -43,6 +50,7 @@ exec "$ENGINE" run --rm \
     "${TTY_ARGS[@]+"${TTY_ARGS[@]}"}" \
     --privileged \
     -e IS_SANDBOX=1 \
+    "${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"}" \
     "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \
     "$IMAGE_NAME" \
     "$@"

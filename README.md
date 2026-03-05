@@ -19,10 +19,27 @@ uas "your goal here"
 # On first run you will enter an interactive Claude Code session.
 # Authenticate, configure settings, then type /exit to hand off
 # to the Architect Agent.
+#
+# Credentials are saved to .uas_auth/ in your project directory.
+# On subsequent runs, authentication is skipped automatically.
 ```
 
 The installer places a `uas` wrapper in `~/.local/bin`.
 Ensure that directory is in your `PATH`.
+
+### Project-Level Authentication
+
+On first run, `uas` launches an interactive Claude Code session for
+authentication. Credentials are persisted to `$PWD/.uas_auth/`, which
+is bind-mounted into the container as `/root/.claude`. On subsequent
+runs, the entrypoint detects valid credentials and skips interactive
+setup entirely.
+
+To pre-seed auth for CI or automated use, copy your host Claude config:
+
+```bash
+cp -r ~/.claude .uas_auth
+```
 
 ### Non-Interactive / Local Mode
 
@@ -30,8 +47,9 @@ Ensure that directory is in your `PATH`.
 # Run without containers (uses local Python + Claude Code CLI):
 UAS_SANDBOX_MODE=local UAS_GOAL="your goal" python3 -m architect.main
 
-# Or run the E2E test:
-python3 e2e_test.py
+# Or run the E2E tests:
+python3 e2e_test.py          # Simple two-step test
+./run_e2e_test.sh            # Full pipeline test (fetches live data)
 ```
 
 When `UAS_GOAL` or `UAS_TASK` is set, the entrypoint skips the
@@ -60,7 +78,9 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── sandbox.py            # Nested Podman sandbox execution
 │   └── parser.py             # Code extraction from LLM responses
 ├── Containerfile             # Image (Podman + Python + Claude Code CLI)
-├── e2e_test.py               # End-to-end test (local mode)
+├── e2e_test.py               # End-to-end test (local mode, simple)
+├── run_e2e_test.sh           # End-to-end test (full pipeline, live data)
+├── final_architecture_report.md  # Auth and test harness report
 ├── bug_fix_report.md         # Detailed bug analysis and fixes
 ├── architect_design.md       # Architect architecture documentation
 ├── orchestrator_design.md    # Orchestrator architecture documentation
@@ -72,8 +92,8 @@ interactive Claude Code setup and proceeds directly to execution.
 ```
 User (any directory)
  └─ uas "goal"                     # ~/.local/bin/uas wrapper
-     └─ uas-engine:latest           # $PWD mounted to /workspace
-         ├─ Stage 1: Interactive Claude Code session (auth/setup)
+     └─ uas-engine:latest           # $PWD -> /workspace, .uas_auth -> /root/.claude
+         ├─ Stage 1: Auth check (skip if .uas_auth has valid creds)
          └─ Stage 2: Architect Agent (code in /uas, output in /workspace)
               ├─ Planner        -> Claude Code decomposes goal
               ├─ Spec Generator  -> writes UAS markdown specs
@@ -86,9 +106,9 @@ User (any directory)
 ```
 
 All LLM calls go through the Claude Code CLI (`claude -p`)
-installed inside the container. No API keys or host-mounted
-auth files are required — authentication happens interactively
-in Stage 1.
+installed inside the container. Authentication is persisted to
+`$PWD/.uas_auth/` via bind mount, so interactive login is only
+required once per project.
 
 Steps share a persistent `/workspace` directory. The Architect
 captures stdout from each step and injects it as context into

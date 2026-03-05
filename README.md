@@ -68,6 +68,21 @@ When resuming, completed steps are skipped and their outputs are used as
 context for dependent steps. If the saved state is corrupted or missing,
 the Architect falls back to a fresh start automatically.
 
+### Dry-Run Mode
+
+Preview the decomposition plan without executing any steps:
+
+```bash
+# Via CLI flag:
+uas --dry-run "your goal"
+
+# Or via environment variable:
+UAS_DRY_RUN=1 uas "your goal"
+```
+
+Dry-run mode runs Phase 1 (decomposition) and prints the step DAG with titles,
+descriptions, and dependency structure, then exits without executing anything.
+
 ### Non-Interactive / Local Mode
 
 ```bash
@@ -213,6 +228,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_WORKSPACE` | Workspace directory path | `/workspace` |
 | `UAS_SANDBOX_IMAGE` | Sandbox container image | `python:3.12-slim` |
 | `UAS_SANDBOX_TIMEOUT` | Sandbox execution timeout (seconds) | `60` |
+| `UAS_DRY_RUN` | Preview plan without executing (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_RESUME` | Resume from saved state (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `ANTHROPIC_API_KEY` | Anthropic API key | *(uses Claude CLI auth)* |

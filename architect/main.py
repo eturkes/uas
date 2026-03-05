@@ -55,6 +55,10 @@ def parse_args():
         "--fresh", action="store_true",
         help="Force a clean start, ignoring any saved state",
     )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Show the decomposition plan without executing it",
+    )
     return parser.parse_args()
 
 
@@ -78,6 +82,27 @@ def build_context(step: dict, completed_outputs: dict) -> str:
         if output:
             parts.append(f"Output from step {dep_id}: {output}")
     return "\n".join(parts)
+
+
+def print_plan(state: dict):
+    """Print the step DAG to stderr with titles, descriptions, and dependencies."""
+    steps = state["steps"]
+    levels = topological_sort(steps)
+    step_by_id = {s["id"]: s for s in steps}
+
+    print(f"Goal: {state['goal']}\n", file=sys.stderr)
+    print(f"Steps: {len(steps)}", file=sys.stderr)
+    print(f"Execution levels: {len(levels)}\n", file=sys.stderr)
+
+    for level_idx, level in enumerate(levels, 1):
+        print(f"--- Level {level_idx} (parallel) ---", file=sys.stderr)
+        for sid in level:
+            step = step_by_id[sid]
+            deps = step["depends_on"]
+            deps_str = f" [depends on: {deps}]" if deps else ""
+            print(f"  Step {sid}: {step['title']}{deps_str}", file=sys.stderr)
+            print(f"    {step['description']}", file=sys.stderr)
+        print(file=sys.stderr)
 
 
 def create_blocker(state: dict, step: dict):
@@ -194,6 +219,10 @@ def main():
     )
     configure_logging(verbose)
 
+    dry_run = args.dry_run or os.environ.get("UAS_DRY_RUN", "").lower() in (
+        "1", "true", "yes",
+    )
+
     resume = (args.resume or os.environ.get("UAS_RESUME", "").lower() in (
         "1", "true", "yes",
     )) and not args.fresh
@@ -238,6 +267,11 @@ def main():
         for s in state["steps"]:
             deps = f" (depends on {s['depends_on']})" if s["depends_on"] else ""
             logger.info("    %s. %s%s", s["id"], s["title"], deps)
+
+    # Dry-run: show the plan and exit
+    if dry_run:
+        print_plan(state)
+        sys.exit(0)
 
     # Phase 2: Execute (resume-aware, parallel where possible)
     logger.info("\nPhase 2: Executing steps via Orchestrator...")

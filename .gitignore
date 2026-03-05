@@ -1,6 +1,10 @@
 # Output artifacts
 output/
 
+# Architect runtime state
+architect_state/
+ARCHITECT_BLOCKER.md
+
 # Python
 __pycache__/
 *.py[cod]

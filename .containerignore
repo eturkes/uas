@@ -11,3 +11,8 @@ start_orchestrator.sh
 validate.py
 CLAUDE.md
 ORCHESTRATOR_BLOCKER.md
+architect/
+architect_state/
+architect_design.md
+run_framework.sh
+ARCHITECT_BLOCKER.md

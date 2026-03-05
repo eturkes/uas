@@ -48,6 +48,26 @@ cp -r ~/.claude .uas_auth
 bash test/run.sh
 ```
 
+### Resuming a Run
+
+If the Architect is interrupted or a step fails, you can resume from where
+it left off instead of starting over:
+
+```bash
+# Resume from saved state:
+uas --resume "your goal"
+
+# Or via environment variable:
+UAS_RESUME=1 uas "your goal"
+
+# Force a clean start (ignore any saved state):
+uas --fresh "your goal"
+```
+
+When resuming, completed steps are skipped and their outputs are used as
+context for dependent steps. If the saved state is corrupted or missing,
+the Architect falls back to a fresh start automatically.
+
 ### Non-Interactive / Local Mode
 
 ```bash
@@ -193,6 +213,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_WORKSPACE` | Workspace directory path | `/workspace` |
 | `UAS_SANDBOX_IMAGE` | Sandbox container image | `python:3.12-slim` |
 | `UAS_SANDBOX_TIMEOUT` | Sandbox execution timeout (seconds) | `60` |
+| `UAS_RESUME` | Resume from saved state (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `ANTHROPIC_API_KEY` | Anthropic API key | *(uses Claude CLI auth)* |
 

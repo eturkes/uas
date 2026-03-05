@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 
-from .state import init_state, save_state, add_steps
+from .state import init_state, save_state, load_state, add_steps
 from .planner import decompose_goal, rewrite_task
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import run_orchestrator, extract_sandbox_stdout
@@ -31,6 +31,14 @@ def parse_args():
     parser.add_argument("goal", nargs="*", help="Goal to accomplish")
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable debug output"
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Resume from last saved state instead of starting fresh",
+    )
+    parser.add_argument(
+        "--fresh", action="store_true",
+        help="Force a clean start, ignoring any saved state",
     )
     return parser.parse_args()
 
@@ -146,6 +154,24 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
     return False
 
 
+def try_resume() -> dict | None:
+    """Attempt to load and validate saved state for resumption.
+
+    Returns the state dict if valid and resumable, None otherwise.
+    """
+    state = load_state()
+    if state is None:
+        logger.info("No saved state found, starting fresh.")
+        return None
+    if state.get("status") == "completed":
+        logger.info("Previous run already completed, starting fresh.")
+        return None
+    if not state.get("steps"):
+        logger.info("Saved state has no steps, starting fresh.")
+        return None
+    return state
+
+
 def main():
     args = parse_args()
     verbose = args.verbose or os.environ.get("UAS_VERBOSE", "").lower() in (
@@ -153,35 +179,54 @@ def main():
     )
     configure_logging(verbose)
 
-    goal = get_goal(args)
-    if not goal:
-        logger.error("No goal provided.")
-        sys.exit(1)
+    resume = (args.resume or os.environ.get("UAS_RESUME", "").lower() in (
+        "1", "true", "yes",
+    )) and not args.fresh
 
-    logger.info("Goal: %s\n", goal)
+    # Try to resume from saved state
+    state = None
+    if resume:
+        state = try_resume()
 
-    # Phase 1: Decompose
-    logger.info("Phase 1: Decomposing goal into atomic steps...")
-    state = init_state(goal)
-    try:
-        steps = decompose_goal(goal)
-    except Exception as e:
-        logger.error("Failed to decompose goal: %s", e)
-        state["status"] = "failed"
-        save_state(state)
-        sys.exit(1)
+    if state is not None:
+        logger.info("Resuming goal: %s\n", state["goal"])
+    else:
+        # Fresh start
+        goal = get_goal(args)
+        if not goal:
+            logger.error("No goal provided.")
+            sys.exit(1)
 
-    state = add_steps(state, steps)
-    logger.info("  Decomposed into %d step(s):", len(steps))
-    for s in state["steps"]:
-        deps = f" (depends on {s['depends_on']})" if s["depends_on"] else ""
-        logger.info("    %s. %s%s", s["id"], s["title"], deps)
+        logger.info("Goal: %s\n", goal)
 
-    # Phase 2: Execute
+        # Phase 1: Decompose
+        logger.info("Phase 1: Decomposing goal into atomic steps...")
+        state = init_state(goal)
+        try:
+            steps = decompose_goal(goal)
+        except Exception as e:
+            logger.error("Failed to decompose goal: %s", e)
+            state["status"] = "failed"
+            save_state(state)
+            sys.exit(1)
+
+        state = add_steps(state, steps)
+        logger.info("  Decomposed into %d step(s):", len(steps))
+        for s in state["steps"]:
+            deps = f" (depends on {s['depends_on']})" if s["depends_on"] else ""
+            logger.info("    %s. %s%s", s["id"], s["title"], deps)
+
+    # Phase 2: Execute (resume-aware — skip already completed steps)
     logger.info("\nPhase 2: Executing steps via Orchestrator...")
     completed_outputs = {}
 
     for step in state["steps"]:
+        if step["status"] == "completed":
+            logger.info("  Skipping step %s (already completed): %s",
+                        step["id"], step["title"])
+            completed_outputs[step["id"]] = step["output"]
+            continue
+
         success = execute_step(step, state, completed_outputs)
         if not success:
             state["status"] = "blocked"

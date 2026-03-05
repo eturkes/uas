@@ -27,7 +27,7 @@ Each step is self-contained and completable in a single session.
 - Update README with logging info.
 - **Test**: `python -m pytest tests/ -v`
 
-### Step 3: Add plan resumability `[ ]`
+### Step 3: Add plan resumability `[x]`
 
 - In `architect/main.py`, call `load_state()` at startup and resume from the last incomplete step.
 - Add a `--resume` CLI flag and `UAS_RESUME` env var.

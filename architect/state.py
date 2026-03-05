@@ -29,10 +29,18 @@ def save_state(state: dict):
 
 
 def load_state() -> dict | None:
+    """Load state from disk. Returns None if missing or corrupted."""
     if not os.path.exists(STATE_FILE):
         return None
-    with open(STATE_FILE) as f:
-        return json.load(f)
+    try:
+        with open(STATE_FILE) as f:
+            data = json.load(f)
+        # Validate minimum required structure
+        if not isinstance(data, dict) or "goal" not in data or "steps" not in data:
+            return None
+        return data
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def add_steps(state: dict, steps: list[dict]) -> dict:

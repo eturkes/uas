@@ -5,12 +5,14 @@ generates UAS-compliant specs, and drives the Orchestrator to execute them.
 """
 
 import argparse
+import concurrent.futures
 import logging
 import os
 import sys
+import threading
 
 from .state import init_state, save_state, load_state, add_steps
-from .planner import decompose_goal, rewrite_task
+from .planner import decompose_goal, rewrite_task, topological_sort
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import run_orchestrator, extract_sandbox_stdout
 
@@ -23,6 +25,14 @@ LOG_PREVIEW_LENGTH = 300
 OUTPUT_PREVIEW_LENGTH = 200
 
 logger = logging.getLogger(__name__)
+
+_state_lock = threading.Lock()
+
+
+def _save_state_threadsafe(state: dict):
+    """Thread-safe wrapper around save_state for parallel execution."""
+    with _state_lock:
+        save_state(state)
 
 
 def configure_logging(verbose: bool = False):
@@ -115,7 +125,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
 
         # Execute
         step["status"] = "executing"
-        save_state(state)
+        _save_state_threadsafe(state)
 
         result = run_orchestrator(task)
 
@@ -125,7 +135,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
             step["status"] = "completed"
             step["output"] = extract_sandbox_stdout(result["stderr"])
             step["error"] = ""
-            save_state(state)
+            _save_state_threadsafe(state)
             logger.info("  Step %s SUCCEEDED.", step["id"])
             if step["output"]:
                 logger.info("  Output: %s", step["output"][:OUTPUT_PREVIEW_LENGTH])
@@ -135,7 +145,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
         error_info = result["stderr"] or result["stdout"] or "Unknown error"
         step["error"] = error_info
         step["status"] = "failed"
-        save_state(state)
+        _save_state_threadsafe(state)
 
         logger.error("  Step %s FAILED.", step["id"])
         logger.error("  Error: %s", error_info[:LOG_PREVIEW_LENGTH])
@@ -150,7 +160,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
                 step, result["stdout"], result["stderr"]
             )
             step["rewrites"] = spec_attempt + 1
-            save_state(state)
+            _save_state_threadsafe(state)
         else:
             logger.error(
                 "  Exhausted all spec rewrites for step %s.", step["id"]
@@ -229,25 +239,75 @@ def main():
             deps = f" (depends on {s['depends_on']})" if s["depends_on"] else ""
             logger.info("    %s. %s%s", s["id"], s["title"], deps)
 
-    # Phase 2: Execute (resume-aware — skip already completed steps)
+    # Phase 2: Execute (resume-aware, parallel where possible)
     logger.info("\nPhase 2: Executing steps via Orchestrator...")
     completed_outputs = {}
+    step_by_id = {s["id"]: s for s in state["steps"]}
+    levels = topological_sort(state["steps"])
 
-    for step in state["steps"]:
-        if step["status"] == "completed":
-            logger.info("  Skipping step %s (already completed): %s",
-                        step["id"], step["title"])
-            completed_outputs[step["id"]] = step["output"]
+    for level in levels:
+        level_steps = [step_by_id[sid] for sid in level]
+
+        # Separate already-completed from pending
+        pending = []
+        for step in level_steps:
+            if step["status"] == "completed":
+                logger.info("  Skipping step %s (already completed): %s",
+                            step["id"], step["title"])
+                completed_outputs[step["id"]] = step["output"]
+            else:
+                pending.append(step)
+
+        if not pending:
             continue
 
-        success = execute_step(step, state, completed_outputs)
-        if not success:
-            state["status"] = "blocked"
-            save_state(state)
-            create_blocker(state, step)
-            logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
-            sys.exit(1)
-        completed_outputs[step["id"]] = step["output"]
+        if len(pending) == 1:
+            # Single step — no threading overhead needed
+            step = pending[0]
+            success = execute_step(step, state, completed_outputs)
+            if not success:
+                state["status"] = "blocked"
+                save_state(state)
+                create_blocker(state, step)
+                logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
+                sys.exit(1)
+            completed_outputs[step["id"]] = step["output"]
+        else:
+            # Multiple independent steps — run in parallel
+            logger.info("  Running %d independent steps in parallel: %s",
+                        len(pending), [s["id"] for s in pending])
+            failed_step = None
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(pending),
+            ) as executor:
+                future_to_step = {
+                    executor.submit(
+                        execute_step, step, state, completed_outputs,
+                    ): step
+                    for step in pending
+                }
+                for future in concurrent.futures.as_completed(future_to_step):
+                    step = future_to_step[future]
+                    try:
+                        success = future.result()
+                    except Exception as exc:
+                        logger.error("  Step %s raised exception: %s",
+                                     step["id"], exc)
+                        step["status"] = "failed"
+                        step["error"] = str(exc)
+                        success = False
+                    if success:
+                        completed_outputs[step["id"]] = step["output"]
+                    elif failed_step is None:
+                        failed_step = step
+
+            if failed_step is not None:
+                state["status"] = "blocked"
+                save_state(state)
+                create_blocker(state, failed_step)
+                logger.error("HALTED: Step %s failed irrecoverably.",
+                             failed_step["id"])
+                sys.exit(1)
 
     # All done
     state["status"] = "completed"

@@ -109,6 +109,50 @@ def validate_depends_on(steps: list[dict]) -> None:
             dfs(node)
 
 
+def topological_sort(steps: list[dict]) -> list[list[int]]:
+    """Sort steps into execution levels using Kahn's algorithm.
+
+    Returns a list of levels, where each level contains step IDs
+    that can run concurrently (all dependencies are in earlier levels).
+
+    Raises ValueError if the graph contains a cycle.
+    """
+    if not steps:
+        return []
+
+    in_degree = {}
+    dependents = {}
+    for step in steps:
+        sid = step["id"]
+        deps = step.get("depends_on", [])
+        in_degree[sid] = len(deps)
+        dependents.setdefault(sid, [])
+        for dep in deps:
+            dependents.setdefault(dep, []).append(sid)
+
+    levels = []
+    ready = [sid for sid, deg in in_degree.items() if deg == 0]
+
+    while ready:
+        levels.append(sorted(ready))
+        next_ready = []
+        for sid in ready:
+            for dep_id in dependents.get(sid, []):
+                in_degree[dep_id] -= 1
+                if in_degree[dep_id] == 0:
+                    next_ready.append(dep_id)
+        ready = next_ready
+
+    placed = sum(len(level) for level in levels)
+    if placed != len(steps):
+        raise ValueError(
+            f"Topological sort failed: placed {placed}/{len(steps)} steps. "
+            "Cycle detected in dependency graph."
+        )
+
+    return levels
+
+
 def decompose_goal(goal: str) -> list[dict]:
     client = get_llm_client()
     prompt = DECOMPOSITION_PROMPT.format(goal=goal)

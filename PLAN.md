@@ -53,7 +53,7 @@ Each step is self-contained and completable in a single session.
 - Validate `depends_on` references in planner output (no circular deps, no out-of-range refs).
 - **Test**: `python -m pytest tests/ -v`
 
-### Step 6: Add parallel step execution `[ ]`
+### Step 6: Add parallel step execution `[x]`
 
 - In `architect/main.py`, build a DAG from `depends_on` fields.
 - Execute independent steps concurrently using `concurrent.futures.ThreadPoolExecutor`.

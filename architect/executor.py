@@ -171,11 +171,19 @@ def _run_container(task: str) -> dict:
     # image does not have Podman -- the container itself provides isolation.
     env_args.extend(["-e", "UAS_SANDBOX_MODE=local"])
 
+    # Mount auth credentials into the sandbox so the Claude CLI
+    # can authenticate (credentials live at /root/.claude in the
+    # outer uas-engine container).
+    auth_args = []
+    auth_dir = "/root/.claude"
+    if os.path.isdir(auth_dir):
+        auth_args = ["-v", f"{auth_dir}:/root/.claude:Z"]
+
     cmd = _podman_cmd(
         engine, "run", "--rm",
         "--entrypoint", "python3",
         "-v", f"{workspace}:/workspace:Z",
-    ) + env_args + [
+    ) + auth_args + env_args + [
         SANDBOX_IMAGE_NAME,
         "-m", "orchestrator.main",
     ]

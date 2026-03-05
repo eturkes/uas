@@ -230,6 +230,8 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_SANDBOX_TIMEOUT` | Sandbox execution timeout (seconds) | `60` |
 | `UAS_DRY_RUN` | Preview plan without executing (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_RESUME` | Resume from saved state (`1`, `true`, or `yes`) | *(off)* |
+| `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | `120` |
+| `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `ANTHROPIC_API_KEY` | Anthropic API key | *(uses Claude CLI auth)* |
 

@@ -4,5 +4,10 @@ output
 .containerignore
 README.md
 stack_decisions.md
+orchestrator_design.md
 LICENSE
 run.sh
+start_orchestrator.sh
+validate.py
+CLAUDE.md
+ORCHESTRATOR_BLOCKER.md

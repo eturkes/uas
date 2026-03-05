@@ -45,7 +45,7 @@ Each step is self-contained and completable in a single session.
 - Fix `spec_generator.py` duplicated description in "Objective" and "Task" sections.
 - **Test**: `python -m pytest tests/ -v`
 
-### Step 5: Add input validation and error output standardization `[ ]`
+### Step 5: Add input validation and error output standardization `[x]`
 
 - Add goal/task length validation (warn on very long inputs).
 - Standardize error truncation to a configurable constant.

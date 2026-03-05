@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 
 SANDBOX_IMAGE_NAME = "uas-sandbox"
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
@@ -134,6 +135,24 @@ def _run_local(task: str) -> dict:
         }
 
 
+def _kill_container(engine: str, name: str):
+    """Attempt to stop and remove a container by name."""
+    try:
+        subprocess.run(
+            _podman_cmd(engine, "kill", name),
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+    try:
+        subprocess.run(
+            _podman_cmd(engine, "rm", "-f", name),
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+
 def _run_container(task: str) -> dict:
     """Run the Orchestrator inside a lightweight sandbox container."""
     engine = find_engine()
@@ -154,6 +173,7 @@ def _run_container(task: str) -> dict:
         }
 
     workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
+    container_name = f"uas-orchestrator-{uuid.uuid4().hex[:8]}"
 
     # Pass through API keys and config from host environment
     env_args = []
@@ -184,6 +204,7 @@ def _run_container(task: str) -> dict:
 
     cmd = _podman_cmd(
         engine, "run", "--rm",
+        "--name", container_name,
         "--entrypoint", "python3",
         "-v", f"{workspace}:/workspace:Z",
     ) + auth_args + env_args + [
@@ -218,6 +239,8 @@ def _run_container(task: str) -> dict:
             "stderr": e.stderr or "",
         }
     except subprocess.TimeoutExpired:
+        logger.warning("  Killing timed-out container %s...", container_name)
+        _kill_container(engine, container_name)
         return {
             "exit_code": -1,
             "stdout": "",

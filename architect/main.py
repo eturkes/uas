@@ -17,6 +17,11 @@ from .executor import run_orchestrator, extract_sandbox_stdout
 MAX_SPEC_REWRITES = 2
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 
+MAX_GOAL_LENGTH = 10000
+MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "2000"))
+LOG_PREVIEW_LENGTH = 300
+OUTPUT_PREVIEW_LENGTH = 200
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,7 +80,7 @@ def create_blocker(state: dict, step: dict):
         f.write(f"The Orchestrator failed this step after all retries, and the "
                 f"Architect exhausted {MAX_SPEC_REWRITES} spec rewrites.\n\n")
         f.write(f"**Last task description:**\n```\n{step['description']}\n```\n\n")
-        f.write(f"**Last error:**\n```\n{step['error'][:2000]}\n```\n\n")
+        f.write(f"**Last error:**\n```\n{step['error'][:MAX_ERROR_LENGTH]}\n```\n\n")
         f.write("## Required Action\n\n")
         f.write("A human must review the failure above and either:\n")
         f.write("1. Simplify the goal.\n")
@@ -123,7 +128,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
             save_state(state)
             logger.info("  Step %s SUCCEEDED.", step["id"])
             if step["output"]:
-                logger.info("  Output: %s", step["output"][:200])
+                logger.info("  Output: %s", step["output"][:OUTPUT_PREVIEW_LENGTH])
             return True
 
         # Failed
@@ -133,7 +138,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict) -> bool:
         save_state(state)
 
         logger.error("  Step %s FAILED.", step["id"])
-        logger.error("  Error: %s", error_info[:300])
+        logger.error("  Error: %s", error_info[:LOG_PREVIEW_LENGTH])
 
         if spec_attempt < MAX_SPEC_REWRITES:
             logger.info(
@@ -196,6 +201,14 @@ def main():
         if not goal:
             logger.error("No goal provided.")
             sys.exit(1)
+
+        if len(goal) > MAX_GOAL_LENGTH:
+            logger.warning(
+                "Goal is very long (%d chars, max recommended %d). "
+                "Consider simplifying.",
+                len(goal),
+                MAX_GOAL_LENGTH,
+            )
 
         logger.info("Goal: %s\n", goal)
 

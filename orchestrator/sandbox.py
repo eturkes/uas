@@ -1,8 +1,12 @@
 """Sandbox for code execution: supports local subprocess and nested Podman modes."""
 
+import logging
 import os
 import subprocess
 import tempfile
+import uuid
+
+logger = logging.getLogger(__name__)
 
 SANDBOX_IMAGE = os.environ.get(
     "UAS_SANDBOX_IMAGE", "docker.io/library/python:3.12-slim"
@@ -60,6 +64,24 @@ def _run_local(code: str, timeout: int) -> dict:
         os.unlink(script_path)
 
 
+def _kill_container(name: str):
+    """Attempt to stop and remove a container by name."""
+    try:
+        subprocess.run(
+            ["podman", "--storage-driver=vfs", "kill", name],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+    try:
+        subprocess.run(
+            ["podman", "--storage-driver=vfs", "rm", "-f", name],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+
 def _run_container(code: str, timeout: int) -> dict:
     """Execute Python code inside a nested Podman container."""
     with tempfile.NamedTemporaryFile(
@@ -68,11 +90,14 @@ def _run_container(code: str, timeout: int) -> dict:
         f.write(code)
         script_path = f.name
 
+    container_name = f"uas-sandbox-{uuid.uuid4().hex[:8]}"
+
     try:
         result = subprocess.run(
             [
                 "podman", "--storage-driver=vfs",
                 "run", "--rm",
+                "--name", container_name,
                 "--network=none",
                 "--memory=256m",
                 "--cpus=1",
@@ -101,6 +126,8 @@ def _run_container(code: str, timeout: int) -> dict:
             "stderr": e.stderr or "",
         }
     except subprocess.TimeoutExpired:
+        logger.warning("Killing timed-out container %s...", container_name)
+        _kill_container(container_name)
         return {
             "exit_code": -1,
             "stdout": "",

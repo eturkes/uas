@@ -29,7 +29,7 @@ echo "Using container engine: ${ENGINE}"
 
 # --- Build the container image ---
 echo "Building '${IMAGE_TAG}'..."
-"$ENGINE" build -t "$IMAGE_TAG" -f "${SCRIPT_DIR}/Containerfile" "$SCRIPT_DIR"
+"$ENGINE" build --no-cache -t "$IMAGE_TAG" -f "${SCRIPT_DIR}/Containerfile" "$SCRIPT_DIR"
 echo "Image '${IMAGE_TAG}' built successfully."
 echo ""
 

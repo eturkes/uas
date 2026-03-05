@@ -108,14 +108,14 @@ def main():
 
     logger.info("Task: %s", task)
 
-    logger.info("Verifying nested Podman...")
+    logger.info("Verifying sandbox...")
     verify = run_in_sandbox("print('sandbox OK')", timeout=120)
     if verify["exit_code"] != 0:
         logger.error(
-            "Nested Podman verification failed:\n%s", verify["stderr"]
+            "Sandbox verification failed:\n%s", verify["stderr"]
         )
         sys.exit(1)
-    logger.info("Nested Podman verified successfully.")
+    logger.info("Sandbox verified.")
 
     client = get_llm_client()
     previous_error = None

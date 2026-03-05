@@ -214,6 +214,6 @@ class TestOutputIntegration:
 
         # No JSON output file should exist in workspace
         json_files = [f for f in os.listdir(str(tmp_workspace))
-                      if f.endswith(".json") and f != "plan_state.json"]
-        # Only architect_state dir should exist, no stray JSON files
+                      if f.endswith(".json") and f != "state.json"]
+        # Only .state dir should exist, no stray JSON files
         assert not any(f.endswith(".json") for f in json_files)

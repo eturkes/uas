@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""E2E test: drives the Architect/Orchestrator loop with a simple two-step task.
+"""Integration test: two-step Architect/Orchestrator loop in local mode.
 
-Bypasses the interactive Stage 1 entrypoint and runs entirely unattended.
-Monitors for: subprocess hangs, nested Podman failures, volume mount errors.
+Runs entirely unattended without containers.
 """
 
 import os
@@ -43,7 +42,7 @@ def main():
     env["UAS_SANDBOX_MODE"] = "local"
 
     print("=" * 60)
-    print("  UAS End-to-End Test")
+    print("  UAS Integration Test (local)")
     print("=" * 60)
     print(f"  Goal: {goal}")
     print(f"  Workspace: {WORKSPACE}")
@@ -60,10 +59,10 @@ def main():
             stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
-        print(f"\nE2E TEST FAILED: Process timed out after {TIMEOUT}s (subprocess hang)")
+        print(f"\nINTEGRATION TEST FAILED: Process timed out after {TIMEOUT}s (subprocess hang)")
         return 1
     except Exception as e:
-        print(f"\nE2E TEST FAILED: Unexpected error: {e}")
+        print(f"\nINTEGRATION TEST FAILED: Unexpected error: {e}")
         return 1
 
     print(f"\nArchitect exited with code: {result.returncode}")
@@ -89,13 +88,13 @@ def main():
         content = open(step2_path).read().strip()
         if "HELLO WORLD" in content:
             print(f"  step2.txt: {content!r}")
-            print("\nE2E TEST PASSED")
+            print("\nINTEGRATION TEST PASSED")
             return 0
         else:
-            print(f"\nE2E TEST FAILED: step2.txt contains {content!r}, expected 'HELLO WORLD'")
+            print(f"\nINTEGRATION TEST FAILED: step2.txt contains {content!r}, expected 'HELLO WORLD'")
             return 1
     else:
-        print("\nE2E TEST FAILED: step2.txt was not created")
+        print("\nINTEGRATION TEST FAILED: step2.txt was not created")
         return 1
 
 

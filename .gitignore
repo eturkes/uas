@@ -1,17 +1,17 @@
-# Architect runtime state
-architect_state/
-ARCHITECT_BLOCKER.md
+# Runtime state
+.state/
+BLOCKER.md
 
 # Sandbox build artifact
 Sandbox.Dockerfile
 
-# E2E and smoke test artifacts
+# Integration test runtime artifacts
 integration/workspace/
 integration/step*.txt
 integration/hello.txt
 integration/.uas_auth/
-integration/architect_state/
-integration/ARCHITECT_BLOCKER.md
+integration/.state/
+integration/BLOCKER.md
 
 # Project-level auth (contains secrets)
 .uas_auth/

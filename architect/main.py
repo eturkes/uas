@@ -86,8 +86,8 @@ def get_goal(args) -> str:
 def build_context(step: dict, completed_outputs: dict) -> str:
     """Build context string from outputs of dependency steps.
 
-    Each entry in completed_outputs can be a plain string (legacy) or a
-    dict with 'stdout', 'stderr', and 'files' keys.
+    Each entry in completed_outputs can be a plain string or a dict
+    with 'stdout', 'stderr', and 'files' keys.
     """
     if not step["depends_on"]:
         return ""
@@ -184,7 +184,7 @@ def write_json_output(state: dict, output_path: str):
 
 
 def create_blocker(state: dict, step: dict):
-    blocker_path = os.path.join(WORKSPACE, "ARCHITECT_BLOCKER.md")
+    blocker_path = os.path.join(WORKSPACE, "BLOCKER.md")
     with open(blocker_path, "w") as f:
         f.write("# Architect Blocker\n\n")
         f.write(f"**Goal:** {state['goal']}\n\n")
@@ -473,11 +473,11 @@ def main():
     print_summary(state)
     logger.info(
         "State saved to: %s",
-        os.path.join("architect_state", "plan_state.json"),
+        os.path.join(".state", "state.json"),
     )
     logger.info(
         "Specs saved to: %s/",
-        os.path.join("architect_state", "specs"),
+        os.path.join(".state", "specs"),
     )
 
 

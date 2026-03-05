@@ -9,7 +9,7 @@ from architect.state import init_state, save_state, load_state, add_steps
 class TestInitState:
     def test_creates_state_dir(self, tmp_workspace):
         state = init_state("test goal")
-        assert os.path.isdir(os.path.join(tmp_workspace, "architect_state"))
+        assert os.path.isdir(os.path.join(tmp_workspace, ".state"))
 
     def test_returns_correct_structure(self, tmp_workspace):
         state = init_state("my goal")
@@ -21,7 +21,7 @@ class TestInitState:
     def test_persists_to_disk(self, tmp_workspace):
         init_state("persist test")
         state_file = os.path.join(
-            tmp_workspace, "architect_state", "plan_state.json"
+            tmp_workspace, ".state", "state.json"
         )
         assert os.path.exists(state_file)
         with open(state_file) as f:

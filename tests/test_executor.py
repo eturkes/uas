@@ -87,8 +87,8 @@ class TestExtractSandboxStdout:
     def test_realistic_orchestrator_output(self):
         log = (
             "Task: do something\n"
-            "Verifying nested Podman...\n"
-            "Nested Podman verified successfully.\n"
+            "Verifying sandbox...\n"
+            "Sandbox verified.\n"
             "\n--- Attempt 1/3 ---\n"
             "Querying LLM...\n"
             "Executing in sandbox...\n"

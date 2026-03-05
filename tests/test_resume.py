@@ -11,7 +11,7 @@ class TestLoadStateCorrupted:
     def test_corrupted_json(self, tmp_workspace):
         """Corrupted JSON file should return None, not crash."""
         state_file = os.path.join(
-            tmp_workspace, "architect_state", "plan_state.json"
+            tmp_workspace, ".state", "state.json"
         )
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
         with open(state_file, "w") as f:
@@ -21,7 +21,7 @@ class TestLoadStateCorrupted:
     def test_missing_goal_key(self, tmp_workspace):
         """State missing 'goal' key should return None."""
         state_file = os.path.join(
-            tmp_workspace, "architect_state", "plan_state.json"
+            tmp_workspace, ".state", "state.json"
         )
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
         with open(state_file, "w") as f:
@@ -31,7 +31,7 @@ class TestLoadStateCorrupted:
     def test_missing_steps_key(self, tmp_workspace):
         """State missing 'steps' key should return None."""
         state_file = os.path.join(
-            tmp_workspace, "architect_state", "plan_state.json"
+            tmp_workspace, ".state", "state.json"
         )
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
         with open(state_file, "w") as f:
@@ -41,7 +41,7 @@ class TestLoadStateCorrupted:
     def test_non_dict_json(self, tmp_workspace):
         """A JSON array (not dict) should return None."""
         state_file = os.path.join(
-            tmp_workspace, "architect_state", "plan_state.json"
+            tmp_workspace, ".state", "state.json"
         )
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
         with open(state_file, "w") as f:
@@ -104,7 +104,7 @@ class TestTryResume:
 
     def test_corrupted_state_returns_none(self, tmp_workspace):
         state_file = os.path.join(
-            tmp_workspace, "architect_state", "plan_state.json"
+            tmp_workspace, ".state", "state.json"
         )
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
         with open(state_file, "w") as f:

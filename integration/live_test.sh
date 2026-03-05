@@ -9,7 +9,7 @@ TIMEOUT=600  # 10 minutes
 GOAL='Build a two-step data pipeline: 1. Fetch JSON from http://api.open-notify.org/astros.json and save to raw_astros.json. 2. Read raw_astros.json, extract the astronaut count, and write "There are currently X astronauts in space." to summary.txt.'
 
 echo "============================================================"
-echo "  UAS End-to-End Test"
+echo "  UAS Integration Test (live)"
 echo "============================================================"
 
 # --- Clean previous test artifacts ---
@@ -54,7 +54,7 @@ SUMMARY_FILE="${WORKSPACE}/summary.txt"
 
 if [ ! -f "$SUMMARY_FILE" ]; then
     echo ""
-    echo "E2E TEST FAILED: summary.txt was not created in ${WORKSPACE}"
+    echo "INTEGRATION TEST FAILED: summary.txt was not created in ${WORKSPACE}"
     exit 1
 fi
 
@@ -63,11 +63,11 @@ echo "summary.txt content: ${CONTENT}"
 
 if echo "$CONTENT" | grep -qP 'There are currently \d+ astronauts in space\.'; then
     echo ""
-    echo "E2E TEST PASSED"
+    echo "INTEGRATION TEST PASSED"
     exit 0
 else
     echo ""
-    echo "E2E TEST FAILED: summary.txt does not match expected format."
+    echo "INTEGRATION TEST FAILED: summary.txt does not match expected format."
     echo "  Expected: 'There are currently X astronauts in space.'"
     echo "  Got: '${CONTENT}'"
     exit 1

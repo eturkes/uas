@@ -7,6 +7,6 @@ start_orchestrator.sh
 install.sh
 integration/
 tests/
-architect_state/
-ARCHITECT_BLOCKER.md
+.state/
+BLOCKER.md
 Sandbox.Dockerfile

@@ -14,8 +14,8 @@ def tmp_workspace(tmp_path, monkeypatch):
     import architect.state as state_mod
     import architect.spec_generator as spec_mod
 
-    state_dir = os.path.join(str(tmp_path), "architect_state")
-    state_file = os.path.join(state_dir, "plan_state.json")
+    state_dir = os.path.join(str(tmp_path), ".state")
+    state_file = os.path.join(state_dir, "state.json")
     specs_dir = os.path.join(state_dir, "specs")
 
     monkeypatch.setattr(state_mod, "WORKSPACE", str(tmp_path))

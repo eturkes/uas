@@ -134,7 +134,7 @@ interactive Claude Code setup and proceeds directly to execution.
 ├── orchestrator/             # Execution Orchestrator (containerized)
 │   ├── main.py               # Build-Run-Evaluate loop
 │   ├── llm_client.py         # Claude Code CLI subprocess wrapper
-│   ├── sandbox.py            # Nested Podman sandbox execution
+│   ├── sandbox.py            # Sandboxed code execution (local or container)
 │   └── parser.py             # Code extraction from LLM responses
 ├── tests/                    # Unit tests (pytest)
 │   ├── conftest.py           # Shared fixtures
@@ -155,7 +155,7 @@ User (any directory)
          └─ Stage 2: Architect Agent (code in /uas, output in /workspace)
               ├─ Planner        -> Claude Code decomposes goal
               ├─ Spec Generator  -> writes UAS markdown specs
-              ├─ State Manager   -> tracks plan_state.json
+              ├─ State Manager   -> tracks .state/state.json
               └─ Executor        -> invokes Orchestrator loop
                    └─ uas-sandbox (python:3.12-slim)
                        └─ Orchestrator
@@ -185,16 +185,16 @@ into step N's task description.
 **Self-correction:** If the Orchestrator fails a step (after its own 3
 internal retries), the Architect rewrites the spec up to 2 times by
 sending the LLM the original task plus truncated error output. If all
-rewrites are exhausted, it halts with `ARCHITECT_BLOCKER.md`.
+rewrites are exhausted, it halts with `BLOCKER.md`.
 
-**State:** All state is persisted to `architect_state/plan_state.json`
+**State:** All state is persisted to `.state/state.json`
 after every significant event (step start, completion, failure, rewrite).
 
 ### Orchestrator (Build-Run-Evaluate Loop)
 
 ```
 1. Receive task (CLI arg / env var / stdin)
-2. Verify nested Podman works (trivial print statement)
+2. Verify sandbox works (trivial print statement)
 3. For attempt = 1..3:
    a. Build prompt (include previous error if retrying)
    b. Send prompt to LLM -> receive response

@@ -109,6 +109,7 @@ def _run_local(task: str) -> dict:
     framework_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
     )
+    workspace = os.environ.get("UAS_WORKSPACE", os.getcwd())
     env = os.environ.copy()
     env["PYTHONPATH"] = framework_root
     env["IS_SANDBOX"] = "1"
@@ -120,7 +121,7 @@ def _run_local(task: str) -> dict:
             capture_output=True,
             text=True,
             timeout=RUN_TIMEOUT,
-            cwd=framework_root,
+            cwd=workspace,
             env=env,
             stdin=subprocess.DEVNULL,
         )

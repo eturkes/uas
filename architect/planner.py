@@ -33,6 +33,9 @@ Respond with ONLY a JSON array. Each element:
 {{"title": "short name", "description": "detailed task for a code-generating LLM", \
 "depends_on": [step_numbers]}}
 
+Steps are numbered starting from 1. depends_on references must use 1-based step \
+numbers (e.g. step 2 depending on step 1 should have "depends_on": [1]).
+
 Goal: {goal}
 """
 
@@ -169,6 +172,16 @@ def decompose_goal(goal: str) -> list[dict]:
         if "title" not in step or "description" not in step:
             raise ValueError(f"Step missing required fields: {step}")
         step.setdefault("depends_on", [])
+
+    # Normalize 0-indexed depends_on to 1-indexed.
+    # The LLM sometimes returns 0-based step references despite the prompt
+    # requesting 1-based. Detect this by checking if any step references
+    # step 0 (which doesn't exist in 1-based numbering).
+    has_zero_ref = any(0 in s.get("depends_on", []) for s in steps)
+    if has_zero_ref:
+        for step in steps:
+            step["depends_on"] = [d + 1 for d in step["depends_on"]]
+
     validate_depends_on(steps)
     return steps
 

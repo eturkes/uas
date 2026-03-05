@@ -108,6 +108,7 @@ UAS_SANDBOX_MODE=local UAS_GOAL="your goal" python3 -m architect.main
 python3 integration/eval.py                # Run all prompt cases
 python3 integration/eval.py -k hello       # Run cases matching 'hello'
 python3 integration/eval.py --list         # List available cases
+python3 integration/eval.py --local        # Use local subprocess mode
 python3 integration/eval.py -v             # Verbose (show architect logs)
 ```
 

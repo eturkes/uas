@@ -23,6 +23,11 @@ Later steps can read files written by earlier steps from this directory.
 3. Each step should be small and focused on one action.
 4. Steps execute sequentially.
 5. Keep the number of steps minimal.
+6. The sandbox has full network access and can install packages freely \
+(e.g. pip install). Use any libraries needed to accomplish the task.
+7. Each step must produce observable output to stdout so downstream steps \
+can use the results.
+8. Do NOT create steps that require user interaction.
 
 Respond with ONLY a JSON array. Each element:
 {{"title": "short name", "description": "detailed task for a code-generating LLM", \

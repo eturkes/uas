@@ -1,8 +1,8 @@
-"""Tests for architect.planner.parse_steps_json."""
+"""Tests for architect.planner: parse_steps_json and prompt content."""
 
 import pytest
 
-from architect.planner import parse_steps_json
+from architect.planner import parse_steps_json, DECOMPOSITION_PROMPT
 
 
 class TestParseStepsJson:
@@ -46,3 +46,17 @@ class TestParseStepsJson:
         raw = '  \n  [{"title": "a", "description": "b"}]  \n  '
         result = parse_steps_json(raw)
         assert len(result) == 1
+
+
+class TestDecompositionPromptConstraints:
+    def test_full_network_access(self):
+        assert "full network access" in DECOMPOSITION_PROMPT
+
+    def test_can_install_packages(self):
+        assert "install packages freely" in DECOMPOSITION_PROMPT
+
+    def test_observable_stdout(self):
+        assert "produce observable output to stdout" in DECOMPOSITION_PROMPT
+
+    def test_no_user_interaction(self):
+        assert "Do NOT create steps that require user interaction" in DECOMPOSITION_PROMPT

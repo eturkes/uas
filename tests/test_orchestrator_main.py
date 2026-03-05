@@ -26,6 +26,11 @@ class TestBuildPrompt:
         assert "Exit with code 0" in prompt
         assert "stdout" in prompt
 
+    def test_includes_sandbox_constraints(self):
+        prompt = build_prompt("any task", attempt=1)
+        assert "full network access" in prompt
+        assert "install packages freely" in prompt
+
     def test_with_previous_error(self):
         prompt = build_prompt("fix it", attempt=2, previous_error="NameError: x")
         assert "Previous Error (attempt 1)" in prompt

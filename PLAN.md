@@ -26,22 +26,23 @@ After each step, run `python3 -m pytest tests/ -v` to verify all tests pass.
 
 ## Step 2: Improve decomposition and orchestrator prompts
 
-**Goal:** Reduce wasted retries by making sandbox constraints explicit.
+**Goal:** Reduce wasted retries by making sandbox capabilities and
+constraints explicit.
 
 **Changes:**
 - In `architect/planner.py` `DECOMPOSITION_PROMPT`:
-  - Add explicit constraint: "The sandbox has NO network access and NO
-    ability to install packages. Only Python stdlib is available."
+  - Add explicit capability: "The sandbox has full network access and can
+    install packages freely (e.g. pip install). Use any libraries needed."
   - Add: "Each step must produce observable output to stdout so downstream
     steps can use the results."
   - Add: "Do NOT create steps that require user interaction."
 - In `orchestrator/main.py` `build_prompt`:
-  - Add to Environment section: "No network access. No pip install. Only
-    Python standard library is available."
-  - Add: "Do NOT use requests, urllib with external URLs, or any
-    third-party packages."
+  - Add to Environment section: "The script runs inside a sandboxed
+    container with full network access."
+  - Add: "You may install packages freely (e.g. pip install) and use any
+    libraries needed."
 - Add tests for prompt content in `tests/test_orchestrator_main.py` and
-  `tests/test_planner.py` verifying the key constraints appear.
+  `tests/test_planner.py` verifying the key capabilities appear.
 
 **Validation:** `python3 -m pytest tests/ -v` — all tests pass.
 

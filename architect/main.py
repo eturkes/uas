@@ -20,6 +20,7 @@ from .planner import (
     decompose_failing_step,
     topological_sort,
     critique_and_refine_plan,
+    merge_trivial_steps,
 )
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import (
@@ -33,6 +34,7 @@ from .executor import (
 )
 
 MAX_SPEC_REWRITES = 4
+MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "4"))
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 
 MAX_GOAL_LENGTH = 10000
@@ -279,21 +281,37 @@ def report_progress(step: dict, total: int, completed: int, failed: int, attempt
 
 
 def print_summary(state: dict):
-    """Print a summary table of all steps with status and elapsed time."""
+    """Print a summary table of all steps with status, elapsed time, and timing breakdown."""
     steps = state["steps"]
     print(file=sys.stderr)
-    print(f"{'Step':>4}  {'Title':<40}  {'Status':<12}  {'Elapsed':>8}", file=sys.stderr)
-    print(f"{'─' * 4}  {'─' * 40}  {'─' * 12}  {'─' * 8}", file=sys.stderr)
+    print(
+        f"{'Step':>4}  {'Title':<40}  {'Status':<12}  {'Elapsed':>8}  {'LLM':>8}  {'Sandbox':>8}",
+        file=sys.stderr,
+    )
+    print(
+        f"{'─' * 4}  {'─' * 40}  {'─' * 12}  {'─' * 8}  {'─' * 8}  {'─' * 8}",
+        file=sys.stderr,
+    )
     for s in steps:
         elapsed = s.get("elapsed", 0.0)
+        timing = s.get("timing", {})
+        llm_t = timing.get("llm_time", 0.0)
+        sandbox_t = timing.get("sandbox_time", 0.0)
         title = s["title"][:40]
         print(
-            f"{s['id']:>4}  {title:<40}  {s['status']:<12}  {elapsed:>7.1f}s",
+            f"{s['id']:>4}  {title:<40}  {s['status']:<12}  "
+            f"{elapsed:>7.1f}s  {llm_t:>7.1f}s  {sandbox_t:>7.1f}s",
             file=sys.stderr,
         )
     total_elapsed = state.get("total_elapsed", 0.0)
-    print(f"{'─' * 4}  {'─' * 40}  {'─' * 12}  {'─' * 8}", file=sys.stderr)
-    print(f"{'':>4}  {'TOTAL':<40}  {'':12}  {total_elapsed:>7.1f}s", file=sys.stderr)
+    print(
+        f"{'─' * 4}  {'─' * 40}  {'─' * 12}  {'─' * 8}  {'─' * 8}  {'─' * 8}",
+        file=sys.stderr,
+    )
+    print(
+        f"{'':>4}  {'TOTAL':<40}  {'':12}  {total_elapsed:>7.1f}s",
+        file=sys.stderr,
+    )
 
 
 def write_json_output(state: dict, output_path: str):
@@ -307,6 +325,7 @@ def write_json_output(state: dict, output_path: str):
                 "title": s["title"],
                 "status": s["status"],
                 "elapsed": s.get("elapsed", 0.0),
+                "timing": s.get("timing", {}),
             }
             for s in state.get("steps", [])
         ],
@@ -416,9 +435,21 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         step["status"] = "executing"
         _save_state_threadsafe(state)
 
+        orch_start = time.monotonic()
         result = run_orchestrator(task)
+        orch_elapsed = time.monotonic() - orch_start
 
-        logger.info("  Orchestrator exit code: %s", result["exit_code"])
+        # Accumulate per-step timing
+        timing = step.setdefault("timing", {
+            "llm_time": 0.0, "sandbox_time": 0.0, "total_time": 0.0,
+        })
+        timing["total_time"] += orch_elapsed
+        # Approximate split: sandbox_time from result if available, else all is total
+        sandbox_t = result.get("sandbox_time", 0.0)
+        timing["sandbox_time"] += sandbox_t
+        timing["llm_time"] += max(orch_elapsed - sandbox_t, 0.0)
+
+        logger.info("  Orchestrator exit code: %s (%.1fs)", result["exit_code"], orch_elapsed)
 
         if result["exit_code"] == 0:
             step["status"] = "completed"
@@ -575,6 +606,10 @@ def main():
             logger.info("  Critiquing plan...")
             steps = critique_and_refine_plan(goal, steps)
 
+        # Merge trivial steps to reduce LLM calls
+        if len(steps) > 1:
+            steps = merge_trivial_steps(steps)
+
         state = add_steps(state, steps)
         logger.info("  Decomposed into %d step(s):", len(steps))
         for s in state["steps"]:
@@ -637,11 +672,12 @@ def main():
             }
         else:
             # Multiple independent steps — run in parallel
-            logger.info("  Running %d independent steps in parallel: %s",
-                        len(pending), [s["id"] for s in pending])
+            workers = min(len(pending), MAX_PARALLEL)
+            logger.info("  Running %d independent steps in parallel (max %d workers): %s",
+                        len(pending), workers, [s["id"] for s in pending])
             failed_step = None
             with concurrent.futures.ThreadPoolExecutor(
-                max_workers=len(pending),
+                max_workers=workers,
             ) as executor:
                 future_to_step = {
                     executor.submit(

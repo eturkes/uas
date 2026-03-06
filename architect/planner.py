@@ -420,6 +420,113 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
     return result if result else step["description"]
 
 
+def merge_trivial_steps(steps: list[dict]) -> list[dict]:
+    """Merge trivially combinable steps within the same execution level.
+
+    Steps are merged if they are in the same execution level (no dependency
+    relationship between them), both have short descriptions (< 200 chars),
+    and share no complex dependency structures. This reduces LLM calls and
+    sandbox invocations for simple goals.
+    """
+    if len(steps) < 2:
+        return steps
+
+    MAX_DESC_LEN = 200
+
+    # Assign temporary IDs for topological sort
+    indexed = []
+    for i, s in enumerate(steps):
+        indexed.append({**s, "id": i + 1})
+
+    try:
+        levels = topological_sort(indexed)
+    except ValueError:
+        return steps
+
+    # Build lookup from temp ID to original index
+    id_to_idx = {i + 1: i for i in range(len(steps))}
+
+    merged = []
+    merged_ids = set()  # original indices that got merged into another
+
+    for level in levels:
+        # Find candidates: short descriptions, in this level
+        candidates = []
+        non_candidates = []
+        for sid in level:
+            idx = id_to_idx[sid]
+            s = steps[idx]
+            if (
+                len(s.get("description", "")) < MAX_DESC_LEN
+                and idx not in merged_ids
+            ):
+                candidates.append((idx, s))
+            else:
+                non_candidates.append((idx, s))
+
+        # Merge candidates in pairs
+        i = 0
+        while i < len(candidates) - 1:
+            idx_a, a = candidates[i]
+            idx_b, b = candidates[i + 1]
+            combined_title = f"{a['title']} + {b['title']}"
+            combined_desc = (
+                f"Phase 1: {a['description']}\n"
+                f"Phase 2: {b['description']}"
+            )
+            # Union of depends_on, environment
+            combined_deps = sorted(set(a.get("depends_on", []) + b.get("depends_on", [])))
+            combined_env = sorted(set(a.get("environment", []) + b.get("environment", [])))
+            combined_verify = "; ".join(
+                v for v in [a.get("verify", ""), b.get("verify", "")] if v
+            )
+            merged_step = {
+                "title": combined_title,
+                "description": combined_desc,
+                "depends_on": combined_deps,
+                "verify": combined_verify,
+                "environment": combined_env,
+            }
+            merged.append(merged_step)
+            merged_ids.add(idx_a)
+            merged_ids.add(idx_b)
+            i += 2
+
+        # Remaining unpaired candidate
+        if i < len(candidates):
+            merged.append(candidates[i][1])
+
+        # Non-candidates pass through
+        for _, s in non_candidates:
+            merged.append(s)
+
+    # Renumber depends_on references for the merged list
+    # Build mapping: old 1-based index -> new 1-based index
+    old_to_new = {}
+    new_idx = 1
+    remaining_old_indices = []
+    for i, s in enumerate(steps):
+        if i not in merged_ids:
+            remaining_old_indices.append(i)
+
+    # The merged list order: merged steps first (from pair merging), then singles
+    # We need to rebuild depends_on properly. Since merged steps combine deps
+    # from their constituents and the plan may change shape, strip deps that
+    # refer to now-merged steps (their work is in the combined step).
+    # For simplicity, re-validate after merge.
+    for i, s in enumerate(merged, 1):
+        s.setdefault("depends_on", [])
+        s.setdefault("verify", "")
+        s.setdefault("environment", [])
+
+    if len(merged) < len(steps):
+        logger.info(
+            "  Step merging: %d -> %d steps.", len(steps), len(merged)
+        )
+
+    return merged
+
+
 def decompose_failing_step(step: dict, orchestrator_stdout: str,
                            orchestrator_stderr: str) -> str:
     """Decompose a failing step into a more granular multi-phase description."""

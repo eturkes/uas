@@ -96,7 +96,8 @@ UAS_OUTPUT=results.json uas "your goal"
 ```
 
 The JSON file contains the goal, overall status (`completed`, `failed`, or
-`blocked`), per-step results with elapsed times, and the total elapsed time.
+`blocked`), per-step results with elapsed times and timing breakdowns
+(LLM vs sandbox time), and the total elapsed time.
 
 ### Non-Interactive / Local Mode
 
@@ -180,7 +181,10 @@ the Orchestrator to execute them sequentially.
 
 **Planning:** The Planner sends the goal to the LLM with a structured prompt
 that enforces self-contained steps with `title`, `description`, and
-`depends_on` fields (JSON array).
+`depends_on` fields (JSON array). After critique, trivially combinable
+steps in the same execution level (both with short descriptions and no
+dependency relationship) are merged to reduce LLM calls and sandbox
+invocations.
 
 **Context propagation:** When step N depends on step M, the Architect
 builds structured XML context from step M's output (`<previous_step_output>`,
@@ -209,6 +213,11 @@ exhausted, it halts with `BLOCKER.md`.
 writes a `.claude/CLAUDE.md` file to the workspace. This gives the Claude
 Code CLI persistent instructions on coding standards, environment details,
 output format (`UAS_RESULT` JSON), and error handling best practices.
+
+**Parallel execution:** Independent steps (no dependency relationship)
+run concurrently, capped by `UAS_MAX_PARALLEL` (default 4) to prevent
+resource exhaustion. Per-step timing tracks LLM call time vs sandbox
+execution time for performance analysis.
 
 **State:** All state is persisted to `.state/state.json`
 after every significant event (step start, completion, failure, rewrite).
@@ -282,6 +291,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_OUTPUT` | Write JSON results summary to this file path | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | *(none)* |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
+| `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | `4` |
 | `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | `8000` |
 | `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | `2000` |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |

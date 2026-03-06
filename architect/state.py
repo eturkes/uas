@@ -86,6 +86,11 @@ def add_steps(state: dict, steps: list[dict]) -> dict:
             "rewrites": 0,
             "output": "",
             "error": "",
+            "timing": {
+                "llm_time": 0.0,
+                "sandbox_time": 0.0,
+                "total_time": 0.0,
+            },
         })
     state["status"] = "executing"
     save_state(state)

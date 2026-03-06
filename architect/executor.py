@@ -192,6 +192,7 @@ def _run_container(task: str) -> dict:
         "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL",
         "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL",
         "UAS_SANDBOX_IMAGE", "UAS_SANDBOX_TIMEOUT",
+        "UAS_LLM_TIMEOUT", "UAS_MODEL", "UAS_VERBOSE",
     ]:
         val = os.environ.get(var)
         if val:

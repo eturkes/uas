@@ -110,7 +110,7 @@ def main():
     logger.info("Task: %s", task)
 
     logger.info("Verifying sandbox...")
-    verify = run_in_sandbox("print('sandbox OK')", timeout=120)
+    verify = run_in_sandbox("print('sandbox OK')")
     if verify["exit_code"] != 0:
         logger.error(
             "Sandbox verification failed:\n%s", verify["stderr"]

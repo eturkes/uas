@@ -11,7 +11,7 @@ import uuid
 SANDBOX_IMAGE_NAME = "uas-sandbox"
 MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "4000"))
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
-RUN_TIMEOUT = 600  # 10 minutes max per orchestrator invocation
+RUN_TIMEOUT = None
 EXECUTION_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
 
 logger = logging.getLogger(__name__)
@@ -142,7 +142,7 @@ def _run_local(task: str) -> dict:
         return {
             "exit_code": -1,
             "stdout": "",
-            "stderr": f"Orchestrator timed out after {RUN_TIMEOUT}s.",
+            "stderr": "Orchestrator timed out.",
         }
 
 
@@ -257,7 +257,7 @@ def _run_container(task: str) -> dict:
         return {
             "exit_code": -1,
             "stdout": "",
-            "stderr": f"Orchestrator timed out after {RUN_TIMEOUT}s.",
+            "stderr": "Orchestrator timed out.",
         }
 
 

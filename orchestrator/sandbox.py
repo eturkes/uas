@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 SANDBOX_IMAGE = os.environ.get(
     "UAS_SANDBOX_IMAGE", "docker.io/library/python:3.12-slim"
 )
-SANDBOX_TIMEOUT = int(os.environ.get("UAS_SANDBOX_TIMEOUT", "60"))
+_sandbox_timeout_str = os.environ.get("UAS_SANDBOX_TIMEOUT")
+SANDBOX_TIMEOUT = int(_sandbox_timeout_str) if _sandbox_timeout_str else None
 SANDBOX_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
 WORKSPACE_PATH = os.environ.get("UAS_WORKSPACE", "/workspace")
 

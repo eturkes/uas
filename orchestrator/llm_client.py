@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import time
 
-DEFAULT_TIMEOUT = 120
+DEFAULT_TIMEOUT = None
 MAX_RETRIES = 2
 INITIAL_BACKOFF = 2
 
@@ -33,7 +33,7 @@ def _is_transient(error_message: str) -> bool:
 class ClaudeCodeClient:
     """Calls the locally installed Claude Code CLI to generate responses."""
 
-    def __init__(self, timeout: int = DEFAULT_TIMEOUT, model: str | None = None):
+    def __init__(self, timeout: int | None = DEFAULT_TIMEOUT, model: str | None = None):
         self.timeout = timeout
         self.model = model
 

@@ -243,11 +243,11 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_SANDBOX_MODE` | `container` or `local` | `container` |
 | `UAS_WORKSPACE` | Workspace directory path | `/workspace` |
 | `UAS_SANDBOX_IMAGE` | Sandbox container image | `python:3.12-slim` |
-| `UAS_SANDBOX_TIMEOUT` | Sandbox execution timeout (seconds) | `60` |
+| `UAS_SANDBOX_TIMEOUT` | Sandbox execution timeout (seconds) | *(none)* |
 | `UAS_DRY_RUN` | Preview plan without executing (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_RESUME` | Resume from saved state (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_OUTPUT` | Write JSON results summary to this file path | *(off)* |
-| `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | `120` |
+| `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | *(none)* |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
 | `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | `4000` |
 | `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | `2000` |

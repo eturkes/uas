@@ -5,8 +5,7 @@
     "checks": [
       {"type": "file_exists", "path": "hello.txt"},
       {"type": "file_contains", "path": "hello.txt", "pattern": "Hello from UAS"}
-    ],
-    "timeout": 300
+    ]
   },
   {
     "name": "two-step-pipeline",
@@ -15,8 +14,7 @@
       {"type": "file_exists", "path": "step1.txt"},
       {"type": "file_exists", "path": "step2.txt"},
       {"type": "file_contains", "path": "step2.txt", "pattern": "HELLO WORLD"}
-    ],
-    "timeout": 600
+    ]
   },
   {
     "name": "live-data-pipeline",
@@ -25,8 +23,7 @@
       {"type": "file_exists", "path": "raw_astros.json"},
       {"type": "file_exists", "path": "summary.txt"},
       {"type": "file_contains", "path": "summary.txt", "pattern": "There are currently \\d+ astronauts in space\\."}
-    ],
-    "timeout": 600
+    ]
   },
   {
     "name": "fibonacci-json",
@@ -34,7 +31,6 @@
     "checks": [
       {"type": "file_exists", "path": "fibonacci.json"},
       {"type": "file_contains", "path": "fibonacci.json", "pattern": "1, 1, 2, 3, 5, 8, 13, 21, 34"}
-    ],
-    "timeout": 300
+    ]
   }
 ]

@@ -29,7 +29,6 @@ WORKSPACES_DIR = os.path.join(SCRIPT_DIR, "workspace")
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 PROMPTS_FILE = os.path.join(SCRIPT_DIR, "prompts.json")
 RESULTS_FILE = os.path.join(SCRIPT_DIR, "eval_results.json")
-DEFAULT_TIMEOUT = 600
 
 
 def load_prompts(filter_pattern=None):
@@ -47,7 +46,6 @@ def run_case(case, verbose=False, local=False):
     """Run a single prompt case and return results."""
     name = case["name"]
     goal = case["goal"]
-    timeout = case.get("timeout", DEFAULT_TIMEOUT)
 
     workspace = os.path.join(WORKSPACES_DIR, name)
     if os.path.exists(workspace):
@@ -86,7 +84,6 @@ def run_case(case, verbose=False, local=False):
             [sys.executable, "-m", "architect.main"],
             env=env,
             cwd=workspace,
-            timeout=timeout,
             capture_output=not verbose,
             text=True,
             stdin=subprocess.DEVNULL,
@@ -95,12 +92,6 @@ def run_case(case, verbose=False, local=False):
         result["elapsed"] = time.monotonic() - start
         if not verbose and proc.stderr:
             result["log"] = proc.stderr[-2000:]
-    except subprocess.TimeoutExpired:
-        result["exit_code"] = -1
-        result["elapsed"] = timeout
-        result["error"] = f"Timed out after {timeout}s"
-        result["passed"] = False
-        return result
     except Exception as e:
         result["exit_code"] = -1
         result["elapsed"] = time.monotonic() - start

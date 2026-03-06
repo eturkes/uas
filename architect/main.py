@@ -400,6 +400,137 @@ def _probe_environment():
     append_scratchpad("\n".join(lines))
 
 
+def validate_uas_result(step: dict, workspace: str) -> str | None:
+    """Validate a parsed UAS_RESULT against reality.
+
+    Checks the status field and verifies that claimed files exist on disk.
+    Returns None if validation passed, or an error message string if failed.
+    """
+    uas_result = step.get("uas_result")
+    if not uas_result:
+        return None
+
+    if uas_result.get("status") == "error":
+        error = uas_result.get("error", "unknown error")
+        return f"UAS_RESULT reports error: {error}"
+
+    for f in uas_result.get("files_written", []):
+        fpath = os.path.join(workspace, f) if not os.path.isabs(f) else f
+        if not os.path.exists(fpath):
+            return f"UAS_RESULT claims file '{f}' was written but it does not exist"
+
+    return None
+
+
+def verify_step_output(step: dict, workspace: str) -> str | None:
+    """Verify step output against the step's verify criteria.
+
+    Generates a verification task and runs it through the orchestrator.
+    Returns None if verification passed, or an error message if failed.
+    """
+    verify = step.get("verify", "")
+    if not verify:
+        return None
+
+    files_info = ""
+    if step.get("files_written"):
+        files_info = f"\nFiles created by this step: {', '.join(step['files_written'])}"
+
+    output_info = ""
+    if step.get("output"):
+        output_info = f"\nStep stdout (last 500 chars): {step['output'][-500:]}"
+
+    task = (
+        f"Write a Python verification script that checks the following:\n\n"
+        f"Verification criteria: {verify}\n\n"
+        f"Context:{files_info}{output_info}\n\n"
+        f"Requirements:\n"
+        f"- Use workspace = os.environ.get('WORKSPACE', '/workspace')\n"
+        f"- Print 'VERIFICATION PASSED' if all checks pass\n"
+        f"- Print 'VERIFICATION FAILED: <reason>' and exit(1) if any check fails\n"
+        f"- Be thorough but concise\n"
+    )
+
+    result = run_orchestrator(task)
+
+    stdout = extract_sandbox_stdout(result.get("stderr", ""))
+    all_output = (stdout or "") + (result.get("stdout", "") or "")
+
+    if result["exit_code"] == 0 and "VERIFICATION PASSED" in all_output:
+        return None
+
+    error = stdout or result.get("stderr", "") or "Verification script failed"
+    return error[:MAX_ERROR_LENGTH]
+
+
+def validate_workspace(state: dict, workspace: str) -> dict:
+    """Final validation after all steps complete.
+
+    Checks that claimed files exist and workspace isn't empty.
+    Writes VALIDATION.md to the workspace summarizing what was produced.
+    """
+    all_files = []
+    missing_files = []
+
+    for step in state["steps"]:
+        for f in step.get("files_written", []):
+            all_files.append(f)
+            fpath = os.path.join(workspace, f) if not os.path.isabs(f) else f
+            if not os.path.exists(fpath):
+                missing_files.append(f)
+
+    try:
+        ws_entries = [e for e in os.listdir(workspace) if not e.startswith(".")]
+    except OSError:
+        ws_entries = []
+
+    lines = ["# Workspace Validation Report\n\n"]
+    lines.append(f"**Goal:** {state.get('goal', 'N/A')}\n\n")
+    completed = sum(1 for s in state["steps"] if s["status"] == "completed")
+    lines.append(f"**Steps completed:** {completed}/{len(state['steps'])}\n\n")
+    lines.append("## Workspace Contents\n\n")
+    lines.append(f"- Files in workspace: {len(ws_entries)}\n")
+    lines.append(f"- Files referenced by steps: {len(all_files)}\n\n")
+
+    if ws_entries:
+        lines.append("### Files\n\n")
+        for entry in sorted(ws_entries):
+            path = os.path.join(workspace, entry)
+            try:
+                size = os.path.getsize(path)
+                lines.append(f"- `{entry}` ({size} bytes)\n")
+            except OSError:
+                lines.append(f"- `{entry}` (size unknown)\n")
+        lines.append("\n")
+
+    if missing_files:
+        lines.append("## Missing Files\n\n")
+        lines.append(
+            "The following files were reported as written but do not exist:\n\n"
+        )
+        for f in missing_files:
+            lines.append(f"- `{f}`\n")
+        lines.append("\n")
+
+    if not ws_entries:
+        lines.append(
+            "## Warning\n\nWorkspace is empty — no output files were produced.\n"
+        )
+
+    try:
+        validation_path = os.path.join(workspace, "VALIDATION.md")
+        with open(validation_path, "w") as f:
+            f.writelines(lines)
+        logger.info("Validation report written to %s", validation_path)
+    except OSError as e:
+        logger.warning("Could not write VALIDATION.md: %s", e)
+
+    return {
+        "missing_files": missing_files,
+        "workspace_empty": len(ws_entries) == 0,
+    }
+
+
 def execute_step(step: dict, state: dict, completed_outputs: dict,
                  progress_counts: dict | None = None) -> bool:
     """Execute a single step, with spec rewrite retries.
@@ -452,7 +583,6 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         logger.info("  Orchestrator exit code: %s (%.1fs)", result["exit_code"], orch_elapsed)
 
         if result["exit_code"] == 0:
-            step["status"] = "completed"
             step["output"] = extract_sandbox_stdout(result["stderr"])
             step["stderr_output"] = extract_sandbox_stderr(result["stderr"])
             step["files_written"] = extract_workspace_files(
@@ -468,26 +598,40 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     ))
                 if uas_result.get("summary"):
                     step["summary"] = uas_result["summary"]
-            step["error"] = ""
-            step["elapsed"] = time.monotonic() - step_start
-            _save_state_threadsafe(state)
-            logger.info("  Step %s SUCCEEDED.", step["id"])
-            if step["output"]:
-                logger.info("  Output: %s", step["output"][:OUTPUT_PREVIEW_LENGTH])
-            # Scratchpad: record success
-            files_info = ""
-            if step.get("files_written"):
-                files_info = f"\nFiles created: {', '.join(step['files_written'])}"
-            summary = step.get("summary", step["output"][:200] if step["output"] else "")
-            append_scratchpad(
-                f"Step {step['id']} ({step['title']}) SUCCEEDED "
-                f"in {step['elapsed']:.1f}s.{files_info}\n"
-                f"Summary: {summary}"
-            )
-            return True
 
-        # Failed
-        error_info = result["stderr"] or result["stdout"] or "Unknown error"
+            # Post-execution validation
+            failure_reason = validate_uas_result(step, WORKSPACE)
+            if failure_reason is None and step.get("verify"):
+                logger.info("  Verifying step output...")
+                failure_reason = verify_step_output(step, WORKSPACE)
+
+            if failure_reason is None:
+                # All validation passed
+                step["status"] = "completed"
+                step["error"] = ""
+                step["elapsed"] = time.monotonic() - step_start
+                _save_state_threadsafe(state)
+                logger.info("  Step %s SUCCEEDED.", step["id"])
+                if step["output"]:
+                    logger.info("  Output: %s", step["output"][:OUTPUT_PREVIEW_LENGTH])
+                # Scratchpad: record success
+                files_info = ""
+                if step.get("files_written"):
+                    files_info = f"\nFiles created: {', '.join(step['files_written'])}"
+                summary = step.get("summary", step["output"][:200] if step["output"] else "")
+                append_scratchpad(
+                    f"Step {step['id']} ({step['title']}) SUCCEEDED "
+                    f"in {step['elapsed']:.1f}s.{files_info}\n"
+                    f"Summary: {summary}"
+                )
+                return True
+
+            # Validation failed — treat as step failure
+            error_info = failure_reason
+        else:
+            # Execution failed
+            error_info = result["stderr"] or result["stdout"] or "Unknown error"
+
         step["error"] = error_info
         step["status"] = "failed"
         _save_state_threadsafe(state)
@@ -723,6 +867,17 @@ def main():
     state["total_elapsed"] = time.monotonic() - run_start
     state["status"] = "completed"
     save_state(state)
+
+    # Final workspace validation
+    validation = validate_workspace(state, WORKSPACE)
+    if validation["missing_files"]:
+        logger.warning(
+            "  Some referenced files are missing: %s",
+            ", ".join(validation["missing_files"]),
+        )
+    if validation["workspace_empty"]:
+        logger.warning("  Warning: workspace is empty")
+
     if output_path:
         write_json_output(state, output_path)
     logger.info("\n%s", "=" * 60)

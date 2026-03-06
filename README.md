@@ -209,6 +209,14 @@ Outputs are red-flagged and resampled if they show signs of confusion
 (excessive length or verbatim error repetition). If all rewrites are
 exhausted, it halts with `BLOCKER.md`.
 
+**Verification:** After a step exits successfully (code 0), post-execution
+validation checks the `UAS_RESULT` JSON (status field, file existence)
+and, if the step has a `verify` field, generates and runs a verification
+script through the Orchestrator. If either check fails, the step
+re-enters the rewrite loop rather than being marked complete. After all
+steps finish, a final validation pass writes `VALIDATION.md` to the
+workspace summarizing produced files and flagging any missing outputs.
+
 **Workspace guidance:** Before each orchestrator invocation, the Executor
 writes a `.claude/CLAUDE.md` file to the workspace. This gives the Claude
 Code CLI persistent instructions on coding standards, environment details,

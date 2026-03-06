@@ -136,7 +136,8 @@ UAS_REPORT=report.html uas "your goal"
 
 The report includes four tabs: Overview (metrics and Mermaid DAG),
 Timeline (LLM vs sandbox time bars), Steps (expandable details with
-output, errors, and files), and Provenance (interactive graph).
+output, errors, files, and code evolution diffs), and Provenance
+(interactive graph).
 
 ### Non-Interactive / Local Mode
 
@@ -179,6 +180,7 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── events.py             # Structured event log system
 │   ├── provenance.py         # W3C PROV-inspired provenance graph
 │   ├── dashboard.py          # Rich terminal dashboard
+│   ├── code_tracker.py       # Code evolution tracking across retries
 │   ├── report.py             # HTML report generator
 │   └── report_template.html  # Jinja2 HTML template
 ├── orchestrator/             # Execution Orchestrator (containerized)
@@ -292,6 +294,17 @@ provenance graph (`.state/provenance.json`) tracks the full
 transformation chain from goal to result using content-addressed
 entities, activities, and agents. Cross-attempt linking connects
 rewrite errors to subsequent code versions.
+
+**Code evolution tracking:** Every version of generated code is
+recorded across orchestrator retries and architect-level rewrites
+(up to 12 versions per step). Versions are persisted to
+`.state/code_versions/{step_id}.json` with metadata (attempt
+indices, prompt hash, exit code, error summary). Unified diffs
+between consecutive versions are computed and displayed in the
+HTML report with colorized add/remove highlighting. A retry
+effectiveness metric indicates whether code changes converged
+toward a solution. Each code version is linked in the provenance
+graph via `wasDerivedFrom` edges.
 
 ### Orchestrator (Build-Run-Evaluate Loop)
 

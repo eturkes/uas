@@ -77,6 +77,11 @@ pre { background: #11111b; padding: 12px; border-radius: 6px; overflow-x: auto; 
 .events-table tr:hover { background: rgba(137, 180, 250, 0.05); }
 
 .prov-container { background: var(--surface); padding: 20px; border-radius: 8px; }
+
+.diff-block { font-size: 0.8em; }
+.diff-add { background: rgba(166, 227, 161, 0.15); color: var(--green); display: block; }
+.diff-del { background: rgba(243, 139, 168, 0.15); color: var(--red); display: block; }
+.diff-hunk { color: var(--cyan); display: block; }
 </style>
 </head>
 <body>
@@ -181,6 +186,42 @@ pre { background: #11111b; padding: 12px; border-radius: 6px; overflow-x: auto; 
       <div class="step-section">
         <h4>UAS Result</h4>
         <pre>{{ step.uas_result | tojson(indent=2) }}</pre>
+      </div>
+      {% endif %}
+      {% if step.id in code_versions and code_versions[step.id].versions | length > 1 %}
+      <div class="step-section">
+        <h4>Code Evolution ({{ code_versions[step.id].versions | length }} versions)</h4>
+        {% if code_versions[step.id].effectiveness %}
+        <div style="margin-bottom: 12px;">
+          <span class="badge {{ 'ok' if code_versions[step.id].effectiveness.final_success else 'error' }}">
+            {{ 'Converged to success' if code_versions[step.id].effectiveness.final_success else 'Did not converge' }}
+          </span>
+          <span style="color: var(--text-dim); margin-left: 8px; font-size: 0.85em;">
+            {{ code_versions[step.id].effectiveness.num_attempts }} attempts
+            {% if code_versions[step.id].effectiveness.converging %} | changes converging{% endif %}
+          </span>
+        </div>
+        {% endif %}
+        {% for ver in code_versions[step.id].versions %}
+        <div style="margin-top: 8px;">
+          <span class="badge {{ 'ok' if ver.exit_code == 0 else 'error' }}">v{{ loop.index0 }}</span>
+          <span style="color: var(--text-dim); font-size: 0.85em;">
+            spec:{{ ver.spec_attempt }} orch:{{ ver.orch_attempt }} | exit:{{ ver.exit_code }}
+          </span>
+          {% if ver.error_summary %}
+          <pre style="border-left: 3px solid var(--red); margin-top: 4px; font-size: 0.8em;">{{ ver.error_summary }}</pre>
+          {% endif %}
+        </div>
+        {% endfor %}
+        {% for diff_entry in code_versions[step.id].diffs %}
+        <div style="margin-top: 12px;">
+          <h5 style="color: var(--yellow); font-size: 0.85em;">Diff v{{ diff_entry.from_idx }} &rarr; v{{ diff_entry.to_idx }}</h5>
+          {% if diff_entry.error_trigger %}
+          <p style="color: var(--red); font-size: 0.85em; margin: 4px 0;">Triggered by: {{ diff_entry.error_trigger }}</p>
+          {% endif %}
+          <pre class="diff-block">{{ diff_entry.diff_html | safe }}</pre>
+        </div>
+        {% endfor %}
       </div>
       {% endif %}
     </div>

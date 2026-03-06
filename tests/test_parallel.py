@@ -104,11 +104,11 @@ class TestParallelExecution:
         execution_log = []
         log_lock = threading.Lock()
 
-        def slow_orchestrator(task):
+        def slow_orchestrator(task, **kwargs):
             tid = threading.current_thread().ident
             with log_lock:
                 execution_log.append(("start", tid, time.monotonic()))
-            time.sleep(0.1)
+            time.sleep(0.5)
             with log_lock:
                 execution_log.append(("end", tid, time.monotonic()))
             return {"exit_code": 0, "stdout": "", "stderr": ""}
@@ -275,7 +275,7 @@ class TestMaxParallel:
         active_lock = threading.Lock()
         current_active = [0]
 
-        def tracked_orchestrator(task):
+        def tracked_orchestrator(task, **kwargs):
             with active_lock:
                 current_active[0] += 1
                 active_count.append(current_active[0])
@@ -330,7 +330,7 @@ class TestStepTiming:
         from architect.main import execute_step
         from architect.state import init_state, add_steps
 
-        def slow_orch(task):
+        def slow_orch(task, **kwargs):
             time.sleep(0.05)
             return {"exit_code": 0, "stdout": "", "stderr": "", "sandbox_time": 0.02}
 

@@ -125,8 +125,12 @@ def ensure_claude_md(workspace: str) -> None:
     logger.debug("Wrote .claude/CLAUDE.md to %s", workspace)
 
 
-def run_orchestrator(task: str) -> dict:
+def run_orchestrator(task: str, extra_env: dict | None = None) -> dict:
     """Run the Orchestrator with the given task.
+
+    Args:
+        task: The task string to pass to the orchestrator.
+        extra_env: Optional extra environment variables (e.g. UAS_STEP_ID).
 
     Returns dict with exit_code, stdout, stderr.
     """
@@ -141,9 +145,9 @@ def run_orchestrator(task: str) -> dict:
     sandbox_start = _time.monotonic()
 
     if EXECUTION_MODE == "local":
-        result = _run_local(task)
+        result = _run_local(task, extra_env)
     else:
-        result = _run_container(task)
+        result = _run_container(task, extra_env)
 
     sandbox_elapsed = _time.monotonic() - sandbox_start
     event_log.emit(EventType.SANDBOX_COMPLETE,
@@ -152,7 +156,7 @@ def run_orchestrator(task: str) -> dict:
     return result
 
 
-def _run_local(task: str) -> dict:
+def _run_local(task: str, extra_env: dict | None = None) -> dict:
     """Run the Orchestrator as a local subprocess (no container)."""
     framework_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
@@ -162,6 +166,8 @@ def _run_local(task: str) -> dict:
     env["PYTHONPATH"] = framework_root
     env["IS_SANDBOX"] = "1"
     env["UAS_TASK"] = task
+    if extra_env:
+        env.update(extra_env)
 
     try:
         result = subprocess.run(
@@ -204,7 +210,7 @@ def _kill_container(engine: str, name: str):
         pass
 
 
-def _run_container(task: str) -> dict:
+def _run_container(task: str, extra_env: dict | None = None) -> dict:
     """Run the Orchestrator inside a lightweight sandbox container."""
     engine = find_engine()
     if not engine:
@@ -245,6 +251,10 @@ def _run_container(task: str) -> dict:
     # Force local sandbox mode inside the container since this lightweight
     # image does not have Podman -- the container itself provides isolation.
     env_args.extend(["-e", "UAS_SANDBOX_MODE=local"])
+
+    if extra_env:
+        for k, v in extra_env.items():
+            env_args.extend(["-e", f"{k}={v}"])
 
     # Mount auth credentials read-only so the Claude CLI can
     # authenticate. Check /root/.claude (inside uas-engine container)

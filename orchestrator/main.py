@@ -1,11 +1,13 @@
 """Orchestrator entry point: Build-Run-Evaluate loop."""
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import re
 import sys
+from datetime import datetime, timezone
 
 from .llm_client import get_llm_client
 from .parser import extract_code
@@ -181,6 +183,43 @@ error in <analysis> tags, then write the fixed script.
     return prompt
 
 
+def _record_code_version(step_id, spec_attempt, orch_attempt, code, prompt,
+                         exit_code=-1, error_summary=""):
+    """Record a code version to disk for the architect's code tracker."""
+    workspace = os.environ.get("UAS_WORKSPACE", os.getcwd())
+    versions_dir = os.path.join(workspace, ".state", "code_versions")
+    try:
+        os.makedirs(versions_dir, exist_ok=True)
+    except OSError:
+        return
+
+    version = {
+        "step_id": step_id,
+        "spec_attempt": spec_attempt,
+        "orch_attempt": orch_attempt,
+        "code": code,
+        "prompt_hash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+        "exit_code": exit_code,
+        "error_summary": error_summary[:200],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    path = os.path.join(versions_dir, f"{step_id}.json")
+    existing = []
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    existing.append(version)
+    try:
+        with open(path, "w") as f:
+            json.dump(existing, f, indent=2)
+    except OSError:
+        pass
+
+
 def main():
     args = parse_args()
     verbose = args.verbose or os.environ.get("UAS_VERBOSE", "").lower() in (
@@ -200,6 +239,11 @@ def main():
             len(task),
             MAX_TASK_LENGTH,
         )
+
+    # Read step context for code tracking
+    _step_id_str = os.environ.get("UAS_STEP_ID")
+    _spec_attempt = int(os.environ.get("UAS_SPEC_ATTEMPT", "0"))
+    _step_id = int(_step_id_str) if _step_id_str else None
 
     logger.info("Task: %s", task)
 
@@ -234,6 +278,17 @@ def main():
 
         logger.info("Executing in sandbox...")
         result = run_in_sandbox(code)
+
+        # Record code version for tracking
+        if _step_id is not None:
+            cv_error = ""
+            if result["exit_code"] != 0:
+                cv_error = (result["stderr"] or result["stdout"]
+                            or "Non-zero exit code")
+            _record_code_version(
+                _step_id, _spec_attempt, attempt - 1, code, prompt,
+                exit_code=result["exit_code"], error_summary=cv_error,
+            )
 
         logger.info("Exit code: %s", result["exit_code"])
         if result["stdout"]:

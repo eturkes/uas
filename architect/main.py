@@ -34,6 +34,7 @@ from .executor import (
 )
 from .events import EventType, get_event_log, reset_event_log
 from .provenance import get_provenance_graph, reset_provenance_graph
+from .code_tracker import get_code_tracker, reset_code_tracker
 from .dashboard import Dashboard
 from .report import generate_report
 
@@ -543,6 +544,25 @@ def validate_workspace(state: dict, workspace: str) -> dict:
     }
 
 
+def _finalize_code_tracking():
+    """Load code versions from disk and record provenance links."""
+    tracker = get_code_tracker()
+    cv_dir = os.path.join(WORKSPACE, ".state", "code_versions")
+    if os.path.isdir(cv_dir):
+        tracker.load_from_dir(cv_dir)
+    prov = get_provenance_graph()
+    for step_id, versions in tracker.get_all_versions().items():
+        prev_entity_id = None
+        for i, ver in enumerate(versions):
+            entity_id = prov.add_entity(
+                f"code_step{step_id}_v{i}",
+                content=ver.code[:500],
+            )
+            if prev_entity_id:
+                prov.was_derived_from(entity_id, prev_entity_id)
+            prev_entity_id = entity_id
+
+
 def execute_step(step: dict, state: dict, completed_outputs: dict,
                  progress_counts: dict | None = None,
                  dashboard: Dashboard | None = None) -> bool:
@@ -598,7 +618,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         event_log.emit(EventType.LLM_CALL_START, step_id=step["id"],
                        attempt=spec_attempt + 1)
         orch_start = time.monotonic()
-        result = run_orchestrator(task)
+        extra_env = {
+            "UAS_STEP_ID": str(step["id"]),
+            "UAS_SPEC_ATTEMPT": str(spec_attempt),
+        }
+        result = run_orchestrator(task, extra_env=extra_env)
         orch_elapsed = time.monotonic() - orch_start
         event_log.emit(EventType.LLM_CALL_COMPLETE, step_id=step["id"],
                        attempt=spec_attempt + 1, duration=orch_elapsed,
@@ -809,6 +833,7 @@ def main():
         provenance_path = None
     reset_event_log()
     reset_provenance_graph()
+    reset_code_tracker()
     event_log = get_event_log(events_path=events_path)
     prov = get_provenance_graph(output_path=provenance_path)
 
@@ -950,6 +975,7 @@ def main():
                     "status": "blocked",
                     "total_elapsed": state["total_elapsed"],
                 })
+                _finalize_code_tracking()
                 prov.save()
                 dashboard.finish(state)
                 logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
@@ -1008,6 +1034,7 @@ def main():
                     "status": "blocked",
                     "total_elapsed": state["total_elapsed"],
                 })
+                _finalize_code_tracking()
                 prov.save()
                 dashboard.finish(state)
                 logger.error("HALTED: Step %s failed irrecoverably.",
@@ -1036,6 +1063,7 @@ def main():
         "status": state["status"],
         "total_elapsed": state.get("total_elapsed", 0.0),
     })
+    _finalize_code_tracking()
     prov.save()
 
     # Generate HTML report if requested
@@ -1049,7 +1077,13 @@ def main():
         try:
             events_data = [e.to_dict() for e in event_log.events]
             prov_data = prov.to_dict()
-            generate_report(state, events_data, prov_data, report_path)
+            tracker = get_code_tracker()
+            code_versions = {
+                sid: [v.to_dict() for v in versions]
+                for sid, versions in tracker.get_all_versions().items()
+            }
+            generate_report(state, events_data, prov_data, report_path,
+                            code_versions=code_versions)
             logger.info("HTML report written to: %s", report_path)
         except Exception as e:
             logger.warning("Failed to generate HTML report: %s", e)

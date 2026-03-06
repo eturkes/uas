@@ -229,7 +229,7 @@ blocks, timeline data).
 
 ---
 
-## Section 4: Code Evolution Tracking
+## Section 4: Code Evolution Tracking -- DONE
 
 **Goal:** Track every version of generated code across retries and rewrites,
 compute diffs between consecutive attempts, and surface these in the HTML

@@ -41,6 +41,25 @@ To pre-seed auth for CI or automated use, copy your host Claude config:
 cp -r ~/.claude .uas_auth
 ```
 
+### Running Tests
+
+```bash
+# Run the full test suite (unit + integration):
+python3 -m pytest tests/
+
+# Integration tests require a one-time Claude CLI authentication.
+# If you haven't authenticated yet, run:
+claude
+# Then re-run the tests. Credentials are cached in .uas_auth/
+# (a symlink to ~/.claude/) and reused across all future runs.
+
+# Run only unit tests (no auth required):
+python3 -m pytest tests/ -m "not integration"
+
+# Run only integration tests:
+python3 -m pytest tests/ -m integration
+```
+
 ### Quick Test
 
 ```bash
@@ -241,9 +260,10 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── claude_config.py      # CLAUDE.md template for workspace guidance
 │   ├── sandbox.py            # Sandboxed code execution (local or container)
 │   └── parser.py             # Code extraction from LLM responses
-├── tests/                    # Unit tests (pytest)
-│   ├── conftest.py           # Shared fixtures
-│   └── test_*.py             # Test modules
+├── tests/                    # Unit and integration tests (pytest)
+│   ├── conftest.py           # Shared fixtures and auth helpers
+│   ├── test_integration.py   # Integration tests (real Claude CLI)
+│   └── test_*.py             # Unit test modules
 └── integration/              # Integration tests
     ├── quick_test.sh            # Quick test (creates hello.txt)
     ├── eval.py                # Prompt evaluation runner

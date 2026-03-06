@@ -32,6 +32,8 @@ from .executor import (
     scan_workspace_files,
     MAX_CONTEXT_LENGTH,
 )
+from .events import EventType, get_event_log, reset_event_log
+from .provenance import get_provenance_graph, reset_provenance_graph
 
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "4"))
@@ -80,6 +82,10 @@ def parse_args():
     parser.add_argument(
         "-o", "--output", type=str, default=None,
         help="Write a JSON results summary to this file",
+    )
+    parser.add_argument(
+        "--events", type=str, default=None, nargs="?", const="auto",
+        help="Write event log to this path (default: .state/events.jsonl)",
     )
     return parser.parse_args()
 
@@ -544,6 +550,12 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
     counts = progress_counts or {"completed": 0, "failed": 0}
     step_start = time.monotonic()
 
+    event_log = get_event_log()
+    prov = get_provenance_graph()
+    event_log.emit(EventType.STEP_START, step_id=step["id"],
+                   data={"title": step["title"]})
+    prev_error_entity = None
+
     for spec_attempt in range(1 + MAX_SPEC_REWRITES):
         report_progress(step, total, counts["completed"], counts["failed"],
                         attempt=spec_attempt + 1)
@@ -553,6 +565,9 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         logger.info("\n%s", "=" * 60)
         logger.info("  %s", label)
         logger.info("%s", "=" * 60)
+
+        event_log.emit(EventType.CONTEXT_BUILT, step_id=step["id"],
+                       data={"context_length": len(context)})
 
         # Generate UAS spec
         spec_file = generate_spec(step, total, context)
@@ -566,9 +581,14 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         step["status"] = "executing"
         _save_state_threadsafe(state)
 
+        event_log.emit(EventType.LLM_CALL_START, step_id=step["id"],
+                       attempt=spec_attempt + 1)
         orch_start = time.monotonic()
         result = run_orchestrator(task)
         orch_elapsed = time.monotonic() - orch_start
+        event_log.emit(EventType.LLM_CALL_COMPLETE, step_id=step["id"],
+                       attempt=spec_attempt + 1, duration=orch_elapsed,
+                       data={"exit_code": result["exit_code"]})
 
         # Accumulate per-step timing
         timing = step.setdefault("timing", {
@@ -603,7 +623,14 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             failure_reason = validate_uas_result(step, WORKSPACE)
             if failure_reason is None and step.get("verify"):
                 logger.info("  Verifying step output...")
+                event_log.emit(EventType.VERIFICATION_START,
+                               step_id=step["id"])
                 failure_reason = verify_step_output(step, WORKSPACE)
+                event_log.emit(
+                    EventType.VERIFICATION_COMPLETE,
+                    step_id=step["id"],
+                    data={"passed": failure_reason is None},
+                )
 
             if failure_reason is None:
                 # All validation passed
@@ -612,6 +639,32 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 step["elapsed"] = time.monotonic() - step_start
                 _save_state_threadsafe(state)
                 logger.info("  Step %s SUCCEEDED.", step["id"])
+
+                # Record provenance for successful step
+                orchestrator_agent = prov.add_agent("orchestrator_llm")
+                prompt_entity = prov.add_entity(
+                    f"prompt_step{step['id']}", content=task,
+                )
+                orch_activity = prov.add_activity(
+                    f"orchestrate_step{step['id']}",
+                    content=f"step{step['id']}_attempt{spec_attempt}",
+                )
+                prov.used(orch_activity, prompt_entity)
+                prov.was_associated_with(orch_activity, orchestrator_agent)
+                output_content = step.get("output", "") or ""
+                result_entity = prov.add_entity(
+                    f"result_step{step['id']}",
+                    content=output_content[:500],
+                )
+                prov.was_generated_by(result_entity, orch_activity)
+                if prev_error_entity:
+                    prov.was_derived_from(result_entity, prev_error_entity)
+
+                event_log.emit(
+                    EventType.STEP_COMPLETE, step_id=step["id"],
+                    duration=step["elapsed"],
+                    data={"files_written": step.get("files_written", [])},
+                )
                 if step["output"]:
                     logger.info("  Output: %s", step["output"][:OUTPUT_PREVIEW_LENGTH])
                 # Scratchpad: record success
@@ -636,6 +689,12 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         step["status"] = "failed"
         _save_state_threadsafe(state)
 
+        # Record error provenance for cross-attempt linking
+        prev_error_entity = prov.add_entity(
+            f"error_step{step['id']}_attempt{spec_attempt}",
+            content=error_info[:500],
+        )
+
         logger.error("  Step %s FAILED.", step["id"])
         logger.error("  Error: %s", error_info[:LOG_PREVIEW_LENGTH])
 
@@ -647,6 +706,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         )
 
         if spec_attempt < MAX_SPEC_REWRITES:
+            event_log.emit(EventType.REWRITE_START, step_id=step["id"],
+                           attempt=spec_attempt + 1)
             logger.info(
                 "  Rewriting spec (rewrite %d/%d)...",
                 spec_attempt + 1,
@@ -666,11 +727,15 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 )
             step["rewrites"] = spec_attempt + 1
             _save_state_threadsafe(state)
+            event_log.emit(EventType.REWRITE_COMPLETE, step_id=step["id"],
+                           attempt=spec_attempt + 1)
         else:
             logger.error(
                 "  Exhausted all spec rewrites for step %s.", step["id"]
             )
 
+    event_log.emit(EventType.STEP_FAILED, step_id=step["id"],
+                   data={"error": step.get("error", "")[:200]})
     step["elapsed"] = time.monotonic() - step_start
     return False
 
@@ -706,6 +771,24 @@ def main():
 
     output_path = args.output or os.environ.get("UAS_OUTPUT") or None
 
+    # Initialize event log and provenance graph
+    events_flag = args.events or os.environ.get("UAS_EVENTS") or None
+    if events_flag:
+        state_dir = os.path.join(WORKSPACE, ".state")
+        events_path = (
+            os.path.join(state_dir, "events.jsonl")
+            if events_flag == "auto"
+            else events_flag
+        )
+        provenance_path = os.path.join(state_dir, "provenance.json")
+    else:
+        events_path = None
+        provenance_path = None
+    reset_event_log()
+    reset_provenance_graph()
+    event_log = get_event_log(events_path=events_path)
+    prov = get_provenance_graph(output_path=provenance_path)
+
     resume = (args.resume or os.environ.get("UAS_RESUME", "").lower() in (
         "1", "true", "yes",
     )) and not args.fresh
@@ -733,9 +816,14 @@ def main():
             )
 
         logger.info("Goal: %s\n", goal)
+        event_log.emit(EventType.GOAL_RECEIVED, data={"goal": goal})
+        goal_entity = prov.add_entity("goal", content=goal)
+        planner_agent = prov.add_agent("planner_llm")
 
         # Phase 1: Decompose
         logger.info("Phase 1: Decomposing goal into atomic steps...")
+        event_log.emit(EventType.DECOMPOSITION_START)
+        decompose_start = time.monotonic()
         state = init_state(goal)
         try:
             steps = decompose_goal(goal)
@@ -744,15 +832,39 @@ def main():
             state["status"] = "failed"
             save_state(state)
             sys.exit(1)
+        decompose_elapsed = time.monotonic() - decompose_start
+
+        decompose_activity = prov.add_activity(
+            "decompose", content=json.dumps([s.get("title", "") for s in steps]),
+        )
+        prov.used(decompose_activity, goal_entity)
+        prov.was_associated_with(decompose_activity, planner_agent)
+        plan_entity = prov.add_entity(
+            "plan", content=json.dumps(steps),
+        )
+        prov.was_generated_by(plan_entity, decompose_activity)
+        prov.was_derived_from(plan_entity, goal_entity)
+        event_log.emit(
+            EventType.DECOMPOSITION_COMPLETE,
+            duration=decompose_elapsed,
+            data={"num_steps": len(steps)},
+        )
 
         # Critique and refine if multi-step plan
         if len(steps) > 1:
             logger.info("  Critiquing plan...")
+            event_log.emit(EventType.PLAN_CRITIQUE, data={"num_steps": len(steps)})
             steps = critique_and_refine_plan(goal, steps)
 
         # Merge trivial steps to reduce LLM calls
         if len(steps) > 1:
+            pre_merge = len(steps)
             steps = merge_trivial_steps(steps)
+            if len(steps) < pre_merge:
+                event_log.emit(
+                    EventType.STEP_MERGE,
+                    data={"before": pre_merge, "after": len(steps)},
+                )
 
         state = add_steps(state, steps)
         logger.info("  Decomposed into %d step(s):", len(steps))
@@ -805,6 +917,11 @@ def main():
                 create_blocker(state, step)
                 if output_path:
                     write_json_output(state, output_path)
+                event_log.emit(EventType.RUN_COMPLETE, data={
+                    "status": "blocked",
+                    "total_elapsed": state["total_elapsed"],
+                })
+                prov.save()
                 print_summary(state)
                 logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
                 sys.exit(1)
@@ -858,6 +975,11 @@ def main():
                 create_blocker(state, failed_step)
                 if output_path:
                     write_json_output(state, output_path)
+                event_log.emit(EventType.RUN_COMPLETE, data={
+                    "status": "blocked",
+                    "total_elapsed": state["total_elapsed"],
+                })
+                prov.save()
                 print_summary(state)
                 logger.error("HALTED: Step %s failed irrecoverably.",
                              failed_step["id"])
@@ -880,6 +1002,13 @@ def main():
 
     if output_path:
         write_json_output(state, output_path)
+
+    event_log.emit(EventType.RUN_COMPLETE, data={
+        "status": state["status"],
+        "total_elapsed": state.get("total_elapsed", 0.0),
+    })
+    prov.save()
+
     logger.info("\n%s", "=" * 60)
     logger.info("  ALL STEPS COMPLETED SUCCESSFULLY")
     logger.info("%s", "=" * 60)
@@ -892,6 +1021,10 @@ def main():
         "Specs saved to: %s/",
         os.path.join(".state", "specs"),
     )
+    if events_path:
+        logger.info("Events written to: %s", events_path)
+    if provenance_path:
+        logger.info("Provenance written to: %s", provenance_path)
 
 
 if __name__ == "__main__":

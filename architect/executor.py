@@ -6,9 +6,12 @@ import re
 import shutil
 import subprocess
 import sys
+import time as _time
 import uuid
 
 from orchestrator.claude_config import get_claude_md_content
+from .events import EventType, get_event_log
+from .provenance import get_provenance_graph
 
 SANDBOX_IMAGE_NAME = "uas-sandbox"
 MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "8000"))
@@ -133,9 +136,20 @@ def run_orchestrator(task: str) -> dict:
     except OSError as e:
         logger.warning("Could not write .claude/CLAUDE.md: %s", e)
 
+    event_log = get_event_log()
+    event_log.emit(EventType.SANDBOX_START, data={"mode": EXECUTION_MODE})
+    sandbox_start = _time.monotonic()
+
     if EXECUTION_MODE == "local":
-        return _run_local(task)
-    return _run_container(task)
+        result = _run_local(task)
+    else:
+        result = _run_container(task)
+
+    sandbox_elapsed = _time.monotonic() - sandbox_start
+    event_log.emit(EventType.SANDBOX_COMPLETE,
+                   duration=sandbox_elapsed,
+                   data={"exit_code": result["exit_code"]})
+    return result
 
 
 def _run_local(task: str) -> dict:

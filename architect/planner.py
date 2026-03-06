@@ -5,6 +5,7 @@ import logging
 import re
 
 from orchestrator.llm_client import get_llm_client
+from .events import EventType, get_event_log
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +208,10 @@ def topological_sort(steps: list[dict]) -> list[list[int]]:
 def decompose_goal(goal: str) -> list[dict]:
     client = get_llm_client()
     prompt = DECOMPOSITION_PROMPT.format(goal=goal)
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START, data={"purpose": "decompose_goal"})
     response = client.generate(prompt)
+    event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "decompose_goal"})
     steps = parse_steps_json(response)
     if not steps:
         raise ValueError("LLM returned an empty step list")
@@ -269,8 +273,11 @@ def critique_and_refine_plan(goal: str, steps: list[dict]) -> list[dict]:
     steps_json = json.dumps(steps, indent=2)
     prompt = CRITIQUE_PROMPT.format(goal=goal, steps_json=steps_json)
 
+    event_log = get_event_log()
     try:
+        event_log.emit(EventType.LLM_CALL_START, data={"purpose": "critique_plan"})
         response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "critique_plan"})
     except Exception as e:
         logger.warning("Plan critique failed, using original plan: %s", e)
         return steps
@@ -402,7 +409,13 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
         escalation_instruction=escalation,
     )
 
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START,
+                   data={"purpose": "reflect_and_rewrite",
+                         "escalation_level": escalation_level})
     response = client.generate(prompt)
+    event_log.emit(EventType.LLM_CALL_COMPLETE,
+                   data={"purpose": "reflect_and_rewrite"})
 
     # Strip diagnosis and strategies tags to get just the description
     result = re.sub(r"<diagnosis>.*?</diagnosis>", "", response, flags=re.DOTALL)

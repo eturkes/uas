@@ -99,6 +99,25 @@ The JSON file contains the goal, overall status (`completed`, `failed`, or
 `blocked`), per-step results with elapsed times and timing breakdowns
 (LLM vs sandbox time), and the total elapsed time.
 
+### Event Log & Provenance
+
+Record a structured event log and provenance graph for the run:
+
+```bash
+# Via CLI flag (writes to .state/events.jsonl by default):
+uas --events "your goal"
+
+# Specify a custom path:
+uas --events my_events.jsonl "your goal"
+
+# Or via environment variable:
+UAS_EVENTS=events.jsonl uas "your goal"
+```
+
+The event log records every phase boundary as a JSONL file. The
+provenance graph (`.state/provenance.json`) tracks data lineage
+from goal through decomposition, code generation, and execution.
+
 ### Non-Interactive / Local Mode
 
 ```bash
@@ -134,7 +153,9 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── planner.py            # LLM task decomposition + rewrite
 │   ├── spec_generator.py     # UAS markdown spec writer
 │   ├── executor.py           # Builds uas-sandbox image, runs Orchestrator
-│   └── state.py              # JSON state persistence
+│   ├── state.py              # JSON state persistence
+│   ├── events.py             # Structured event log system
+│   └── provenance.py         # W3C PROV-inspired provenance graph
 ├── orchestrator/             # Execution Orchestrator (containerized)
 │   ├── main.py               # Build-Run-Evaluate loop
 │   ├── llm_client.py         # Claude Code CLI subprocess wrapper
@@ -233,6 +254,14 @@ An environment probe runs on the first step, recording Python version,
 installed packages, and disk space to the scratchpad so subsequent steps
 can avoid wrong assumptions about the execution environment.
 
+**Event log & provenance:** When `--events` is passed (or `UAS_EVENTS`
+is set), every significant action is recorded as a typed event in
+`.state/events.jsonl` (one JSON object per line). A W3C PROV-inspired
+provenance graph (`.state/provenance.json`) tracks the full
+transformation chain from goal to result using content-addressed
+entities, activities, and agents. Cross-attempt linking connects
+rewrite errors to subsequent code versions.
+
 ### Orchestrator (Build-Run-Evaluate Loop)
 
 ```
@@ -297,6 +326,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_DRY_RUN` | Preview plan without executing (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_RESUME` | Resume from saved state (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_OUTPUT` | Write JSON results summary to this file path | *(off)* |
+| `UAS_EVENTS` | Write structured event log to this file path | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | *(none)* |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
 | `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | `4` |

@@ -111,39 +111,15 @@ class TestXMLStructure:
         assert "</previous_step_output>" in result
 
 
-class TestObservationMasking:
-    def test_two_deps_both_full(self):
-        step = {"depends_on": [1, 2]}
-        outputs = {1: "out1", 2: "out2"}
-        result = build_context(step, outputs)
-        assert "<previous_step_output" in result
-        assert "out1" in result
-        assert "out2" in result
-        assert "step_summary" not in result
-
-    def test_three_deps_oldest_masked(self):
+class TestAllDepsFullOutput:
+    def test_three_deps_all_full(self):
         step = {"depends_on": [1, 2, 3]}
         outputs = {1: "old output", 2: "mid output", 3: "new output"}
         result = build_context(step, outputs)
-        # Step 1 should be masked
-        assert "<step_summary" in result
-        assert "Step 1 output omitted" in result
-        assert "old output" not in result
-        # Steps 2 and 3 should be full
+        assert "old output" in result
         assert "mid output" in result
         assert "new output" in result
-
-    def test_masked_dep_includes_files_info(self):
-        step = {"depends_on": [1, 2, 3]}
-        outputs = {
-            1: {"stdout": "data", "stderr": "", "files": ["/workspace/a.txt"]},
-            2: "out2",
-            3: "out3",
-        }
-        result = build_context(step, outputs)
-        assert "Step 1 output omitted" in result
-        assert "/workspace/a.txt" in result
-        assert "data" not in result  # stdout masked
+        assert "step_summary" not in result
 
 
 class TestVerifyField:

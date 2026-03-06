@@ -14,7 +14,7 @@ from .events import EventType, get_event_log
 from .provenance import get_provenance_graph
 
 SANDBOX_IMAGE_NAME = "uas-sandbox"
-MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "8000"))
+MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "0"))
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
 RUN_TIMEOUT = None
 EXECUTION_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
@@ -328,7 +328,7 @@ _UAS_RESULT_PATTERN = re.compile(r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE)
 
 def truncate_output(text: str, max_length: int = MAX_CONTEXT_LENGTH) -> str:
     """Truncate text to max_length, appending a note if truncated."""
-    if len(text) <= max_length:
+    if max_length <= 0 or len(text) <= max_length:
         return text
     return text[:max_length] + f"\n... [truncated, {len(text)} chars total]"
 
@@ -337,8 +337,7 @@ def extract_sandbox_stdout(orchestrator_output: str) -> str:
     """Extract the sandbox script's stdout from orchestrator log.
 
     Uses regex-based extraction. If multiple stdout blocks exist (from
-    retries), returns the last one. Output is truncated to
-    MAX_CONTEXT_LENGTH.
+    retries), returns the last one.
     """
     matches = list(_STDOUT_PATTERN.finditer(orchestrator_output))
     if not matches:
@@ -351,8 +350,7 @@ def extract_sandbox_stderr(orchestrator_output: str) -> str:
     """Extract the sandbox script's stderr from orchestrator log.
 
     Uses regex-based extraction. If multiple stderr blocks exist (from
-    retries), returns the last one. Output is truncated to
-    MAX_CONTEXT_LENGTH.
+    retries), returns the last one.
     """
     matches = list(_STDERR_PATTERN.finditer(orchestrator_output))
     if not matches:

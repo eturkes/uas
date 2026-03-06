@@ -14,7 +14,6 @@ from architect.executor import (
     truncate_output,
     find_engine,
     RUN_TIMEOUT,
-    MAX_CONTEXT_LENGTH,
 )
 
 
@@ -174,15 +173,19 @@ class TestTruncateOutput:
     def test_below_limit(self):
         assert truncate_output("short text") == "short text"
 
-    def test_at_limit(self):
-        text = "x" * MAX_CONTEXT_LENGTH
+    def test_no_limit_by_default(self):
+        text = "x" * 50000
         assert truncate_output(text) == text
 
-    def test_above_limit(self):
-        text = "x" * (MAX_CONTEXT_LENGTH + 100)
-        result = truncate_output(text)
+    def test_explicit_limit_at_boundary(self):
+        text = "x" * 100
+        assert truncate_output(text, max_length=100) == text
+
+    def test_explicit_limit_above_boundary(self):
+        text = "x" * 200
+        result = truncate_output(text, max_length=100)
         assert len(result) < len(text)
-        assert result.startswith("x" * MAX_CONTEXT_LENGTH)
+        assert result.startswith("x" * 100)
         assert "truncated" in result
         assert str(len(text)) in result
 
@@ -289,17 +292,15 @@ class TestParseUasResult:
         assert result["status"] == "ok"
 
 
-class TestStdoutTruncation:
-    def test_long_stdout_is_truncated(self):
+class TestStdoutNoTruncationByDefault:
+    def test_long_stdout_not_truncated(self):
         content = "x" * 10000
         log = f"stdout:\n{content}\nExit code: 0"
         result = extract_sandbox_stdout(log)
-        assert "truncated" in result
-        assert len(result) < len(content)
+        assert result == content
 
-    def test_long_stderr_is_truncated(self):
+    def test_long_stderr_not_truncated(self):
         content = "y" * 10000
         log = f"stderr:\n{content}\nExit code: 0"
         result = extract_sandbox_stderr(log)
-        assert "truncated" in result
-        assert len(result) < len(content)
+        assert result == content

@@ -105,37 +105,7 @@ class TestValidateDependsOn:
         validate_depends_on(steps)  # Should not raise
 
 
-class TestGoalLengthWarning:
-    def test_long_goal_warns(self, caplog):
-        """Verify that a very long goal triggers a warning log."""
-        from architect.main import MAX_GOAL_LENGTH
-
-        # We can't easily call main() without mocking everything,
-        # so test the threshold constant is reasonable
-        assert MAX_GOAL_LENGTH == 10000
-
-    def test_task_length_constant(self):
-        from orchestrator.main import MAX_TASK_LENGTH
-        assert MAX_TASK_LENGTH == 10000
-
-
-class TestErrorTruncationConstants:
-    def test_architect_constants(self):
-        from architect.main import (
-            MAX_ERROR_LENGTH,
-            LOG_PREVIEW_LENGTH,
-            OUTPUT_PREVIEW_LENGTH,
-        )
-        assert MAX_ERROR_LENGTH > 0
-        assert LOG_PREVIEW_LENGTH > 0
-        assert OUTPUT_PREVIEW_LENGTH > 0
-        assert MAX_ERROR_LENGTH >= LOG_PREVIEW_LENGTH
-
-    def test_planner_constants(self):
-        from architect.planner import REWRITE_STDOUT_LIMIT, REWRITE_STDERR_LIMIT
-        assert REWRITE_STDOUT_LIMIT > 0
-        assert REWRITE_STDERR_LIMIT > 0
-
+class TestMaxErrorLengthConfigurable:
     def test_max_error_length_configurable(self, monkeypatch):
         """MAX_ERROR_LENGTH should be configurable via env var."""
         monkeypatch.setenv("UAS_MAX_ERROR_LENGTH", "5000")
@@ -147,3 +117,8 @@ class TestErrorTruncationConstants:
         # Reset
         monkeypatch.delenv("UAS_MAX_ERROR_LENGTH")
         importlib.reload(main_mod)
+
+    def test_max_error_length_default_unlimited(self):
+        """MAX_ERROR_LENGTH defaults to 0 (unlimited)."""
+        from architect.main import MAX_ERROR_LENGTH
+        assert MAX_ERROR_LENGTH == 0

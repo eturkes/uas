@@ -14,7 +14,6 @@ from .parser import extract_code
 from .sandbox import run_in_sandbox
 
 MAX_RETRIES = 3
-MAX_TASK_LENGTH = 10000
 
 logger = logging.getLogger(__name__)
 
@@ -231,14 +230,6 @@ def main():
     if not task:
         logger.error("No task provided.")
         sys.exit(1)
-
-    if len(task) > MAX_TASK_LENGTH:
-        logger.warning(
-            "Task is very long (%d chars, max recommended %d). "
-            "Consider simplifying.",
-            len(task),
-            MAX_TASK_LENGTH,
-        )
 
     # Read step context for code tracking
     _step_id_str = os.environ.get("UAS_STEP_ID")

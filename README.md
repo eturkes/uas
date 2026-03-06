@@ -289,13 +289,12 @@ invocations.
 **Context propagation:** When step N depends on step M, the Architect
 builds structured XML context from step M's output (`<previous_step_output>`,
 `<workspace_files>`, `<verification>`, `<scratchpad>` tags). Observation
-masking replaces older dependency outputs with compact summaries, keeping
-recent outputs in full. Workspace files are scanned for previews (with
+Workspace files are scanned for previews (with
 JSON key extraction). A persistent scratchpad (`.state/scratchpad.md`)
 accumulates timestamped learnings across steps — successes, failures,
 and environment details — giving all steps visibility into the run's
-history. If context exceeds the limit, it is compressed via the LLM
-with fallback to truncation.
+history. When `UAS_MAX_CONTEXT_LENGTH` is set and context exceeds the
+limit, it is compressed via the LLM with fallback to truncation.
 
 **Self-correction:** If the Orchestrator fails a step (after its own 3
 internal retries), the Architect uses reflection-based error recovery
@@ -323,8 +322,7 @@ Code CLI persistent instructions on coding standards, environment details,
 output format (`UAS_RESULT` JSON), and error handling best practices.
 
 **Parallel execution:** Independent steps (no dependency relationship)
-run concurrently, capped by `UAS_MAX_PARALLEL` (default 4) to prevent
-resource exhaustion. Per-step timing tracks LLM call time vs sandbox
+run concurrently, optionally capped by `UAS_MAX_PARALLEL`. Per-step timing tracks LLM call time vs sandbox
 execution time for performance analysis.
 
 **State:** All state is persisted to `.state/state.json`
@@ -444,9 +442,9 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_EXPLAIN` | Print run explanation to stderr (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | *(none)* |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
-| `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | `4` |
-| `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | `8000` |
-| `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | `2000` |
+| `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | *(unlimited)* |
+| `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | *(unlimited)* |
+| `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | *(unlimited)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `ANTHROPIC_API_KEY` | Anthropic API key | *(uses Claude CLI auth)* |
 

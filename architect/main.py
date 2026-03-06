@@ -41,13 +41,10 @@ from .trace_export import TraceExporter
 from .explain import RunExplainer
 
 MAX_SPEC_REWRITES = 4
-MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "4"))
+MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 
-MAX_GOAL_LENGTH = 10000
-MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "2000"))
-LOG_PREVIEW_LENGTH = 300
-OUTPUT_PREVIEW_LENGTH = 200
+MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +114,6 @@ def get_goal(args) -> str:
     return sys.stdin.read().strip()
 
 
-FULL_OUTPUT_DEPS = 2  # Number of most-recent deps to keep in full
-
-
 def _extract_json_keys(preview: str) -> str:
     """Extract top-level keys/schema from a JSON preview string."""
     try:
@@ -169,9 +163,7 @@ def build_context(step: dict, completed_outputs: dict,
                   workspace_path: str | None = None) -> str:
     """Build structured XML context from outputs of dependency steps.
 
-    Uses observation masking: the most recent FULL_OUTPUT_DEPS dependencies
-    get full output; older ones are replaced with summaries. Includes
-    workspace file info and verification criteria from completed steps.
+    Includes workspace file info and verification criteria from completed steps.
 
     Each entry in completed_outputs can be a plain string or a dict
     with 'stdout', 'stderr', and 'files' keys.
@@ -189,51 +181,34 @@ def build_context(step: dict, completed_outputs: dict,
         step_by_id = {s["id"]: s for s in state.get("steps", [])}
         goal = state.get("goal", "")
 
-    # Determine which deps get full output vs masked
-    full_deps = set(dep_ids[-FULL_OUTPUT_DEPS:])
-
     for dep_id in dep_ids:
         output = completed_outputs.get(dep_id, "")
         dep_step = step_by_id.get(dep_id, {})
         verify = dep_step.get("verify", "")
 
-        if dep_id in full_deps:
-            # Full output with XML tags
-            lines = []
-            if isinstance(output, dict):
-                stdout = output.get("stdout", "")
-                stderr = output.get("stderr", "")
-                files = output.get("files", [])
-                if stdout:
-                    lines.append(f"stdout: {stdout}")
-                if stderr:
-                    lines.append(f"stderr: {stderr}")
-                if files:
-                    lines.append(f"files: {', '.join(files)}")
-            elif output:
-                lines.append(output)
+        lines = []
+        if isinstance(output, dict):
+            stdout = output.get("stdout", "")
+            stderr = output.get("stderr", "")
+            files = output.get("files", [])
+            if stdout:
+                lines.append(f"stdout: {stdout}")
+            if stderr:
+                lines.append(f"stderr: {stderr}")
+            if files:
+                lines.append(f"files: {', '.join(files)}")
+        elif output:
+            lines.append(output)
 
-            if verify:
-                lines.append(f"<verification>{verify}</verification>")
+        if verify:
+            lines.append(f"<verification>{verify}</verification>")
 
-            if lines:
-                content = "\n".join(lines)
-                parts.append(
-                    f"<previous_step_output step=\"{dep_id}\">\n"
-                    f"{content}\n"
-                    f"</previous_step_output>"
-                )
-        else:
-            # Masked summary (observation masking)
-            files_info = ""
-            if isinstance(output, dict):
-                files = output.get("files", [])
-                if files:
-                    files_info = f" - produced files: {', '.join(files)}"
+        if lines:
+            content = "\n".join(lines)
             parts.append(
-                f"<step_summary step=\"{dep_id}\">"
-                f"[Step {dep_id} output omitted{files_info}]"
-                f"</step_summary>"
+                f"<previous_step_output step=\"{dep_id}\">\n"
+                f"{content}\n"
+                f"</previous_step_output>"
             )
 
     # Workspace files section
@@ -267,7 +242,7 @@ def build_context(step: dict, completed_outputs: dict,
     context = "\n\n".join(parts)
 
     # Context length management
-    if len(context) > MAX_CONTEXT_LENGTH:
+    if MAX_CONTEXT_LENGTH and len(context) > MAX_CONTEXT_LENGTH:
         context = summarize_context(context, goal, MAX_CONTEXT_LENGTH)
 
     return context
@@ -372,7 +347,7 @@ def create_blocker(state: dict, step: dict):
         f.write(f"The Orchestrator failed this step after all retries, and the "
                 f"Architect exhausted {MAX_SPEC_REWRITES} spec rewrites.\n\n")
         f.write(f"**Last task description:**\n```\n{step['description']}\n```\n\n")
-        f.write(f"**Last error:**\n```\n{step['error'][:MAX_ERROR_LENGTH]}\n```\n\n")
+        f.write(f"**Last error:**\n```\n{step['error'][:MAX_ERROR_LENGTH or None]}\n```\n\n")
         f.write("## Required Action\n\n")
         f.write("A human must review the failure above and either:\n")
         f.write("1. Simplify the goal.\n")
@@ -483,7 +458,7 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
         return None
 
     error = stdout or result.get("stderr", "") or "Verification script failed"
-    return error[:MAX_ERROR_LENGTH]
+    return error[:MAX_ERROR_LENGTH or None]
 
 
 def validate_workspace(state: dict, workspace: str) -> dict:
@@ -716,7 +691,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     data={"files_written": step.get("files_written", [])},
                 )
                 if step["output"]:
-                    logger.info("  Output: %s", step["output"][:OUTPUT_PREVIEW_LENGTH])
+                    logger.info("  Output: %s", step["output"])
                 # Scratchpad: record success
                 files_info = ""
                 if step.get("files_written"):
@@ -748,7 +723,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         )
 
         logger.error("  Step %s FAILED.", step["id"])
-        logger.error("  Error: %s", error_info[:LOG_PREVIEW_LENGTH])
+        logger.error("  Error: %s", error_info)
 
         # Scratchpad: record failure
         append_scratchpad(
@@ -872,14 +847,6 @@ def main():
         if not goal:
             logger.error("No goal provided.")
             sys.exit(1)
-
-        if len(goal) > MAX_GOAL_LENGTH:
-            logger.warning(
-                "Goal is very long (%d chars, max recommended %d). "
-                "Consider simplifying.",
-                len(goal),
-                MAX_GOAL_LENGTH,
-            )
 
         logger.info("Goal: %s\n", goal)
         event_log.emit(EventType.GOAL_RECEIVED, data={"goal": goal})
@@ -1006,7 +973,7 @@ def main():
             }
         else:
             # Multiple independent steps — run in parallel
-            workers = min(len(pending), MAX_PARALLEL)
+            workers = min(len(pending), MAX_PARALLEL) if MAX_PARALLEL else len(pending)
             logger.info("  Running %d independent steps in parallel (max %d workers): %s",
                         len(pending), workers, [s["id"] for s in pending])
             failed_step = None

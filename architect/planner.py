@@ -9,9 +9,6 @@ from .events import EventType, get_event_log
 
 logger = logging.getLogger(__name__)
 
-REWRITE_STDOUT_LIMIT = 2000
-REWRITE_STDERR_LIMIT = 1000
-
 DECOMPOSITION_PROMPT = """\
 <instructions>
 You are a task decomposition engine. Given a high-level goal, break it into \
@@ -397,8 +394,8 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
     """
     client = get_llm_client()
 
-    stdout_trimmed = orchestrator_stdout[-REWRITE_STDOUT_LIMIT:]
-    stderr_trimmed = orchestrator_stderr[-REWRITE_STDERR_LIMIT:]
+    stdout_trimmed = orchestrator_stdout
+    stderr_trimmed = orchestrator_stderr
 
     escalation = ESCALATION_INSTRUCTIONS.get(escalation_level, "")
 
@@ -545,8 +542,8 @@ def decompose_failing_step(step: dict, orchestrator_stdout: str,
     """Decompose a failing step into a more granular multi-phase description."""
     client = get_llm_client()
 
-    stdout_trimmed = orchestrator_stdout[-REWRITE_STDOUT_LIMIT:]
-    stderr_trimmed = orchestrator_stderr[-REWRITE_STDERR_LIMIT:]
+    stdout_trimmed = orchestrator_stdout
+    stderr_trimmed = orchestrator_stderr
 
     prompt = DECOMPOSE_STEP_PROMPT.format(
         description=step["description"],

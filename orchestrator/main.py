@@ -109,6 +109,15 @@ code block. The script must be complete and self-contained.
 - Wrap network requests in retries with exponential backoff.
 - Always use os.path.join(workspace, ...) for file paths.
 - Check if files exist before reading them.
+- Use HTTPS for all URLs -- never use plain http://.
+- Never hardcode secrets or API keys -- use os.environ.get().
+- Use subprocess.run() with list args -- never shell=True.
+- Do not use eval(), exec(), or pickle.loads() on untrusted data.
+- Catch specific exceptions -- never use bare except:.
+- Use context managers (with statements) for file I/O.
+- Specify encoding="utf-8" when opening text files.
+- If creating a project, use git init -b main (not master).
+- Pin dependency versions in pip install commands.
 </constraints>
 
 <verification>

@@ -316,10 +316,25 @@ re-enters the rewrite loop rather than being marked complete. After all
 steps finish, a final validation pass writes `VALIDATION.md` to the
 workspace summarizing produced files and flagging any missing outputs.
 
+**Best-practice guardrails:** Generated code is checked at two levels.
+At the prompt level, the planner, code-generation prompt, and workspace
+`CLAUDE.md` instruct the LLM to follow modern best practices: use
+`git init -b main` for repositories, add `.gitignore` and `README.md`,
+pin dependency versions, use HTTPS, never hardcode secrets, avoid
+`eval()`/`exec()`/`shell=True`, catch specific exceptions, and use
+context managers with `encoding="utf-8"`. After execution, a regex
+scanner checks generated `.py` files for violations — hardcoded API
+keys (error severity, triggers rewrite), bare `except:`, `eval()`,
+`shell=True`, plain HTTP URLs, and `git init` without `-b` (warning
+severity, logged). For multi-file projects, workspace-level checks
+verify the Git branch is `main`, and that `.gitignore`, `README`,
+and a dependency file exist. Warnings appear in `VALIDATION.md`.
+
 **Workspace guidance:** Before each orchestrator invocation, the Executor
 writes a `.claude/CLAUDE.md` file to the workspace. This gives the Claude
 Code CLI persistent instructions on coding standards, environment details,
-output format (`UAS_RESULT` JSON), and error handling best practices.
+output format (`UAS_RESULT` JSON), security, and error handling best
+practices.
 
 **Parallel execution:** Independent steps (no dependency relationship)
 run concurrently, optionally capped by `UAS_MAX_PARALLEL`. Per-step timing tracks LLM call time vs sandbox

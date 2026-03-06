@@ -23,8 +23,40 @@ Your script will run inside an isolated workspace directory.
 - If the script fails, print:
   `UAS_RESULT: {"status": "error", "error": "description of what went wrong"}`
 
+## Version Control
+- If the task involves creating a project, initialize it as a Git repository using `git init -b main` (use "main" as the default branch, NOT "master")
+- Add a `.gitignore` appropriate for the project language before the first commit (for Python: `__pycache__/`, `*.py[cod]`, `*.so`, `.env`, `venv/`, `dist/`, `*.egg-info/`, `.mypy_cache/`, `.pytest_cache/`)
+- Make an initial commit with a descriptive message after setting up the project structure
+- Never commit secrets, `.env` files, credentials, or API keys
+
+## Security
+- Never hardcode secrets, API keys, passwords, or tokens -- read them from environment variables using `os.environ.get()` or `os.environ[]`
+- Always use HTTPS URLs (never plain `http://`) for downloads and API calls
+- Use `subprocess.run()` with list arguments -- never use `shell=True` unless absolutely necessary
+- Do not use `eval()`, `exec()`, or `pickle.loads()` on untrusted data
+- Pin dependency versions when installing packages (e.g., `requests==2.32.3` not just `requests`)
+- Use the `tempfile` module for temporary files, not hardcoded paths in `/tmp`
+- Validate and sanitize all external inputs (user data, file contents, API responses)
+
+## Code Quality
+- Use f-strings for string formatting (not `%` or `.format()`)
+- Catch specific exception types -- never use bare `except:` (use `except Exception:` at minimum)
+- Use `with` statements (context managers) for all file and resource handling
+- Specify `encoding="utf-8"` when opening text files
+- Use `sys.exit(0)` for success and `sys.exit(1)` for failure -- use meaningful exit codes
+- Include a brief docstring at the top of the script explaining what it does
+
+## Project Setup Best Practices
+When the task involves creating a project or application (not a simple one-off script):
+- Create a `README.md` with a brief description, setup instructions, and usage examples
+- Create a `requirements.txt` with pinned versions for all dependencies used
+- Structure code into functions rather than top-level procedural code
+- Add a `if __name__ == "__main__":` guard for the entry point
+
 ## Best Practices
 - Check if files exist before reading them
-- Wrap network requests in try/except with retries
+- Wrap network requests in try/except with retries and exponential backoff
 - Validate data formats before processing
 - For large downloads, print progress indicators
+- Clean up temporary files and resources in finally blocks
+- Write files atomically when possible (write to temp file, then rename)

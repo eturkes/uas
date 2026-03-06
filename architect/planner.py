@@ -37,6 +37,13 @@ autonomy. Install any packages needed (pip, apt-get, etc.) without hesitation.
 7. Each step must produce observable output to stdout so downstream steps \
 can use the results.
 8. Do NOT create steps that require user interaction.
+9. When creating any project, the FIRST step must initialize a Git repository \
+using `git init -b main` (use "main" as the default branch), add an appropriate \
+`.gitignore`, and make an initial commit.
+10. All projects must include a README.md and requirements.txt with pinned versions.
+11. Never hardcode secrets or API keys in step descriptions — instruct the code \
+to read them from environment variables.
+12. Always prefer HTTPS URLs. Pin dependency versions. Use context managers for I/O.
 </rules>
 
 <output_format>
@@ -251,6 +258,10 @@ identify any issues. Be concise and actionable.
 4. Are there missing error handling considerations for external resources (network, files)?
 5. Are the verify fields specific enough to catch subtle failures?
 6. Are environment/package requirements complete?
+7. If the goal involves creating a project, does the plan include initializing a Git repo with `git init -b main`, adding a `.gitignore`, and making an initial commit?
+8. Does the plan ensure a README.md and requirements.txt (with pinned versions) are created for any multi-file project?
+9. Do step descriptions avoid hardcoding secrets and instead instruct reading from environment variables?
+10. Do steps use HTTPS URLs, not plain HTTP?
 </review_criteria>
 
 If the plan is good, respond with exactly: PLAN_OK
@@ -328,7 +339,9 @@ or data format mismatch. Determine whether the error originated in this step or 
 propagated from a previous step.
 
 2. In <strategies> tags, propose 2-3 alternative strategies to solve the task. \
-Select the best one with justification.
+Select the best one with justification. Ensure the chosen strategy follows best \
+practices: use HTTPS URLs, pin dependency versions, use context managers for I/O, \
+catch specific exceptions, use git init -b main for repos, and never hardcode secrets.
 
 3. After the tags, provide ONLY the improved task description. Be more specific and \
 explicit about what the Python code should do. Do not include any explanation.

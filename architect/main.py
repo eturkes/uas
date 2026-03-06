@@ -420,6 +420,118 @@ def validate_uas_result(step: dict, workspace: str) -> str | None:
     return None
 
 
+import re as _re
+
+# Patterns that indicate best-practice violations in generated code.
+_GUARDRAIL_CHECKS = [
+    # (pattern, description, severity)
+    # severity: "error" triggers rewrite, "warning" is logged but allowed
+    (_re.compile(r'\bexcept\s*:', _re.MULTILINE),
+     "bare except: clause (use specific exception types)", "warning"),
+    (_re.compile(r"""(?:['"])(?:sk-[a-zA-Z0-9]{20,}|AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36})['"]"""),
+     "possible hardcoded secret/API key", "error"),
+    (_re.compile(r'\beval\s*\('),
+     "use of eval() is a security risk", "warning"),
+    (_re.compile(r'\bexec\s*\('),
+     "use of exec() is a security risk", "warning"),
+    (_re.compile(r'shell\s*=\s*True'),
+     "subprocess with shell=True is a security risk", "warning"),
+    (_re.compile(r'''http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])'''),
+     "plain HTTP URL detected (use HTTPS)", "warning"),
+    (_re.compile(r'\bgit\s+init\b(?!.*-b\s)'),
+     "git init without -b flag (should use git init -b main)", "warning"),
+    (_re.compile(r'''["']git["']\s*,\s*["']init["'](?!.*["']-b["'])'''),
+     "git init without -b flag (should use git init -b main)", "warning"),
+]
+
+
+def check_guardrails(code: str) -> list[dict]:
+    """Scan generated code for best-practice violations.
+
+    Returns a list of dicts with keys: line, pattern, description, severity.
+    """
+    violations = []
+    for pattern, description, severity in _GUARDRAIL_CHECKS:
+        for match in pattern.finditer(code):
+            line_num = code[:match.start()].count("\n") + 1
+            violations.append({
+                "line": line_num,
+                "match": match.group()[:80],
+                "description": description,
+                "severity": severity,
+            })
+    return violations
+
+
+def check_project_guardrails(workspace: str) -> list[str]:
+    """Check workspace-level best practices after step execution.
+
+    Returns a list of warning strings for any issues found.
+    Checks are only applied when the workspace looks like a project
+    (has multiple Python files or a setup file).
+    """
+    warnings = []
+
+    try:
+        entries = os.listdir(workspace)
+    except OSError:
+        return warnings
+
+    # Detect if this workspace looks like a project (not a one-off script)
+    py_files = [e for e in entries if e.endswith(".py") and not e.startswith(".")]
+    has_setup = any(e in entries for e in ("pyproject.toml", "setup.py", "setup.cfg"))
+    is_project = len(py_files) > 1 or has_setup
+
+    if not is_project:
+        return warnings
+
+    # Check for git repo with correct branch
+    git_dir = os.path.join(workspace, ".git")
+    if os.path.isdir(git_dir):
+        head_path = os.path.join(git_dir, "HEAD")
+        try:
+            with open(head_path, "r") as f:
+                head_content = f.read().strip()
+            if "refs/heads/master" in head_content:
+                warnings.append(
+                    "Git repo uses 'master' as default branch; "
+                    "best practice is 'main' (use git init -b main)"
+                )
+        except OSError:
+            pass
+    else:
+        warnings.append(
+            "Project has multiple files but no Git repository; "
+            "initialize with git init -b main"
+        )
+
+    # Check for .gitignore
+    if os.path.isdir(git_dir) and not os.path.isfile(
+        os.path.join(workspace, ".gitignore")
+    ):
+        warnings.append("Git repository exists but no .gitignore file found")
+
+    # Check for README
+    has_readme = any(
+        e.lower().startswith("readme") for e in entries
+    )
+    if not has_readme:
+        warnings.append("Project has no README file")
+
+    # Check for requirements.txt or pyproject.toml
+    has_deps = any(
+        e in entries
+        for e in ("requirements.txt", "pyproject.toml", "Pipfile", "poetry.lock")
+    )
+    if not has_deps:
+        warnings.append(
+            "Project has no dependency file "
+            "(requirements.txt or pyproject.toml)"
+        )
+
+    return warnings
+
+
 def verify_step_output(step: dict, workspace: str) -> str | None:
     """Verify step output against the step's verify criteria.
 
@@ -515,6 +627,14 @@ def validate_workspace(state: dict, workspace: str) -> dict:
             "## Warning\n\nWorkspace is empty — no output files were produced.\n"
         )
 
+    # Project-level best-practice checks
+    bp_warnings = check_project_guardrails(workspace)
+    if bp_warnings:
+        lines.append("## Best Practice Warnings\n\n")
+        for w in bp_warnings:
+            lines.append(f"- {w}\n")
+        lines.append("\n")
+
     try:
         validation_path = os.path.join(workspace, "VALIDATION.md")
         with open(validation_path, "w") as f:
@@ -526,6 +646,7 @@ def validate_workspace(state: dict, workspace: str) -> dict:
     return {
         "missing_files": missing_files,
         "workspace_empty": len(ws_entries) == 0,
+        "best_practice_warnings": bp_warnings,
     }
 
 
@@ -654,6 +775,38 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     step_id=step["id"],
                     data={"passed": failure_reason is None},
                 )
+
+            # Guardrail scan on workspace Python files
+            if failure_reason is None:
+                guardrail_warnings = []
+                try:
+                    for entry in os.listdir(WORKSPACE):
+                        if entry.endswith(".py") and not entry.startswith("."):
+                            fpath = os.path.join(WORKSPACE, entry)
+                            if os.path.isfile(fpath):
+                                with open(fpath, "r", errors="replace") as gf:
+                                    code_content = gf.read()
+                                violations = check_guardrails(code_content)
+                                for v in violations:
+                                    if v["severity"] == "error":
+                                        failure_reason = (
+                                            f"Guardrail violation in {entry} "
+                                            f"line {v['line']}: {v['description']}"
+                                        )
+                                        break
+                                    guardrail_warnings.append(
+                                        f"{entry}:{v['line']}: {v['description']}"
+                                    )
+                            if failure_reason:
+                                break
+                except OSError:
+                    pass
+                if guardrail_warnings:
+                    for w in guardrail_warnings:
+                        logger.warning("  Guardrail: %s", w)
+                    step.setdefault("guardrail_warnings", []).extend(
+                        guardrail_warnings
+                    )
 
             if failure_reason is None:
                 # All validation passed
@@ -1040,6 +1193,8 @@ def main():
         )
     if validation["workspace_empty"]:
         logger.warning("  Warning: workspace is empty")
+    for bp_warn in validation.get("best_practice_warnings", []):
+        logger.warning("  Best practice: %s", bp_warn)
 
     if output_path:
         write_json_output(state, output_path)

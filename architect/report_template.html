@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UAS Run Report</title>
+<style>
+:root {
+  --bg: #1e1e2e;
+  --surface: #282840;
+  --text: #cdd6f4;
+  --text-dim: #6c7086;
+  --accent: #89b4fa;
+  --green: #a6e3a1;
+  --red: #f38ba8;
+  --yellow: #f9e2af;
+  --cyan: #89dceb;
+  --border: #45475a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; background: var(--bg); color: var(--text); line-height: 1.6; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+header { background: var(--surface); border-bottom: 2px solid var(--accent); padding: 20px; margin-bottom: 20px; border-radius: 8px; }
+header h1 { color: var(--accent); font-size: 1.5em; }
+header .goal { color: var(--text-dim); margin-top: 8px; font-style: italic; }
+header .status { display: inline-block; padding: 2px 10px; border-radius: 4px; font-weight: bold; margin-top: 8px; }
+header .status.completed { background: var(--green); color: #1e1e2e; }
+header .status.failed, header .status.blocked { background: var(--red); color: #1e1e2e; }
+header .status.executing { background: var(--cyan); color: #1e1e2e; }
+
+.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 20px; }
+.tab { padding: 10px 20px; cursor: pointer; color: var(--text-dim); border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.metric { background: var(--surface); padding: 16px; border-radius: 8px; text-align: center; }
+.metric .value { font-size: 2em; font-weight: bold; color: var(--accent); }
+.metric .label { color: var(--text-dim); font-size: 0.85em; }
+
+.mermaid-container { background: var(--surface); padding: 20px; border-radius: 8px; margin-bottom: 20px; overflow-x: auto; }
+
+.timeline-chart { background: var(--surface); padding: 20px; border-radius: 8px; margin-bottom: 20px; overflow-x: auto; }
+.timeline-bar-container { margin: 8px 0; }
+.timeline-label { display: inline-block; width: 200px; font-size: 0.9em; color: var(--text-dim); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline-bars { display: inline-block; vertical-align: middle; }
+.timeline-bar { display: inline-block; height: 24px; vertical-align: middle; }
+.timeline-bar.llm { background: var(--accent); }
+.timeline-bar.sandbox { background: var(--cyan); }
+.timeline-bar.other { background: var(--border); }
+.timeline-legend { margin-top: 12px; display: flex; gap: 20px; font-size: 0.85em; color: var(--text-dim); }
+.timeline-legend-item { display: flex; align-items: center; gap: 6px; }
+.timeline-legend-swatch { width: 14px; height: 14px; border-radius: 2px; }
+
+.step-card { background: var(--surface); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+.step-header { padding: 14px 20px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid var(--border); }
+.step-header.completed { border-left-color: var(--green); }
+.step-header.failed { border-left-color: var(--red); }
+.step-header.executing { border-left-color: var(--cyan); }
+.step-header .title { font-weight: bold; }
+.step-header .meta { color: var(--text-dim); font-size: 0.85em; }
+.step-body { display: none; padding: 0 20px 20px 20px; }
+.step-body.open { display: block; }
+.step-section { margin-top: 14px; }
+.step-section h4 { color: var(--accent); font-size: 0.9em; margin-bottom: 6px; }
+pre { background: #11111b; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 0.85em; line-height: 1.5; color: var(--text); white-space: pre-wrap; word-wrap: break-word; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 0.8em; font-weight: bold; }
+.badge.ok { background: var(--green); color: #1e1e2e; }
+.badge.error { background: var(--red); color: #1e1e2e; }
+.badge.pending { background: var(--border); color: var(--text); }
+
+.events-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+.events-table th { text-align: left; padding: 8px; border-bottom: 2px solid var(--border); color: var(--accent); }
+.events-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.events-table tr:hover { background: rgba(137, 180, 250, 0.05); }
+
+.prov-container { background: var(--surface); padding: 20px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>UAS Run Report</h1>
+  <div class="goal">{{ goal }}</div>
+  <span class="status {{ status }}">{{ status }}</span>
+  <span style="color: var(--text-dim); margin-left: 12px;">{{ metrics.total_elapsed }}s total</span>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('overview')">Overview</div>
+  <div class="tab" onclick="switchTab('timeline')">Timeline</div>
+  <div class="tab" onclick="switchTab('steps')">Steps</div>
+  <div class="tab" onclick="switchTab('provenance')">Provenance</div>
+</div>
+
+<!-- Overview Tab -->
+<div id="tab-overview" class="tab-content active">
+  <div class="metrics">
+    <div class="metric"><div class="value">{{ metrics.total_steps }}</div><div class="label">Total Steps</div></div>
+    <div class="metric"><div class="value">{{ metrics.completed }}</div><div class="label">Completed</div></div>
+    <div class="metric"><div class="value">{{ metrics.failed }}</div><div class="label">Failed</div></div>
+    <div class="metric"><div class="value">{{ metrics.total_elapsed }}s</div><div class="label">Total Time</div></div>
+    <div class="metric"><div class="value">{{ metrics.total_llm_time }}s</div><div class="label">LLM Time</div></div>
+    <div class="metric"><div class="value">{{ metrics.total_sandbox_time }}s</div><div class="label">Sandbox Time</div></div>
+    <div class="metric"><div class="value">{{ metrics.total_rewrites }}</div><div class="label">Rewrites</div></div>
+  </div>
+  <div class="mermaid-container">
+    <h3 style="margin-bottom: 12px; color: var(--accent);">Execution DAG</h3>
+    <pre class="mermaid">{{ mermaid_dag }}</pre>
+  </div>
+</div>
+
+<!-- Timeline Tab -->
+<div id="tab-timeline" class="tab-content">
+  <div class="timeline-chart" id="timeline-chart">
+    <h3 style="margin-bottom: 12px; color: var(--accent);">Execution Timeline</h3>
+    <div id="timeline-bars"></div>
+    <div class="timeline-legend">
+      <div class="timeline-legend-item"><div class="timeline-legend-swatch" style="background: var(--accent);"></div> LLM Time</div>
+      <div class="timeline-legend-item"><div class="timeline-legend-swatch" style="background: var(--cyan);"></div> Sandbox Time</div>
+      <div class="timeline-legend-item"><div class="timeline-legend-swatch" style="background: var(--border);"></div> Other</div>
+    </div>
+  </div>
+</div>
+
+<!-- Steps Tab -->
+<div id="tab-steps" class="tab-content">
+  {% for step in steps %}
+  <div class="step-card">
+    <div class="step-header {{ step.status }}" onclick="toggleStep({{ step.id }})">
+      <span class="title">Step {{ step.id }}: {{ step.title }}</span>
+      <span class="meta">
+        <span class="badge {{ 'ok' if step.status == 'completed' else ('error' if step.status == 'failed' else 'pending') }}">{{ step.status }}</span>
+        {{ step.elapsed }}s
+        {% if step.rewrites > 0 %} | {{ step.rewrites }} rewrites{% endif %}
+      </span>
+    </div>
+    <div class="step-body" id="step-body-{{ step.id }}">
+      <div class="step-section">
+        <h4>Description</h4>
+        <pre>{{ step.description }}</pre>
+      </div>
+      {% if step.depends_on %}
+      <div class="step-section">
+        <h4>Dependencies</h4>
+        <p style="color: var(--text-dim);">Depends on steps: {{ step.depends_on | join(', ') }}</p>
+      </div>
+      {% endif %}
+      {% if step.verify %}
+      <div class="step-section">
+        <h4>Verification</h4>
+        <pre>{{ step.verify }}</pre>
+      </div>
+      {% endif %}
+      {% if step.output %}
+      <div class="step-section">
+        <h4>Output</h4>
+        <pre>{{ step.output }}</pre>
+      </div>
+      {% endif %}
+      {% if step.error %}
+      <div class="step-section">
+        <h4>Error</h4>
+        <pre style="border-left: 3px solid var(--red);">{{ step.error }}</pre>
+      </div>
+      {% endif %}
+      {% if step.files_written %}
+      <div class="step-section">
+        <h4>Files Written</h4>
+        <ul style="color: var(--text-dim); padding-left: 20px;">
+          {% for f in step.files_written %}
+          <li>{{ f }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      {% if step.uas_result %}
+      <div class="step-section">
+        <h4>UAS Result</h4>
+        <pre>{{ step.uas_result | tojson(indent=2) }}</pre>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Provenance Tab -->
+<div id="tab-provenance" class="tab-content">
+  <div class="prov-container">
+    <h3 style="margin-bottom: 12px; color: var(--accent);">Provenance Graph</h3>
+    <pre class="mermaid">{{ mermaid_provenance }}</pre>
+  </div>
+</div>
+
+</div>
+
+<script>
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  // Find the tab button
+  document.querySelectorAll('.tab').forEach(el => {
+    if (el.textContent.trim().toLowerCase() === name.toLowerCase() ||
+        el.getAttribute('onclick').includes(name)) {
+      el.classList.add('active');
+    }
+  });
+  if (name === 'timeline') renderTimeline();
+}
+
+function toggleStep(id) {
+  var body = document.getElementById('step-body-' + id);
+  body.classList.toggle('open');
+}
+
+function renderTimeline() {
+  var data = {{ timeline_data }};
+  var container = document.getElementById('timeline-bars');
+  if (container.children.length > 0) return;
+  var maxElapsed = Math.max.apply(null, data.map(function(d) { return d.elapsed; })) || 1;
+  var scale = 600 / maxElapsed;
+  data.forEach(function(d) {
+    var row = document.createElement('div');
+    row.className = 'timeline-bar-container';
+    var label = document.createElement('span');
+    label.className = 'timeline-label';
+    label.textContent = 'Step ' + d.step_id + ': ' + d.title;
+    label.title = d.title;
+    row.appendChild(label);
+    var bars = document.createElement('span');
+    bars.className = 'timeline-bars';
+    var llmBar = document.createElement('span');
+    llmBar.className = 'timeline-bar llm';
+    llmBar.style.width = Math.max(d.llm_time * scale, 1) + 'px';
+    llmBar.title = 'LLM: ' + d.llm_time + 's';
+    bars.appendChild(llmBar);
+    var sandboxBar = document.createElement('span');
+    sandboxBar.className = 'timeline-bar sandbox';
+    sandboxBar.style.width = Math.max(d.sandbox_time * scale, 1) + 'px';
+    sandboxBar.title = 'Sandbox: ' + d.sandbox_time + 's';
+    bars.appendChild(sandboxBar);
+    var otherTime = Math.max(d.elapsed - d.llm_time - d.sandbox_time, 0);
+    if (otherTime > 0.1) {
+      var otherBar = document.createElement('span');
+      otherBar.className = 'timeline-bar other';
+      otherBar.style.width = Math.max(otherTime * scale, 1) + 'px';
+      otherBar.title = 'Other: ' + otherTime.toFixed(1) + 's';
+      bars.appendChild(otherBar);
+    }
+    row.appendChild(bars);
+    var elapsed = document.createElement('span');
+    elapsed.style.cssText = 'margin-left:8px;color:#6c7086;font-size:0.85em;';
+    elapsed.textContent = d.elapsed + 's';
+    row.appendChild(elapsed);
+    container.appendChild(row);
+  });
+}
+
+// Initialize Mermaid from CDN-free inline
+(function() {
+  var script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
+  script.onload = function() {
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: { primaryColor: '#89b4fa', primaryTextColor: '#cdd6f4' }
+    });
+  };
+  document.head.appendChild(script);
+})();
+</script>
+</body>
+</html>

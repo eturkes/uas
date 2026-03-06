@@ -118,6 +118,26 @@ The event log records every phase boundary as a JSONL file. The
 provenance graph (`.state/provenance.json`) tracks data lineage
 from goal through decomposition, code generation, and execution.
 
+### HTML Run Report
+
+Generate a self-contained HTML report with interactive DAG
+visualization, execution timeline, per-step details, and provenance:
+
+```bash
+# Via CLI flag (writes to .state/report.html by default):
+uas --report "your goal"
+
+# Specify a custom path:
+uas --report my_report.html "your goal"
+
+# Or via environment variable:
+UAS_REPORT=report.html uas "your goal"
+```
+
+The report includes four tabs: Overview (metrics and Mermaid DAG),
+Timeline (LLM vs sandbox time bars), Steps (expandable details with
+output, errors, and files), and Provenance (interactive graph).
+
 ### Non-Interactive / Local Mode
 
 ```bash
@@ -138,8 +158,8 @@ interactive Claude Code setup and proceeds directly to execution.
 ## Requirements
 
 - [Podman](https://podman.io/) or [Docker](https://www.docker.com/)
-- Python packages: `rich>=13.0` (for terminal dashboard; falls back to
-  plain text if unavailable)
+- Python packages: `rich>=13.0` (terminal dashboard), `jinja2>=3.1`
+  (HTML report generation)
 
 ## Project Structure
 
@@ -158,7 +178,9 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── state.py              # JSON state persistence
 │   ├── events.py             # Structured event log system
 │   ├── provenance.py         # W3C PROV-inspired provenance graph
-│   └── dashboard.py          # Rich terminal dashboard
+│   ├── dashboard.py          # Rich terminal dashboard
+│   ├── report.py             # HTML report generator
+│   └── report_template.html  # Jinja2 HTML template
 ├── orchestrator/             # Execution Orchestrator (containerized)
 │   ├── main.py               # Build-Run-Evaluate loop
 │   ├── llm_client.py         # Claude Code CLI subprocess wrapper
@@ -336,6 +358,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_RESUME` | Resume from saved state (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_OUTPUT` | Write JSON results summary to this file path | *(off)* |
 | `UAS_EVENTS` | Write structured event log to this file path | *(off)* |
+| `UAS_REPORT` | Generate HTML report at this file path | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | *(none)* |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
 | `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | `4` |

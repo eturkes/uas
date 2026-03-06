@@ -1,5 +1,8 @@
 # Terminal dashboard
 rich>=13.0
 
+# HTML report templating
+jinja2>=3.1
+
 # Testing
 pytest>=7.0

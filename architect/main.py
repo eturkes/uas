@@ -35,6 +35,7 @@ from .executor import (
 from .events import EventType, get_event_log, reset_event_log
 from .provenance import get_provenance_graph, reset_provenance_graph
 from .dashboard import Dashboard
+from .report import generate_report
 
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "4"))
@@ -87,6 +88,10 @@ def parse_args():
     parser.add_argument(
         "--events", type=str, default=None, nargs="?", const="auto",
         help="Write event log to this path (default: .state/events.jsonl)",
+    )
+    parser.add_argument(
+        "--report", type=str, default=None, nargs="?", const="auto",
+        help="Generate HTML report at this path (default: .state/report.html)",
     )
     return parser.parse_args()
 
@@ -786,6 +791,9 @@ def main():
 
     output_path = args.output or os.environ.get("UAS_OUTPUT") or None
 
+    # Report flag
+    report_flag = args.report or os.environ.get("UAS_REPORT") or None
+
     # Initialize event log and provenance graph
     events_flag = args.events or os.environ.get("UAS_EVENTS") or None
     if events_flag:
@@ -1029,6 +1037,22 @@ def main():
         "total_elapsed": state.get("total_elapsed", 0.0),
     })
     prov.save()
+
+    # Generate HTML report if requested
+    if report_flag:
+        state_dir = os.path.join(WORKSPACE, ".state")
+        report_path = (
+            os.path.join(state_dir, "report.html")
+            if report_flag == "auto"
+            else report_flag
+        )
+        try:
+            events_data = [e.to_dict() for e in event_log.events]
+            prov_data = prov.to_dict()
+            generate_report(state, events_data, prov_data, report_path)
+            logger.info("HTML report written to: %s", report_path)
+        except Exception as e:
+            logger.warning("Failed to generate HTML report: %s", e)
 
     logger.info("\n%s", "=" * 60)
     logger.info("  ALL STEPS COMPLETED SUCCESSFULLY")

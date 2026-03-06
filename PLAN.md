@@ -148,7 +148,7 @@ TTY detection fallback, and thread-safe update behavior.
 
 ---
 
-## Section 3: Interactive HTML Run Report
+## Section 3: Interactive HTML Run Report -- DONE
 
 **Goal:** Generate a self-contained HTML report after each run that provides
 interactive exploration of the execution: DAG visualization, execution

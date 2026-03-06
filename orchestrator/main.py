@@ -272,6 +272,8 @@ def main():
             previous_error = "Failed to extract code block from LLM response."
             previous_code = None
             logger.error("%s", previous_error)
+            logger.debug("Raw LLM response (%d chars):\n%s",
+                         len(response), response[:2000])
             continue
 
         logger.debug("Generated code (%d chars):\n---\n%s\n---", len(code), code)

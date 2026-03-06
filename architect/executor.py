@@ -250,6 +250,7 @@ def _run_container(task: str, extra_env: dict | None = None) -> dict:
     env_args.extend(["-e", f"UAS_TASK={task}"])
     env_args.extend(["-e", "PYTHONPATH=/uas"])
     env_args.extend(["-e", "IS_SANDBOX=1"])
+    env_args.extend(["-e", "HOME=/root"])
 
     # Force local sandbox mode inside the container since this lightweight
     # image does not have Podman -- the container itself provides isolation.
@@ -259,27 +260,21 @@ def _run_container(task: str, extra_env: dict | None = None) -> dict:
         for k, v in extra_env.items():
             env_args.extend(["-e", f"{k}={v}"])
 
-    # Mount auth credentials read-only so the Claude CLI can
-    # authenticate. Check /root/.claude (inside uas-engine container)
-    # then fall back to ~/.claude (running from host).
+    # Mount auth credentials so the Claude CLI can authenticate and
+    # write session/cache files. Check /root/.claude (inside uas-engine
+    # container) then fall back to ~/.claude (running from host).
     auth_args = []
     for auth_dir in ["/root/.claude", os.path.join(os.path.expanduser("~"), ".claude")]:
         if os.path.isdir(auth_dir):
-            auth_args = ["-v", f"{auth_dir}:/root/.claude:ro,Z"]
+            auth_args = ["-v", f"{auth_dir}:/root/.claude:Z"]
             break
-
-    user_args = []
-    host_uid = os.environ.get("UAS_HOST_UID")
-    host_gid = os.environ.get("UAS_HOST_GID")
-    if host_uid and host_uid != "0":
-        user_args = ["--user", f"{host_uid}:{host_gid or host_uid}"]
 
     cmd = _podman_cmd(
         engine, "run", "--rm",
         "--name", container_name,
         "--entrypoint", "python3",
         "-v", f"{workspace}:/workspace:Z",
-    ) + user_args + auth_args + env_args + [
+    ) + auth_args + env_args + [
         SANDBOX_IMAGE_NAME,
         "-m", "orchestrator.main",
     ]

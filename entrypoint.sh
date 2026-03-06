@@ -18,7 +18,8 @@ if [ -n "${UAS_TASK:-}" ] || [ -n "${UAS_GOAL:-}" ]; then
     echo "Non-interactive mode detected (UAS_TASK or UAS_GOAL set)."
     echo "Skipping interactive setup."
     cd /uas
-    exec python3 -m architect.main "$@"
+    python3 -m architect.main "$@"
+    exit $?
 fi
 
 # =============================================================================
@@ -67,4 +68,4 @@ echo "============================================================"
 echo ""
 
 cd /uas
-exec python3 -m architect.main "$@"
+python3 -m architect.main "$@"

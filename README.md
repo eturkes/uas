@@ -139,6 +139,28 @@ Timeline (LLM vs sandbox time bars), Steps (expandable details with
 output, errors, files, and code evolution diffs), and Provenance
 (interactive graph).
 
+### Execution Trace (Perfetto)
+
+Export a Chrome Trace Event JSON file viewable in
+[Perfetto](https://ui.perfetto.dev) for detailed timeline analysis:
+
+```bash
+# Via CLI flag (writes to .state/trace.json by default):
+uas --trace "your goal"
+
+# Specify a custom path:
+uas --trace my_trace.json "your goal"
+
+# Or via environment variable:
+UAS_TRACE=trace.json uas "your goal"
+```
+
+Open the resulting file at ui.perfetto.dev (drag and drop) or
+`chrome://tracing`. The trace shows Architect, Orchestrator, and
+Sandbox activity on separate processes with per-step threads,
+counter tracks for cumulative LLM and sandbox metrics, and
+metadata for each span (attempt number, exit code, error type).
+
 ### Non-Interactive / Local Mode
 
 ```bash
@@ -181,6 +203,7 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── provenance.py         # W3C PROV-inspired provenance graph
 │   ├── dashboard.py          # Rich terminal dashboard
 │   ├── code_tracker.py       # Code evolution tracking across retries
+│   ├── trace_export.py       # Perfetto trace export
 │   ├── report.py             # HTML report generator
 │   └── report_template.html  # Jinja2 HTML template
 ├── orchestrator/             # Execution Orchestrator (containerized)
@@ -306,6 +329,14 @@ effectiveness metric indicates whether code changes converged
 toward a solution. Each code version is linked in the provenance
 graph via `wasDerivedFrom` edges.
 
+**Execution trace export:** When `--trace` is passed (or `UAS_TRACE`
+is set), a Chrome Trace Event JSON file is written to
+`.state/trace.json`. The trace maps Architect, Orchestrator, and
+Sandbox activity to separate processes with per-step threads,
+enabling microsecond-precision timeline analysis in Perfetto or
+`chrome://tracing`. Counter tracks show cumulative LLM calls and
+sandbox runs.
+
 ### Orchestrator (Build-Run-Evaluate Loop)
 
 ```
@@ -372,6 +403,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_OUTPUT` | Write JSON results summary to this file path | *(off)* |
 | `UAS_EVENTS` | Write structured event log to this file path | *(off)* |
 | `UAS_REPORT` | Generate HTML report at this file path | *(off)* |
+| `UAS_TRACE` | Export Perfetto trace to this file path | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | *(none)* |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
 | `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | `4` |

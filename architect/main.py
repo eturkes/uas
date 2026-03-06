@@ -37,6 +37,7 @@ from .provenance import get_provenance_graph, reset_provenance_graph
 from .code_tracker import get_code_tracker, reset_code_tracker
 from .dashboard import Dashboard
 from .report import generate_report
+from .trace_export import TraceExporter
 
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "4"))
@@ -93,6 +94,10 @@ def parse_args():
     parser.add_argument(
         "--report", type=str, default=None, nargs="?", const="auto",
         help="Generate HTML report at this path (default: .state/report.html)",
+    )
+    parser.add_argument(
+        "--trace", type=str, default=None, nargs="?", const="auto",
+        help="Export Perfetto trace to this path (default: .state/trace.json)",
     )
     return parser.parse_args()
 
@@ -818,6 +823,9 @@ def main():
     # Report flag
     report_flag = args.report or os.environ.get("UAS_REPORT") or None
 
+    # Trace flag
+    trace_flag = args.trace or os.environ.get("UAS_TRACE") or None
+
     # Initialize event log and provenance graph
     events_flag = args.events or os.environ.get("UAS_EVENTS") or None
     if events_flag:
@@ -1087,6 +1095,22 @@ def main():
             logger.info("HTML report written to: %s", report_path)
         except Exception as e:
             logger.warning("Failed to generate HTML report: %s", e)
+
+    # Export Perfetto trace if requested
+    if trace_flag:
+        state_dir = os.path.join(WORKSPACE, ".state")
+        trace_path = (
+            os.path.join(state_dir, "trace.json")
+            if trace_flag == "auto"
+            else trace_flag
+        )
+        try:
+            events_data = [e.to_dict() for e in event_log.events]
+            exporter = TraceExporter(events_data)
+            exporter.export_json(trace_path)
+            logger.info("Perfetto trace written to: %s", trace_path)
+        except Exception as e:
+            logger.warning("Failed to export Perfetto trace: %s", e)
 
     logger.info("\n%s", "=" * 60)
     logger.info("  ALL STEPS COMPLETED SUCCESSFULLY")

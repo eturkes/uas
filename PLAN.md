@@ -293,7 +293,7 @@ recording, diff generation, and serialization.
 
 ---
 
-## Section 5: Execution Trace Export (Perfetto-compatible)
+## Section 5: Execution Trace Export (Perfetto-compatible) -- DONE
 
 **Goal:** Export execution data in Chrome Trace Event JSON format, viewable in
 Perfetto (ui.perfetto.dev) for microsecond-precision timeline analysis of the

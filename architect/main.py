@@ -21,6 +21,8 @@ from .executor import (
     extract_sandbox_stdout,
     extract_sandbox_stderr,
     extract_workspace_files,
+    scan_workspace_files,
+    MAX_CONTEXT_LENGTH,
 )
 
 MAX_SPEC_REWRITES = 2
@@ -83,32 +85,155 @@ def get_goal(args) -> str:
     return sys.stdin.read().strip()
 
 
-def build_context(step: dict, completed_outputs: dict) -> str:
-    """Build context string from outputs of dependency steps.
+FULL_OUTPUT_DEPS = 2  # Number of most-recent deps to keep in full
+
+
+def _extract_json_keys(preview: str) -> str:
+    """Extract top-level keys/schema from a JSON preview string."""
+    try:
+        data = json.loads(preview)
+        if isinstance(data, dict):
+            return str(list(data.keys()))
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return f"list of {len(data)} items, keys: {list(data[0].keys())}"
+        return type(data).__name__
+    except (json.JSONDecodeError, IndexError):
+        return preview[:100]
+
+
+def summarize_context(context: str, goal: str, max_length: int) -> str:
+    """Compress context using LLM when it exceeds the limit.
+
+    Preserves: original goal, file paths, error messages, plan state.
+    Falls back to simple truncation if LLM compression fails.
+    """
+    try:
+        from orchestrator.llm_client import get_llm_client
+        client = get_llm_client()
+        prompt = (
+            f"Compress the following context to under {max_length} characters "
+            "while preserving all essential information.\n\n"
+            "MUST preserve:\n"
+            "- Original goal and current plan state\n"
+            "- All file paths touched\n"
+            "- All error messages encountered\n"
+            "- Key results and data summaries\n\n"
+            "Remove: verbose stdout/stderr output, redundant information, "
+            "raw data that can be referenced by file path.\n\n"
+            f"Goal: {goal}\n\n"
+            f"Context to compress:\n{context}"
+        )
+        summary = client.generate(prompt)
+        if len(summary) <= max_length:
+            return summary
+    except Exception:
+        pass
+    # Fallback: simple truncation
+    return context[:max_length] + f"\n... [compressed, {len(context)} chars total]"
+
+
+def build_context(step: dict, completed_outputs: dict,
+                  state: dict | None = None,
+                  workspace_path: str | None = None) -> str:
+    """Build structured XML context from outputs of dependency steps.
+
+    Uses observation masking: the most recent FULL_OUTPUT_DEPS dependencies
+    get full output; older ones are replaced with summaries. Includes
+    workspace file info and verification criteria from completed steps.
 
     Each entry in completed_outputs can be a plain string or a dict
     with 'stdout', 'stderr', and 'files' keys.
     """
     if not step["depends_on"]:
         return ""
+
     parts = []
-    for dep_id in step["depends_on"]:
+    dep_ids = sorted(step["depends_on"])
+
+    # Build step lookup for verify fields
+    step_by_id = {}
+    goal = ""
+    if state:
+        step_by_id = {s["id"]: s for s in state.get("steps", [])}
+        goal = state.get("goal", "")
+
+    # Determine which deps get full output vs masked
+    full_deps = set(dep_ids[-FULL_OUTPUT_DEPS:])
+
+    for dep_id in dep_ids:
         output = completed_outputs.get(dep_id, "")
-        if isinstance(output, dict):
-            stdout = output.get("stdout", "")
-            stderr = output.get("stderr", "")
-            files = output.get("files", [])
-            if stdout:
-                parts.append(f"Output from step {dep_id} (stdout): {stdout}")
-            if stderr:
-                parts.append(f"Output from step {dep_id} (stderr): {stderr}")
-            if files:
+        dep_step = step_by_id.get(dep_id, {})
+        verify = dep_step.get("verify", "")
+
+        if dep_id in full_deps:
+            # Full output with XML tags
+            lines = []
+            if isinstance(output, dict):
+                stdout = output.get("stdout", "")
+                stderr = output.get("stderr", "")
+                files = output.get("files", [])
+                if stdout:
+                    lines.append(f"stdout: {stdout}")
+                if stderr:
+                    lines.append(f"stderr: {stderr}")
+                if files:
+                    lines.append(f"files: {', '.join(files)}")
+            elif output:
+                lines.append(output)
+
+            if verify:
+                lines.append(f"<verification>{verify}</verification>")
+
+            if lines:
+                content = "\n".join(lines)
                 parts.append(
-                    f"Files from step {dep_id}: {', '.join(files)}"
+                    f"<previous_step_output step=\"{dep_id}\">\n"
+                    f"{content}\n"
+                    f"</previous_step_output>"
                 )
-        elif output:
-            parts.append(f"Output from step {dep_id}: {output}")
-    return "\n".join(parts)
+        else:
+            # Masked summary (observation masking)
+            files_info = ""
+            if isinstance(output, dict):
+                files = output.get("files", [])
+                if files:
+                    files_info = f" - produced files: {', '.join(files)}"
+            parts.append(
+                f"<step_summary step=\"{dep_id}\">"
+                f"[Step {dep_id} output omitted{files_info}]"
+                f"</step_summary>"
+            )
+
+    # Workspace files section
+    if workspace_path:
+        try:
+            ws_files = scan_workspace_files(workspace_path)
+        except Exception:
+            ws_files = {}
+        if ws_files:
+            ws_lines = []
+            for fname, info in sorted(ws_files.items()):
+                line = f"  {fname} ({info['size']} bytes, {info['type']})"
+                preview = info.get("preview", "")
+                if preview:
+                    if fname.endswith(".json"):
+                        line += f"\n    keys: {_extract_json_keys(preview)}"
+                    else:
+                        line += f"\n    preview: {preview[:200]}"
+                ws_lines.append(line)
+            parts.append(
+                "<workspace_files>\n"
+                + "\n".join(ws_lines)
+                + "\n</workspace_files>"
+            )
+
+    context = "\n\n".join(parts)
+
+    # Context length management
+    if len(context) > MAX_CONTEXT_LENGTH:
+        context = summarize_context(context, goal, MAX_CONTEXT_LENGTH)
+
+    return context
 
 
 def print_plan(state: dict):
@@ -209,7 +334,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
     Returns True on success, False on unrecoverable failure.
     """
     total = len(state["steps"])
-    context = build_context(step, completed_outputs)
+    context = build_context(step, completed_outputs, state=state,
+                            workspace_path=WORKSPACE)
     counts = progress_counts or {"completed": 0, "failed": 0}
     step_start = time.monotonic()
 

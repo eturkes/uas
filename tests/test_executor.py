@@ -248,14 +248,14 @@ class TestExtractWorkspaceFiles:
 
 class TestStdoutTruncation:
     def test_long_stdout_is_truncated(self):
-        content = "x" * 5000
+        content = "x" * 10000
         log = f"stdout:\n{content}\nExit code: 0"
         result = extract_sandbox_stdout(log)
         assert "truncated" in result
         assert len(result) < len(content)
 
     def test_long_stderr_is_truncated(self):
-        content = "y" * 5000
+        content = "y" * 10000
         log = f"stderr:\n{content}\nExit code: 0"
         result = extract_sandbox_stderr(log)
         assert "truncated" in result

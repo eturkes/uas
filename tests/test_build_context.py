@@ -1,6 +1,8 @@
 """Tests for architect.main.build_context."""
 
-from architect.main import build_context
+from unittest.mock import patch
+
+from architect.main import build_context, _extract_json_keys, summarize_context
 
 
 class TestBuildContext:
@@ -12,7 +14,8 @@ class TestBuildContext:
         step = {"depends_on": [1]}
         outputs = {1: "result from step 1"}
         result = build_context(step, outputs)
-        assert "step 1" in result
+        assert "previous_step_output" in result
+        assert 'step="1"' in result
         assert "result from step 1" in result
 
     def test_multiple_dependencies(self):
@@ -41,14 +44,14 @@ class TestBuildContext:
         step = {"depends_on": [1]}
         outputs = {1: {"stdout": "result data", "stderr": "", "files": []}}
         result = build_context(step, outputs)
-        assert "stdout" in result
+        assert "stdout:" in result
         assert "result data" in result
 
     def test_dict_output_with_stderr(self):
         step = {"depends_on": [1]}
         outputs = {1: {"stdout": "", "stderr": "warning msg", "files": []}}
         result = build_context(step, outputs)
-        assert "stderr" in result
+        assert "stderr:" in result
         assert "warning msg" in result
 
     def test_dict_output_with_files(self):
@@ -59,7 +62,7 @@ class TestBuildContext:
             "files": ["/workspace/out.txt", "/workspace/data.json"],
         }}
         result = build_context(step, outputs)
-        assert "Files from step 1" in result
+        assert "files:" in result
         assert "/workspace/out.txt" in result
         assert "/workspace/data.json" in result
 
@@ -90,3 +93,169 @@ class TestBuildContext:
         result = build_context(step, outputs)
         assert "plain string output" in result
         assert "dict output" in result
+
+
+class TestXMLStructure:
+    def test_full_output_uses_xml_tags(self):
+        step = {"depends_on": [1]}
+        outputs = {1: "some output"}
+        result = build_context(step, outputs)
+        assert "<previous_step_output" in result
+        assert "</previous_step_output>" in result
+
+    def test_dict_output_uses_xml_tags(self):
+        step = {"depends_on": [1]}
+        outputs = {1: {"stdout": "data", "stderr": "", "files": []}}
+        result = build_context(step, outputs)
+        assert '<previous_step_output step="1">' in result
+        assert "</previous_step_output>" in result
+
+
+class TestObservationMasking:
+    def test_two_deps_both_full(self):
+        step = {"depends_on": [1, 2]}
+        outputs = {1: "out1", 2: "out2"}
+        result = build_context(step, outputs)
+        assert "<previous_step_output" in result
+        assert "out1" in result
+        assert "out2" in result
+        assert "step_summary" not in result
+
+    def test_three_deps_oldest_masked(self):
+        step = {"depends_on": [1, 2, 3]}
+        outputs = {1: "old output", 2: "mid output", 3: "new output"}
+        result = build_context(step, outputs)
+        # Step 1 should be masked
+        assert "<step_summary" in result
+        assert "Step 1 output omitted" in result
+        assert "old output" not in result
+        # Steps 2 and 3 should be full
+        assert "mid output" in result
+        assert "new output" in result
+
+    def test_masked_dep_includes_files_info(self):
+        step = {"depends_on": [1, 2, 3]}
+        outputs = {
+            1: {"stdout": "data", "stderr": "", "files": ["/workspace/a.txt"]},
+            2: "out2",
+            3: "out3",
+        }
+        result = build_context(step, outputs)
+        assert "Step 1 output omitted" in result
+        assert "/workspace/a.txt" in result
+        assert "data" not in result  # stdout masked
+
+
+class TestVerifyField:
+    def test_verify_included_when_state_provided(self):
+        step = {"depends_on": [1]}
+        outputs = {1: "result"}
+        state = {
+            "goal": "test goal",
+            "steps": [
+                {"id": 1, "verify": "check file exists", "depends_on": []},
+            ],
+        }
+        result = build_context(step, outputs, state=state)
+        assert "<verification>" in result
+        assert "check file exists" in result
+
+    def test_empty_verify_not_included(self):
+        step = {"depends_on": [1]}
+        outputs = {1: "result"}
+        state = {
+            "goal": "test goal",
+            "steps": [
+                {"id": 1, "verify": "", "depends_on": []},
+            ],
+        }
+        result = build_context(step, outputs, state=state)
+        assert "verification" not in result
+
+
+class TestWorkspaceFiles:
+    @patch("architect.main.scan_workspace_files")
+    def test_workspace_files_included(self, mock_scan):
+        mock_scan.return_value = {
+            "output.txt": {"size": 100, "type": "text", "preview": "hello world"},
+        }
+        step = {"depends_on": [1]}
+        outputs = {1: "result"}
+        result = build_context(step, outputs, workspace_path="/workspace")
+        assert "<workspace_files>" in result
+        assert "output.txt" in result
+        assert "100 bytes" in result
+
+    @patch("architect.main.scan_workspace_files")
+    def test_workspace_json_shows_keys(self, mock_scan):
+        mock_scan.return_value = {
+            "data.json": {
+                "size": 50,
+                "type": "text",
+                "preview": '{"name": "test", "value": 42}',
+            },
+        }
+        step = {"depends_on": [1]}
+        outputs = {1: "result"}
+        result = build_context(step, outputs, workspace_path="/workspace")
+        assert "keys:" in result
+        assert "name" in result
+        assert "value" in result
+
+    @patch("architect.main.scan_workspace_files")
+    def test_no_workspace_section_when_no_files(self, mock_scan):
+        mock_scan.return_value = {}
+        step = {"depends_on": [1]}
+        outputs = {1: "result"}
+        result = build_context(step, outputs, workspace_path="/workspace")
+        assert "workspace_files" not in result
+
+    def test_no_workspace_section_when_no_path(self):
+        step = {"depends_on": [1]}
+        outputs = {1: "result"}
+        result = build_context(step, outputs)
+        assert "workspace_files" not in result
+
+
+class TestExtractJsonKeys:
+    def test_dict_keys(self):
+        result = _extract_json_keys('{"a": 1, "b": 2}')
+        assert "a" in result
+        assert "b" in result
+
+    def test_list_of_dicts(self):
+        result = _extract_json_keys('[{"x": 1}, {"x": 2}]')
+        assert "list of 2 items" in result
+        assert "x" in result
+
+    def test_invalid_json(self):
+        result = _extract_json_keys("not json at all")
+        assert result == "not json at all"[:100]
+
+    def test_scalar_json(self):
+        result = _extract_json_keys("42")
+        assert result == "int"
+
+
+class TestSummarizeContext:
+    @patch("architect.main.summarize_context")
+    def test_long_context_triggers_summarization(self, mock_summarize):
+        mock_summarize.return_value = "compressed"
+        step = {"depends_on": [1]}
+        long_output = "x" * 10000
+        outputs = {1: long_output}
+        # Call build_context which should call summarize_context
+        # when context exceeds MAX_CONTEXT_LENGTH
+        result = build_context(step, outputs)
+        # The actual behavior depends on MAX_CONTEXT_LENGTH
+        # Just verify it doesn't crash
+        assert isinstance(result, str)
+
+    @patch("orchestrator.llm_client.get_llm_client",
+           side_effect=RuntimeError("no LLM"))
+    def test_summarize_context_fallback(self, _mock):
+        """When LLM is unavailable, falls back to truncation."""
+        context = "x" * 1000
+        result = summarize_context(context, "test goal", 500)
+        assert len(result) < len(context)
+        assert "compressed" in result

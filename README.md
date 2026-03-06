@@ -182,8 +182,12 @@ that enforces self-contained steps with `title`, `description`, and
 `depends_on` fields (JSON array).
 
 **Context propagation:** When step N depends on step M, the Architect
-captures sandbox stdout from step M and injects it as literal context
-into step N's task description.
+builds structured XML context from step M's output (`<previous_step_output>`,
+`<workspace_files>`, `<verification>` tags). Observation masking replaces
+older dependency outputs with compact summaries, keeping recent outputs in
+full. Workspace files are scanned for previews (with JSON key extraction).
+If context exceeds the limit, it is compressed via the LLM with fallback
+to truncation.
 
 **Self-correction:** If the Orchestrator fails a step (after its own 3
 internal retries), the Architect rewrites the spec up to 2 times by
@@ -249,7 +253,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_OUTPUT` | Write JSON results summary to this file path | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | *(none)* |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
-| `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | `4000` |
+| `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | `8000` |
 | `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | `2000` |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `ANTHROPIC_API_KEY` | Anthropic API key | *(uses Claude CLI auth)* |

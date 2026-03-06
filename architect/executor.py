@@ -9,7 +9,7 @@ import sys
 import uuid
 
 SANDBOX_IMAGE_NAME = "uas-sandbox"
-MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "4000"))
+MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "8000"))
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
 RUN_TIMEOUT = None
 EXECUTION_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
@@ -307,6 +307,52 @@ def extract_sandbox_stderr(orchestrator_output: str) -> str:
         return ""
     result = matches[-1].group(1).strip()
     return truncate_output(result)
+
+
+TEXT_EXTENSIONS = {
+    ".txt", ".csv", ".json", ".py", ".md", ".html", ".xml",
+    ".yaml", ".yml", ".log", ".tsv", ".sh", ".cfg", ".ini", ".toml",
+}
+
+
+def _guess_file_type(filename: str) -> str:
+    """Classify a file as 'text' or 'binary' based on extension."""
+    _, ext = os.path.splitext(filename.lower())
+    return "text" if ext in TEXT_EXTENSIONS else "binary"
+
+
+def scan_workspace_files(workspace_path: str) -> dict:
+    """List files in workspace directory (non-recursive).
+
+    Returns dict of {filename: {size, type, preview}} where preview
+    is the first 500 chars for text files under 50KB.
+    """
+    if not os.path.isdir(workspace_path):
+        return {}
+    results = {}
+    for entry in os.listdir(workspace_path):
+        if entry.startswith("."):
+            continue
+        path = os.path.join(workspace_path, entry)
+        if not os.path.isfile(path):
+            continue
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        file_info = {
+            "size": stat.st_size,
+            "type": _guess_file_type(entry),
+            "preview": "",
+        }
+        if file_info["type"] == "text" and stat.st_size < 50000:
+            try:
+                with open(path, "r", errors="replace") as f:
+                    file_info["preview"] = f.read(500)
+            except OSError:
+                pass
+        results[entry] = file_info
+    return results
 
 
 def extract_workspace_files(orchestrator_output: str) -> list[str]:

@@ -73,8 +73,47 @@ class ClaudeCodeClient:
         self.timeout = timeout
         self.model = model
 
-    def generate(self, prompt: str) -> str:
-        """Send a prompt to Claude Code CLI and return the text response."""
+    def _run_streaming(self, cmd, env):
+        """Run the CLI streaming stdout to the logger line-by-line."""
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=env,
+        )
+        # Collect stderr in a background thread to avoid pipe deadlock
+        stderr_chunks = []
+        stderr_thread = threading.Thread(
+            target=lambda: stderr_chunks.append(proc.stderr.read()),
+            daemon=True,
+        )
+        stderr_thread.start()
+
+        stdout_lines = []
+        for line in proc.stdout:
+            logger.info("  %s", line.rstrip())
+            stdout_lines.append(line)
+
+        try:
+            proc.wait(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+
+        stderr_thread.join(timeout=5)
+        stdout = "".join(stdout_lines)
+        stderr = stderr_chunks[0] if stderr_chunks else ""
+        return stdout, stderr, proc.returncode
+
+    def generate(self, prompt: str, stream: bool = False) -> str:
+        """Send a prompt to Claude Code CLI and return the text response.
+
+        When stream=True, output is printed to stderr line-by-line as it
+        arrives, providing real-time visibility into LLM generation.
+        """
         # Resolve the absolute path to the claude binary so subprocess
         # never fails due to a missing or overwritten PATH.
         claude_path = shutil.which("claude")
@@ -100,15 +139,19 @@ class ClaudeCodeClient:
         last_error: RuntimeError | None = None
         for attempt in range(1 + MAX_RETRIES):
             try:
-                with heartbeat_log("LLM responding"):
-                    result = subprocess.run(
-                        cmd,
-                        capture_output=True,
-                        text=True,
-                        timeout=self.timeout,
-                        stdin=subprocess.DEVNULL,
-                        env=env,
-                    )
+                if stream:
+                    stdout, stderr, returncode = self._run_streaming(cmd, env)
+                else:
+                    with heartbeat_log("LLM responding"):
+                        r = subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=self.timeout,
+                            stdin=subprocess.DEVNULL,
+                            env=env,
+                        )
+                    stdout, stderr, returncode = r.stdout, r.stderr, r.returncode
             except subprocess.TimeoutExpired:
                 last_error = RuntimeError(
                     f"Claude Code CLI timed out after {self.timeout} seconds."
@@ -127,12 +170,12 @@ class ClaudeCodeClient:
                     f"Claude CLI executable not found in PATH: {e}"
                 )
 
-            if result.returncode != 0:
-                stderr = result.stderr.strip()
+            if returncode != 0:
+                stderr_s = stderr.strip()
                 error = RuntimeError(
-                    f"Claude Code CLI exited with code {result.returncode}: {stderr}"
+                    f"Claude Code CLI exited with code {returncode}: {stderr_s}"
                 )
-                if _is_transient(stderr) and attempt < MAX_RETRIES:
+                if _is_transient(stderr_s) and attempt < MAX_RETRIES:
                     wait = INITIAL_BACKOFF * (2 ** attempt)
                     logger.warning(
                         "Transient error (attempt %d/%d), retrying in %ds: %s",
@@ -143,7 +186,7 @@ class ClaudeCodeClient:
                     continue
                 raise error
 
-            return result.stdout.strip()
+            return stdout.strip()
 
         # Should not be reached, but satisfy type checker.
         raise last_error  # type: ignore[misc]

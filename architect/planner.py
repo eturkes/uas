@@ -214,7 +214,7 @@ def decompose_goal(goal: str) -> list[dict]:
     prompt = DECOMPOSITION_PROMPT.format(goal=goal)
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "decompose_goal"})
-    response = client.generate(prompt)
+    response = client.generate(prompt, stream=True)
     event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "decompose_goal"})
     steps = parse_steps_json(response)
     if not steps:
@@ -284,7 +284,7 @@ def critique_and_refine_plan(goal: str, steps: list[dict]) -> list[dict]:
     event_log = get_event_log()
     try:
         event_log.emit(EventType.LLM_CALL_START, data={"purpose": "critique_plan"})
-        response = client.generate(prompt)
+        response = client.generate(prompt, stream=True)
         event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "critique_plan"})
     except Exception as e:
         logger.warning("Plan critique failed, using original plan: %s", e)

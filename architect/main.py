@@ -14,7 +14,13 @@ import threading
 import time
 
 from .state import init_state, save_state, load_state, add_steps
-from .planner import decompose_goal, rewrite_task, topological_sort, critique_and_refine_plan
+from .planner import (
+    decompose_goal,
+    reflect_and_rewrite,
+    decompose_failing_step,
+    topological_sort,
+    critique_and_refine_plan,
+)
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import (
     run_orchestrator,
@@ -26,7 +32,7 @@ from .executor import (
     MAX_CONTEXT_LENGTH,
 )
 
-MAX_SPEC_REWRITES = 2
+MAX_SPEC_REWRITES = 4
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 
 MAX_GOAL_LENGTH = 10000
@@ -406,9 +412,18 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 spec_attempt + 1,
                 MAX_SPEC_REWRITES,
             )
-            step["description"] = rewrite_task(
-                step, result["stdout"], result["stderr"]
-            )
+            if spec_attempt == 2:
+                # 3rd failure: decompose into sub-phases
+                logger.info("  Escalation: decomposing step into sub-phases...")
+                step["description"] = decompose_failing_step(
+                    step, result["stdout"], result["stderr"]
+                )
+            else:
+                # 1st, 2nd, 4th failure: reflection-based rewrite
+                step["description"] = reflect_and_rewrite(
+                    step, result["stdout"], result["stderr"],
+                    escalation_level=spec_attempt,
+                )
             step["rewrites"] = spec_attempt + 1
             _save_state_threadsafe(state)
         else:

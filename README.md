@@ -190,9 +190,16 @@ If context exceeds the limit, it is compressed via the LLM with fallback
 to truncation.
 
 **Self-correction:** If the Orchestrator fails a step (after its own 3
-internal retries), the Architect rewrites the spec up to 2 times by
-sending the LLM the original task plus truncated error output. If all
-rewrites are exhausted, it halts with `BLOCKER.md`.
+internal retries), the Architect uses reflection-based error recovery
+with up to 4 progressive escalation rewrites:
+1. Structured reflection with root cause diagnosis
+2. Forced alternative strategy
+3. Decomposition into granular sub-phases
+4. Maximally defensive final attempt
+
+Outputs are red-flagged and resampled if they show signs of confusion
+(excessive length or verbatim error repetition). If all rewrites are
+exhausted, it halts with `BLOCKER.md`.
 
 **State:** All state is persisted to `.state/state.json`
 after every significant event (step start, completion, failure, rewrite).

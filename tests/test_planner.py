@@ -9,6 +9,9 @@ from architect.planner import (
     parse_steps_json,
     DECOMPOSITION_PROMPT,
     critique_and_refine_plan,
+    reflect_and_rewrite,
+    decompose_failing_step,
+    _is_confused_output,
 )
 
 
@@ -160,3 +163,152 @@ class TestCritiqueAndRefinePlan:
         steps = self._make_steps()
         result = critique_and_refine_plan("test goal", steps)
         assert result is steps
+
+
+class TestReflectAndRewrite:
+    @patch("architect.planner.get_llm_client")
+    def test_basic_reflection(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = (
+            "<diagnosis>Logic error in parsing</diagnosis>\n"
+            "<strategies>1. Use regex. 2. Use json. Pick json.</strategies>\n"
+            "Improved task: parse the data using json.loads"
+        )
+        mock_get_client.return_value = client
+
+        step = {"description": "parse some data"}
+        result = reflect_and_rewrite(step, "stdout", "stderr")
+        assert "parse the data using json.loads" in result
+        assert "<diagnosis>" not in result
+        assert "<strategies>" not in result
+
+    @patch("architect.planner.get_llm_client")
+    def test_escalation_alternative_approach(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "Use a completely different approach"
+        mock_get_client.return_value = client
+
+        step = {"description": "do something"}
+        result = reflect_and_rewrite(step, "stdout", "stderr", escalation_level=1)
+        prompt = client.generate.call_args[0][0]
+        assert "fundamentally different strategy" in prompt
+        assert result == "Use a completely different approach"
+
+    @patch("architect.planner.get_llm_client")
+    def test_escalation_final_attempt(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "Final defensive approach"
+        mock_get_client.return_value = client
+
+        step = {"description": "do something"}
+        result = reflect_and_rewrite(step, "stdout", "stderr", escalation_level=3)
+        prompt = client.generate.call_args[0][0]
+        assert "FINAL attempt" in prompt
+        assert result == "Final defensive approach"
+
+    @patch("architect.planner.get_llm_client")
+    def test_red_flag_excessive_length_resamples(self, mock_get_client):
+        client = MagicMock()
+        long_response = "x" * 10000
+        client.generate.side_effect = [long_response, "fixed task description"]
+        mock_get_client.return_value = client
+
+        step = {"description": "short task"}
+        result = reflect_and_rewrite(step, "", "error")
+        assert client.generate.call_count == 2
+        assert result == "fixed task description"
+
+    @patch("architect.planner.get_llm_client")
+    def test_red_flag_error_verbatim_resamples(self, mock_get_client):
+        client = MagicMock()
+        error_text = "A" * 300
+        # First response contains the error verbatim
+        client.generate.side_effect = [
+            f"some prefix {error_text} some suffix",
+            "clean rewrite",
+        ]
+        mock_get_client.return_value = client
+
+        step = {"description": "a task"}
+        result = reflect_and_rewrite(step, "", error_text)
+        assert client.generate.call_count == 2
+        assert result == "clean rewrite"
+
+    @patch("architect.planner.get_llm_client")
+    def test_empty_result_returns_original(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = (
+            "<diagnosis>x</diagnosis><strategies>y</strategies>"
+        )
+        mock_get_client.return_value = client
+
+        step = {"description": "original task"}
+        result = reflect_and_rewrite(step, "", "")
+        assert result == "original task"
+
+    @patch("architect.planner.get_llm_client")
+    def test_stdout_stderr_trimmed(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "rewritten"
+        mock_get_client.return_value = client
+
+        step = {"description": "task"}
+        long_stdout = "x" * 5000
+        long_stderr = "y" * 5000
+        reflect_and_rewrite(step, long_stdout, long_stderr)
+        prompt = client.generate.call_args[0][0]
+        # Stdout trimmed to last 2000 chars, stderr to last 1000
+        assert "x" * 2000 in prompt
+        assert "y" * 1000 in prompt
+
+
+class TestIsConfusedOutput:
+    def test_excessive_length(self):
+        assert _is_confused_output("x" * 10000, "short", "") is True
+
+    def test_reasonable_length(self):
+        assert _is_confused_output("reasonable output", "short task", "") is False
+
+    def test_error_verbatim(self):
+        error = "A" * 300
+        assert _is_confused_output(f"prefix {error} suffix", "task", error) is True
+
+    def test_short_error_not_flagged(self):
+        assert _is_confused_output("has error text", "task", "error") is False
+
+
+class TestDecomposeFailingStep:
+    @patch("architect.planner.get_llm_client")
+    def test_returns_decomposed_description(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = (
+            "Phase 1: download the file. Phase 2: parse it. Phase 3: save results."
+        )
+        mock_get_client.return_value = client
+
+        step = {"description": "download and process data"}
+        result = decompose_failing_step(step, "stdout", "stderr")
+        assert "Phase 1" in result
+
+    @patch("architect.planner.get_llm_client")
+    def test_empty_returns_original(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "  "
+        mock_get_client.return_value = client
+
+        step = {"description": "original task"}
+        result = decompose_failing_step(step, "", "")
+        assert result == "original task"
+
+    @patch("architect.planner.get_llm_client")
+    def test_prompt_includes_failure_context(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "decomposed"
+        mock_get_client.return_value = client
+
+        step = {"description": "my task"}
+        decompose_failing_step(step, "out_data", "err_data")
+        prompt = client.generate.call_args[0][0]
+        assert "my task" in prompt
+        assert "out_data" in prompt
+        assert "err_data" in prompt

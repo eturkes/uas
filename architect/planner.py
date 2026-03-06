@@ -304,17 +304,135 @@ def critique_and_refine_plan(goal: str, steps: list[dict]) -> list[dict]:
     return steps
 
 
-def rewrite_task(step: dict, orchestrator_stdout: str, orchestrator_stderr: str) -> str:
+REFLECT_PROMPT = """\
+<instructions>
+You are diagnosing and fixing a failed code-generation task. Follow the structured \
+reflection process below.
+</instructions>
+
+<original_task>{description}</original_task>
+
+<failure_output>
+<stdout>{stdout}</stdout>
+<stderr>{stderr}</stderr>
+</failure_output>
+{escalation_instruction}
+<process>
+1. In <diagnosis> tags, analyze: What specifically went wrong? Why? Categorize the \
+error as one of: dependency issue, logic error, environment problem, network issue, \
+or data format mismatch. Determine whether the error originated in this step or \
+propagated from a previous step.
+
+2. In <strategies> tags, propose 2-3 alternative strategies to solve the task. \
+Select the best one with justification.
+
+3. After the tags, provide ONLY the improved task description. Be more specific and \
+explicit about what the Python code should do. Do not include any explanation.
+</process>
+"""
+
+ESCALATION_INSTRUCTIONS = {
+    0: "",
+    1: (
+        "\n<escalation>IMPORTANT: The previous approach has already failed. "
+        "You MUST propose a fundamentally different strategy. Do NOT repeat "
+        "or slightly modify the previous approach.</escalation>"
+    ),
+    3: (
+        "\n<escalation>This is the FINAL attempt. Be maximally defensive:\n"
+        "- Include diagnostic commands at the start of the script (print Python "
+        "version, list installed packages, check network connectivity)\n"
+        "- Wrap EVERY external call in try/except with detailed error messages\n"
+        "- Validate ALL inputs before using them\n"
+        "- Use the simplest possible approach to achieve the goal</escalation>"
+    ),
+}
+
+DECOMPOSE_STEP_PROMPT = """\
+<instructions>
+A code-generation task has failed multiple times. Break it down into 2-3 smaller, \
+more manageable sub-phases that can be expressed as a single sequential script.
+</instructions>
+
+<failed_task>{description}</failed_task>
+
+<failure_output>
+<stdout>{stdout}</stdout>
+<stderr>{stderr}</stderr>
+</failure_output>
+
+Rewrite the task as a detailed, step-by-step description that breaks the work into \
+explicit sequential phases within a single script. Each phase should be simple enough \
+to be unlikely to fail. Include explicit error handling between phases.
+
+Provide ONLY the improved task description. No explanation.
+"""
+
+
+def _is_confused_output(result: str, original_desc: str, error: str) -> bool:
+    """Check if the LLM output shows structural signs of confusion."""
+    # Excessive length (>3x original, minimum threshold 2000)
+    if len(result) > max(len(original_desc) * 3, 2000):
+        return True
+    # Repeating the error verbatim (>200 chars of error text found in result)
+    if error and len(error) > 200 and error[:200] in result:
+        return True
+    return False
+
+
+def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
+                        orchestrator_stderr: str,
+                        escalation_level: int = 0) -> str:
+    """Reflection-based task rewrite with progressive escalation.
+
+    Uses structured diagnosis/strategy/rewrite phases instead of simple rewriting.
+    Includes red-flagging: outputs showing signs of confusion are resampled once.
+    """
     client = get_llm_client()
-    prompt = (
-        "A code-generation task was sent to an orchestrator but failed after "
-        "3 attempts. Analyze the failure and provide an improved task description.\n\n"
-        f"Original task:\n{step['description']}\n\n"
-        f"Orchestrator stdout (last {REWRITE_STDOUT_LIMIT} chars):\n"
-        f"{orchestrator_stdout[-REWRITE_STDOUT_LIMIT:]}\n\n"
-        f"Orchestrator stderr (last {REWRITE_STDERR_LIMIT} chars):\n"
-        f"{orchestrator_stderr[-REWRITE_STDERR_LIMIT:]}\n\n"
-        "Provide ONLY the improved task description. Be more specific and explicit "
-        "about what the Python code should do. Do not include any explanation."
+
+    stdout_trimmed = orchestrator_stdout[-REWRITE_STDOUT_LIMIT:]
+    stderr_trimmed = orchestrator_stderr[-REWRITE_STDERR_LIMIT:]
+
+    escalation = ESCALATION_INSTRUCTIONS.get(escalation_level, "")
+
+    prompt = REFLECT_PROMPT.format(
+        description=step["description"],
+        stdout=stdout_trimmed,
+        stderr=stderr_trimmed,
+        escalation_instruction=escalation,
     )
-    return client.generate(prompt).strip()
+
+    response = client.generate(prompt)
+
+    # Strip diagnosis and strategies tags to get just the description
+    result = re.sub(r"<diagnosis>.*?</diagnosis>", "", response, flags=re.DOTALL)
+    result = re.sub(r"<strategies>.*?</strategies>", "", result, flags=re.DOTALL)
+    result = result.strip()
+
+    # Red-flagging: check for signs of confusion and resample once
+    if _is_confused_output(result, step["description"], stderr_trimmed):
+        logger.warning("  Red-flag detected in rewrite output, resampling...")
+        response = client.generate(prompt)
+        result = re.sub(r"<diagnosis>.*?</diagnosis>", "", response, flags=re.DOTALL)
+        result = re.sub(r"<strategies>.*?</strategies>", "", result, flags=re.DOTALL)
+        result = result.strip()
+
+    return result if result else step["description"]
+
+
+def decompose_failing_step(step: dict, orchestrator_stdout: str,
+                           orchestrator_stderr: str) -> str:
+    """Decompose a failing step into a more granular multi-phase description."""
+    client = get_llm_client()
+
+    stdout_trimmed = orchestrator_stdout[-REWRITE_STDOUT_LIMIT:]
+    stderr_trimmed = orchestrator_stderr[-REWRITE_STDERR_LIMIT:]
+
+    prompt = DECOMPOSE_STEP_PROMPT.format(
+        description=step["description"],
+        stdout=stdout_trimmed,
+        stderr=stderr_trimmed,
+    )
+
+    result = client.generate(prompt).strip()
+    return result if result else step["description"]

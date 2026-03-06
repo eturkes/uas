@@ -136,10 +136,11 @@ class TestOutputIntegration:
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
     @patch("architect.main.build_task_from_spec")
-    @patch("architect.main.rewrite_task")
+    @patch("architect.main.decompose_failing_step")
+    @patch("architect.main.reflect_and_rewrite")
     def test_output_written_on_blocked(
-        self, mock_rewrite, mock_build_task, mock_gen_spec, mock_run_orch,
-        mock_decompose, tmp_workspace, monkeypatch,
+        self, mock_reflect, mock_decompose_step, mock_build_task, mock_gen_spec,
+        mock_run_orch, mock_decompose, tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},
@@ -149,7 +150,8 @@ class TestOutputIntegration:
         mock_run_orch.return_value = {
             "exit_code": 1, "stdout": "err", "stderr": "fail",
         }
-        mock_rewrite.return_value = "rewritten task"
+        mock_reflect.return_value = "rewritten task"
+        mock_decompose_step.return_value = "decomposed task"
 
         import architect.main as main_mod
         monkeypatch.setattr(main_mod, "WORKSPACE", str(tmp_workspace))

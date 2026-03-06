@@ -112,20 +112,22 @@ class TestElapsedTimeTracking:
         assert "elapsed" in step
         assert step["elapsed"] >= 0.0
 
-    @patch("architect.main.rewrite_task")
+    @patch("architect.main.decompose_failing_step")
+    @patch("architect.main.reflect_and_rewrite")
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
     @patch("architect.main.build_task_from_spec")
     def test_elapsed_time_recorded_on_failure(
-        self, mock_build_task, mock_gen_spec, mock_run_orch, mock_rewrite,
-        tmp_workspace,
+        self, mock_build_task, mock_gen_spec, mock_run_orch,
+        mock_reflect, mock_decompose, tmp_workspace,
     ):
         mock_gen_spec.return_value = "/tmp/spec.md"
         mock_build_task.return_value = "task text"
         mock_run_orch.return_value = {
             "exit_code": 1, "stdout": "err", "stderr": "fail",
         }
-        mock_rewrite.return_value = "rewritten task"
+        mock_reflect.return_value = "rewritten task"
+        mock_decompose.return_value = "decomposed task"
 
         state = init_state("test")
         state = add_steps(state, [

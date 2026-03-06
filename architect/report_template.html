@@ -99,6 +99,7 @@ pre { background: #11111b; padding: 12px; border-radius: 6px; overflow-x: auto; 
   <div class="tab" onclick="switchTab('timeline')">Timeline</div>
   <div class="tab" onclick="switchTab('steps')">Steps</div>
   <div class="tab" onclick="switchTab('provenance')">Provenance</div>
+  {% if explanation %}<div class="tab" onclick="switchTab('explanation')">Explanation</div>{% endif %}
 </div>
 
 <!-- Overview Tab -->
@@ -236,6 +237,15 @@ pre { background: #11111b; padding: 12px; border-radius: 6px; overflow-x: auto; 
     <pre class="mermaid">{{ mermaid_provenance }}</pre>
   </div>
 </div>
+
+{% if explanation %}
+<!-- Explanation Tab -->
+<div id="tab-explanation" class="tab-content">
+  <div class="explanation-container" style="background: var(--surface); padding: 20px; border-radius: 8px;">
+    <pre style="white-space: pre-wrap; word-wrap: break-word;">{{ explanation }}</pre>
+  </div>
+</div>
+{% endif %}
 
 </div>
 

@@ -344,7 +344,7 @@ Event schema (correct `ph`, `ts`, `dur`, `pid`, `tid` fields).
 
 ---
 
-## Section 6: Decision Explanation Layer
+## Section 6: Decision Explanation Layer -- DONE
 
 **Goal:** Add an explanation system that uses the provenance graph and event
 log to generate human-readable explanations of what happened during a run,

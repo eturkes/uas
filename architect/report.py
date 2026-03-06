@@ -220,6 +220,7 @@ def generate_report(
     output_path: str,
     specs: Optional[dict[str, str]] = None,
     code_versions: Optional[dict] = None,
+    explanation: Optional[str] = None,
 ) -> str:
     """Generate a self-contained HTML report.
 
@@ -230,6 +231,7 @@ def generate_report(
         output_path: Where to write the HTML file.
         specs: Optional dict of {step_id: spec_content} for step specs.
         code_versions: Optional dict mapping step_id to list of version dicts.
+        explanation: Optional markdown explanation text for the Explanation tab.
 
     Returns:
         The output_path written to.
@@ -252,6 +254,7 @@ def generate_report(
         "provenance": provenance,
         "specs": specs or {},
         "code_versions": _code_evolution_data(code_versions or {}),
+        "explanation": explanation or "",
     }
 
     html = template.render(**context)

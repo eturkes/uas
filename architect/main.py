@@ -38,6 +38,7 @@ from .code_tracker import get_code_tracker, reset_code_tracker
 from .dashboard import Dashboard
 from .report import generate_report
 from .trace_export import TraceExporter
+from .explain import RunExplainer
 
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "4"))
@@ -98,6 +99,10 @@ def parse_args():
     parser.add_argument(
         "--trace", type=str, default=None, nargs="?", const="auto",
         help="Export Perfetto trace to this path (default: .state/trace.json)",
+    )
+    parser.add_argument(
+        "--explain", action="store_true", default=False,
+        help="Print run explanation to stderr after completion",
     )
     return parser.parse_args()
 
@@ -826,6 +831,11 @@ def main():
     # Trace flag
     trace_flag = args.trace or os.environ.get("UAS_TRACE") or None
 
+    # Explain flag
+    explain_flag = args.explain or os.environ.get("UAS_EXPLAIN", "").lower() in (
+        "1", "true", "yes",
+    )
+
     # Initialize event log and provenance graph
     events_flag = args.events or os.environ.get("UAS_EVENTS") or None
     if events_flag:
@@ -1074,6 +1084,28 @@ def main():
     _finalize_code_tracking()
     prov.save()
 
+    # Build shared data for report and explanation
+    events_data = [e.to_dict() for e in event_log.events]
+    prov_data = prov.to_dict()
+    tracker = get_code_tracker()
+    code_versions = {
+        sid: [v.to_dict() for v in versions]
+        for sid, versions in tracker.get_all_versions().items()
+    }
+
+    # Build explanation if needed (for --explain or --report)
+    explanation_text = None
+    if explain_flag or report_flag:
+        try:
+            explainer = RunExplainer(state, events_data, prov_data, code_versions)
+            explanation_text = explainer.explain_run()
+        except Exception as e:
+            logger.warning("Failed to generate explanation: %s", e)
+
+    # Print explanation to stderr if requested
+    if explain_flag and explanation_text:
+        print("\n" + explanation_text, file=sys.stderr)
+
     # Generate HTML report if requested
     if report_flag:
         state_dir = os.path.join(WORKSPACE, ".state")
@@ -1083,15 +1115,9 @@ def main():
             else report_flag
         )
         try:
-            events_data = [e.to_dict() for e in event_log.events]
-            prov_data = prov.to_dict()
-            tracker = get_code_tracker()
-            code_versions = {
-                sid: [v.to_dict() for v in versions]
-                for sid, versions in tracker.get_all_versions().items()
-            }
             generate_report(state, events_data, prov_data, report_path,
-                            code_versions=code_versions)
+                            code_versions=code_versions,
+                            explanation=explanation_text)
             logger.info("HTML report written to: %s", report_path)
         except Exception as e:
             logger.warning("Failed to generate HTML report: %s", e)

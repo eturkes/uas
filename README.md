@@ -134,10 +134,10 @@ uas --report my_report.html "your goal"
 UAS_REPORT=report.html uas "your goal"
 ```
 
-The report includes four tabs: Overview (metrics and Mermaid DAG),
+The report includes five tabs: Overview (metrics and Mermaid DAG),
 Timeline (LLM vs sandbox time bars), Steps (expandable details with
-output, errors, files, and code evolution diffs), and Provenance
-(interactive graph).
+output, errors, files, and code evolution diffs), Provenance
+(interactive graph), and Explanation (when `--explain` is also active).
 
 ### Execution Trace (Perfetto)
 
@@ -160,6 +160,33 @@ Open the resulting file at ui.perfetto.dev (drag and drop) or
 Sandbox activity on separate processes with per-step threads,
 counter tracks for cumulative LLM and sandbox metrics, and
 metadata for each span (attempt number, exit code, error type).
+
+### Run Explanation
+
+Print a human-readable explanation of what happened during a run,
+including critical path analysis, failure taxonomy, rewrite
+effectiveness, and cost breakdown:
+
+```bash
+# Via CLI flag (prints to stderr after completion):
+uas --explain "your goal"
+
+# Combine with --report to include in the HTML report:
+uas --explain --report "your goal"
+
+# Or via environment variable:
+UAS_EXPLAIN=1 uas "your goal"
+```
+
+For post-hoc analysis of a previous run without re-executing:
+
+```bash
+python3 -m architect.explain /path/to/workspace
+python3 -m architect.explain --step 2 /path/to/workspace
+python3 -m architect.explain --failure 3 /path/to/workspace
+python3 -m architect.explain --critical-path /path/to/workspace
+python3 -m architect.explain --cost /path/to/workspace
+```
 
 ### Non-Interactive / Local Mode
 
@@ -204,6 +231,8 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── dashboard.py          # Rich terminal dashboard
 │   ├── code_tracker.py       # Code evolution tracking across retries
 │   ├── trace_export.py       # Perfetto trace export
+│   ├── explain.py            # Decision explanation layer
+│   ├── __main__.py           # Standalone explanation CLI
 │   ├── report.py             # HTML report generator
 │   └── report_template.html  # Jinja2 HTML template
 ├── orchestrator/             # Execution Orchestrator (containerized)
@@ -337,6 +366,14 @@ enabling microsecond-precision timeline analysis in Perfetto or
 `chrome://tracing`. Counter tracks show cumulative LLM calls and
 sandbox runs.
 
+**Decision explanation:** When `--explain` is passed (or
+`UAS_EXPLAIN` is set), a post-run explanation is printed to stderr
+covering critical path analysis, failure taxonomy, rewrite
+effectiveness scoring, and cost breakdown. The standalone CLI
+(`python3 -m architect.explain`) supports post-hoc analysis of
+previous runs. When combined with `--report`, explanations are
+included as a fifth tab in the HTML report.
+
 ### Orchestrator (Build-Run-Evaluate Loop)
 
 ```
@@ -404,6 +441,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_EVENTS` | Write structured event log to this file path | *(off)* |
 | `UAS_REPORT` | Generate HTML report at this file path | *(off)* |
 | `UAS_TRACE` | Export Perfetto trace to this file path | *(off)* |
+| `UAS_EXPLAIN` | Print run explanation to stderr (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | *(none)* |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
 | `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | `4` |

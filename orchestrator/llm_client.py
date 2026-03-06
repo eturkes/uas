@@ -1,9 +1,11 @@
 """LLM client via the Claude Code CLI subprocess wrapper."""
 
+import contextlib
 import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 
 DEFAULT_TIMEOUT = None
@@ -22,6 +24,40 @@ TRANSIENT_PATTERNS = [
     "network is unreachable",
     "temporary failure",
 ]
+
+
+HEARTBEAT_INTERVAL = 15
+
+
+@contextlib.contextmanager
+def heartbeat_log(label, interval=HEARTBEAT_INTERVAL, log=None):
+    """Log periodic heartbeat messages during long-running operations.
+
+    Usage::
+
+        with heartbeat_log("LLM responding"):
+            result = subprocess.run(...)
+
+    Prints ``label... (Ns elapsed)`` every *interval* seconds until the
+    block exits.
+    """
+    if log is None:
+        log = logger
+    stop = threading.Event()
+
+    def _beat():
+        start = time.monotonic()
+        while not stop.wait(interval):
+            elapsed = time.monotonic() - start
+            log.info("  %s... (%ds elapsed)", label, int(elapsed))
+
+    t = threading.Thread(target=_beat, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join(timeout=2)
 
 
 def _is_transient(error_message: str) -> bool:
@@ -64,14 +100,15 @@ class ClaudeCodeClient:
         last_error: RuntimeError | None = None
         for attempt in range(1 + MAX_RETRIES):
             try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout,
-                    stdin=subprocess.DEVNULL,
-                    env=env,
-                )
+                with heartbeat_log("LLM responding"):
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.timeout,
+                        stdin=subprocess.DEVNULL,
+                        env=env,
+                    )
             except subprocess.TimeoutExpired:
                 last_error = RuntimeError(
                     f"Claude Code CLI timed out after {self.timeout} seconds."

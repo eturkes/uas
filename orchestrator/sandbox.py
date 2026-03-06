@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import uuid
 
+from .llm_client import heartbeat_log
+
 logger = logging.getLogger(__name__)
 
 SANDBOX_IMAGE = os.environ.get(
@@ -24,9 +26,10 @@ def run_in_sandbox(code: str, timeout: int | None = None) -> dict:
     """
     timeout = timeout or SANDBOX_TIMEOUT
 
-    if SANDBOX_MODE == "local":
-        return _run_local(code, timeout)
-    return _run_container(code, timeout)
+    with heartbeat_log("Sandbox executing", log=logger):
+        if SANDBOX_MODE == "local":
+            return _run_local(code, timeout)
+        return _run_container(code, timeout)
 
 
 def _run_local(code: str, timeout: int) -> dict:

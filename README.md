@@ -331,6 +331,12 @@ An environment probe runs on the first step, recording Python version,
 installed packages, and disk space to the scratchpad so subsequent steps
 can avoid wrong assumptions about the execution environment.
 
+**Progress heartbeats:** Long-running operations (LLM generation,
+sandbox execution, orchestrator runs) emit periodic heartbeat
+messages to stderr every 15–30 seconds showing elapsed time.
+This ensures continuous feedback even during multi-minute waits,
+so the user always knows the system is still working.
+
 **Terminal dashboard:** During execution, a Rich Live dashboard shows
 the DAG structure with step statuses (pending/executing/completed/failed),
 active step details, and a timing breakdown. When stdout is not a TTY

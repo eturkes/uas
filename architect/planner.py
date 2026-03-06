@@ -12,36 +12,79 @@ REWRITE_STDOUT_LIMIT = 2000
 REWRITE_STDERR_LIMIT = 1000
 
 DECOMPOSITION_PROMPT = """\
+<instructions>
 You are a task decomposition engine. Given a high-level goal, break it into \
-a sequence of atomic, independently executable steps.
+atomic, independently executable steps that form a directed acyclic graph (DAG).
 
-RULES:
+First, reason about the goal in <analysis> tags: assess its complexity, identify \
+the key sub-problems, and determine appropriate granularity. Think thoroughly \
+about dependencies and which steps can run in parallel.
+
+Then produce the step DAG as a JSON array.
+</instructions>
+
+<rules>
 1. Each step MUST be a self-contained Python script task.
 2. Steps share a persistent workspace directory for file I/O. \
 The path is available via os.environ.get('WORKSPACE', '/workspace'). \
 Later steps can read files written by earlier steps from this directory.
-3. Each step should be small and focused on one action.
-4. Steps execute sequentially.
-5. Keep the number of steps minimal.
+3. Each step should be as small and focused as possible — the smaller the \
+subtask, the more reliable the execution.
+4. Steps can run in parallel when they have no dependency relationship. \
+Maximize parallelism by making steps independent whenever possible.
+5. Scale the number of steps to the goal's complexity: \
+1 step for trivial tasks, 2-3 for simple, 4-7 for medium, 8+ for complex.
 6. The execution environment has full unrestricted network access and complete \
 autonomy. Install any packages needed (pip, apt-get, etc.) without hesitation.
 7. Each step must produce observable output to stdout so downstream steps \
 can use the results.
 8. Do NOT create steps that require user interaction.
+</rules>
 
-Respond with ONLY a JSON array. Each element:
-{{"title": "short name", "description": "detailed task for a code-generating LLM", \
-"depends_on": [step_numbers]}}
+<output_format>
+Respond with your analysis in <analysis> tags, then ONLY a JSON array. Each element:
+{{"title": "short name", \
+"description": "detailed task for a code-generating LLM", \
+"depends_on": [step_numbers], \
+"verify": "how to verify this step succeeded beyond exit code 0", \
+"environment": ["pip or apt packages needed, if any"]}}
 
 Steps are numbered starting from 1. depends_on references must use 1-based step \
 numbers (e.g. step 2 depending on step 1 should have "depends_on": [1]).
+</output_format>
+
+<examples>
+Example 1 — Trivial (single step):
+Goal: "Print the current date and time"
+<analysis>This is a trivial single-action task requiring no external packages.</analysis>
+[{{"title": "Print datetime", "description": "Write a Python script that prints the current date and time using the datetime module.", "depends_on": [], "verify": "stdout contains a date/time string", "environment": []}}]
+
+Example 2 — Medium with dependencies:
+Goal: "Download a CSV from a URL, clean it, and produce summary statistics"
+<analysis>Three distinct phases: download, clean, analyze. Cleaning depends on download, analysis depends on cleaning. No parallelism possible since each step feeds the next.</analysis>
+[
+  {{"title": "Download CSV", "description": "Download the CSV file from the given URL using requests and save it to the workspace as raw_data.csv. Print the number of rows and columns.", "depends_on": [], "verify": "raw_data.csv exists in workspace and has >0 rows", "environment": ["requests"]}},
+  {{"title": "Clean data", "description": "Read raw_data.csv from the workspace, handle missing values (drop rows with >50% nulls, fill numeric nulls with median), remove duplicates, and save as cleaned_data.csv. Print cleaning summary.", "depends_on": [1], "verify": "cleaned_data.csv exists and has fewer or equal rows to raw_data.csv", "environment": ["pandas"]}},
+  {{"title": "Summary statistics", "description": "Read cleaned_data.csv, compute summary statistics (mean, median, std, min, max for numeric columns), and save results to summary.json and summary.txt. Print the summary.", "depends_on": [2], "verify": "summary.json and summary.txt exist in workspace", "environment": ["pandas"]}}
+]
+
+Example 3 — Complex with parallelism:
+Goal: "Scrape product info from two websites and compare prices"
+<analysis>Scraping each website is independent — these can run in parallel. Comparison depends on both. Three steps total, two parallel.</analysis>
+[
+  {{"title": "Scrape site A", "description": "Scrape product names and prices from site A using requests and BeautifulSoup. Save results as site_a_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_a_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"]}},
+  {{"title": "Scrape site B", "description": "Scrape product names and prices from site B using requests and BeautifulSoup. Save results as site_b_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_b_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"]}},
+  {{"title": "Compare prices", "description": "Read site_a_products.json and site_b_products.json from the workspace. Match products by name and compare prices. Save comparison to price_comparison.csv and print a summary of which site is cheaper on average.", "depends_on": [1, 2], "verify": "price_comparison.csv exists and contains matched products", "environment": ["pandas"]}}
+]
+</examples>
 
 Goal: {goal}
 """
 
 
 def parse_steps_json(response: str) -> list[dict]:
-    text = response.strip()
+    # Strip <analysis> tags if present (LLM reasoning preamble)
+    text = re.sub(r"<analysis>.*?</analysis>", "", response, flags=re.DOTALL).strip()
 
     # Direct parse
     try:
@@ -172,6 +215,8 @@ def decompose_goal(goal: str) -> list[dict]:
         if "title" not in step or "description" not in step:
             raise ValueError(f"Step missing required fields: {step}")
         step.setdefault("depends_on", [])
+        step.setdefault("verify", "")
+        step.setdefault("environment", [])
 
     # Normalize 0-indexed depends_on to 1-indexed.
     # The LLM sometimes returns 0-based step references despite the prompt
@@ -183,6 +228,79 @@ def decompose_goal(goal: str) -> list[dict]:
             step["depends_on"] = [d + 1 for d in step["depends_on"]]
 
     validate_depends_on(steps)
+    return steps
+
+
+CRITIQUE_PROMPT = """\
+<instructions>
+You are reviewing a task decomposition plan. Analyze the proposed steps and \
+identify any issues. Be concise and actionable.
+</instructions>
+
+<goal>{goal}</goal>
+
+<proposed_steps>
+{steps_json}
+</proposed_steps>
+
+<review_criteria>
+1. Are any steps too broad and should be split further?
+2. Are there missing steps needed to achieve the goal?
+3. Are the dependencies correct? Could any steps be made independent to enable parallelism?
+4. Are there missing error handling considerations for external resources (network, files)?
+5. Are the verify fields specific enough to catch subtle failures?
+6. Are environment/package requirements complete?
+</review_criteria>
+
+If the plan is good, respond with exactly: PLAN_OK
+
+If there are issues, respond with the corrected JSON array of steps in the same \
+format as the original. Include ONLY the JSON array, no explanation.
+"""
+
+
+def critique_and_refine_plan(goal: str, steps: list[dict]) -> list[dict]:
+    """Send the plan to the LLM for critique and optionally refine it.
+
+    Single-pass review: if the LLM identifies issues it returns a corrected
+    plan, otherwise returns the original steps unchanged.
+    """
+    client = get_llm_client()
+    steps_json = json.dumps(steps, indent=2)
+    prompt = CRITIQUE_PROMPT.format(goal=goal, steps_json=steps_json)
+
+    try:
+        response = client.generate(prompt)
+    except Exception as e:
+        logger.warning("Plan critique failed, using original plan: %s", e)
+        return steps
+
+    text = response.strip()
+    if "PLAN_OK" in text:
+        logger.info("  Plan critique: no issues found.")
+        return steps
+
+    # Try to parse refined steps
+    try:
+        refined = parse_steps_json(text)
+        if refined:
+            logger.info(
+                "  Plan critique: refined %d -> %d steps.",
+                len(steps),
+                len(refined),
+            )
+            # Re-validate
+            for step in refined:
+                if "title" not in step or "description" not in step:
+                    raise ValueError(f"Refined step missing required fields: {step}")
+                step.setdefault("depends_on", [])
+                step.setdefault("verify", "")
+                step.setdefault("environment", [])
+            validate_depends_on(refined)
+            return refined
+    except (ValueError, json.JSONDecodeError) as e:
+        logger.warning("Could not parse critique response, using original plan: %s", e)
+
     return steps
 
 

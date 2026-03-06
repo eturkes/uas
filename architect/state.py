@@ -50,6 +50,8 @@ def add_steps(state: dict, steps: list[dict]) -> dict:
             "title": step["title"],
             "description": step["description"],
             "depends_on": step.get("depends_on", []),
+            "verify": step.get("verify", ""),
+            "environment": step.get("environment", []),
             "status": "pending",
             "spec_file": None,
             "rewrites": 0,

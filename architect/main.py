@@ -14,7 +14,7 @@ import threading
 import time
 
 from .state import init_state, save_state, load_state, add_steps
-from .planner import decompose_goal, rewrite_task, topological_sort
+from .planner import decompose_goal, rewrite_task, topological_sort, critique_and_refine_plan
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import (
     run_orchestrator,
@@ -352,6 +352,11 @@ def main():
             state["status"] = "failed"
             save_state(state)
             sys.exit(1)
+
+        # Critique and refine if multi-step plan
+        if len(steps) > 1:
+            logger.info("  Critiquing plan...")
+            steps = critique_and_refine_plan(goal, steps)
 
         state = add_steps(state, steps)
         logger.info("  Decomposed into %d step(s):", len(steps))

@@ -21,6 +21,7 @@ from .executor import (
     extract_sandbox_stdout,
     extract_sandbox_stderr,
     extract_workspace_files,
+    parse_uas_result,
     scan_workspace_files,
     MAX_CONTEXT_LENGTH,
 )
@@ -372,6 +373,16 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             step["files_written"] = extract_workspace_files(
                 result["stderr"]
             )
+            # Parse structured UAS_RESULT if present
+            uas_result = parse_uas_result(result["stderr"])
+            if uas_result:
+                step["uas_result"] = uas_result
+                if uas_result.get("files_written"):
+                    step["files_written"] = list(set(
+                        step["files_written"] + uas_result["files_written"]
+                    ))
+                if uas_result.get("summary"):
+                    step["summary"] = uas_result["summary"]
             step["error"] = ""
             step["elapsed"] = time.monotonic() - step_start
             _save_state_threadsafe(state)

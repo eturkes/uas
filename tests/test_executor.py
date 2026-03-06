@@ -10,6 +10,7 @@ from architect.executor import (
     extract_sandbox_stdout,
     extract_sandbox_stderr,
     extract_workspace_files,
+    parse_uas_result,
     truncate_output,
     find_engine,
     RUN_TIMEOUT,
@@ -244,6 +245,48 @@ class TestExtractWorkspaceFiles:
         files = extract_workspace_files(log)
         assert "/workspace/analysis.json" in files
         assert "/workspace/summary.txt" in files
+
+
+class TestParseUasResult:
+    def test_valid_result_in_orchestrator_output(self):
+        output = (
+            "stdout:\nsome output\n"
+            'UAS_RESULT: {"status": "ok", "files_written": ["a.txt"], "summary": "done"}\n'
+            "Exit code: 0"
+        )
+        result = parse_uas_result(output)
+        assert result is not None
+        assert result["status"] == "ok"
+        assert result["files_written"] == ["a.txt"]
+
+    def test_no_result_line(self):
+        assert parse_uas_result("stdout:\njust regular output\nExit code: 0") is None
+
+    def test_invalid_json(self):
+        assert parse_uas_result("UAS_RESULT: {bad json}\n") is None
+
+    def test_empty_string(self):
+        assert parse_uas_result("") is None
+
+    def test_error_result(self):
+        output = 'UAS_RESULT: {"status": "error", "error": "file missing"}\n'
+        result = parse_uas_result(output)
+        assert result is not None
+        assert result["status"] == "error"
+
+    def test_result_among_other_output(self):
+        output = (
+            "--- Attempt 1/3 ---\n"
+            "Querying LLM...\n"
+            "Executing in sandbox...\n"
+            "Exit code: 0\n"
+            "stdout:\nProcessing data...\n"
+            'UAS_RESULT: {"status": "ok", "files_written": [], "summary": "processed"}\n'
+            "\nSUCCESS on attempt 1."
+        )
+        result = parse_uas_result(output)
+        assert result is not None
+        assert result["status"] == "ok"
 
 
 class TestStdoutTruncation:

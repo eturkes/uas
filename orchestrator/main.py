@@ -1,8 +1,10 @@
 """Orchestrator entry point: Build-Run-Evaluate loop."""
 
 import argparse
+import json
 import logging
 import os
+import re
 import sys
 
 from .llm_client import get_llm_client
@@ -13,6 +15,23 @@ MAX_RETRIES = 3
 MAX_TASK_LENGTH = 10000
 
 logger = logging.getLogger(__name__)
+
+_UAS_RESULT_PATTERN = re.compile(r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE)
+
+
+def parse_uas_result(stdout: str) -> dict | None:
+    """Extract the UAS_RESULT JSON from stdout if present.
+
+    Looks for a line matching: UAS_RESULT: {"status": "ok", ...}
+    Returns the parsed dict or None if not found/invalid.
+    """
+    match = _UAS_RESULT_PATTERN.search(stdout)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except (json.JSONDecodeError, ValueError):
+        return None
 
 
 def configure_logging(verbose: bool = False):
@@ -43,47 +62,122 @@ def get_task(args) -> str:
     return sys.stdin.read().strip()
 
 
-def build_prompt(task: str, attempt: int, previous_error: str | None = None) -> str:
-    prompt = """\
-You are a Python code generator running inside an isolated container.
+def build_prompt(task: str, attempt: int, previous_error: str | None = None,
+                 previous_code: str | None = None,
+                 environment: list[str] | None = None) -> str:
+    """Build the structured prompt for code generation.
 
-## Instructions
-- Respond with a SINGLE fenced code block tagged as ```python.
-- Do NOT include any explanation, commentary, or text outside the code block.
-- The script must be complete and self-contained (all imports included).
+    Uses XML tags to separate role, environment, task, constraints,
+    and verification sections for clarity.
+    """
+    env_setup = ""
+    if environment:
+        pkgs = " ".join(environment)
+        env_setup = (
+            f"\n- Required packages for this task: {pkgs}\n"
+            "- Install them at the top of your script using subprocess:\n"
+            "  subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', "
+            f"'{pkgs}'], check=True)\n"
+        )
 
-## Environment
-- Python 3.x is available with full root access.
-- The workspace directory is in the WORKSPACE environment variable.
-- Always resolve file paths relative to the workspace:
-  ```python
-  import os
-  workspace = os.environ.get("WORKSPACE", "/workspace")
-  path = os.path.join(workspace, "myfile.txt")
-  ```
-- Full unrestricted network access. Fetch URLs, call APIs, scrape sites freely.
-- Install any packages you need without hesitation (pip install, apt-get install, etc.).
-- You have complete autonomy within this environment. No resource limits.
-- Output results to stdout/stderr.
+    prompt = f"""\
+<role>
+You are an expert Python engineer generating production-quality scripts
+inside an isolated container. Respond with a SINGLE fenced code block
+tagged as ```python. Do NOT include any explanation or text outside the
+code block. The script must be complete and self-contained.
+</role>
 
-## Constraints
+<environment>
+- Python 3.12 with full root access.
+- Workspace directory: use os.environ.get("WORKSPACE", "/workspace").
+- Always resolve file paths with os.path.join(workspace, ...).
+- Full unrestricted network access. Fetch URLs, call APIs, scrape freely.
+- Install any packages you need without hesitation (pip install, apt-get).
+- You have complete autonomy. No resource limits.{env_setup}
+</environment>
+
+<task>
+{task}
+</task>
+
+<constraints>
 - Exit with code 0 on success, non-zero on failure.
-- Print results to stdout.
-- Print errors to stderr.
+- Print results to stdout, errors to stderr.
 - Do not use input() or any interactive prompts.
+- Wrap network requests in retries with exponential backoff.
+- Always use os.path.join(workspace, ...) for file paths.
+- Check if files exist before reading them.
+</constraints>
 
-## Task
-"""
-    prompt += task + "\n"
+<verification>
+At the end of your script, include a self-verification section that:
+1. Checks that any output files actually exist and are non-empty.
+2. Validates the output format if applicable.
+3. Prints a machine-readable summary as the LAST line of stdout:
+   UAS_RESULT: {{"status": "ok", "files_written": [...], "summary": "..."}}
+   If verification fails, exit with code 1 and print:
+   UAS_RESULT: {{"status": "error", "error": "description of what failed"}}
+</verification>"""
 
     if previous_error and attempt > 1:
-        prompt += f"""
-## Previous Error (attempt {attempt - 1})
+        code_section = ""
+        if previous_code:
+            code_section = (
+                f"\nThe script that failed:\n```python\n{previous_code}\n```\n"
+            )
+
+        if attempt >= MAX_RETRIES:
+            # Final attempt — maximally defensive
+            prompt += f"""
+
+<previous_error attempt="{attempt - 1}">
+{code_section}
+Error output:
 ```
 {previous_error}
 ```
-Fix the error above and provide a corrected script.
-"""
+
+This is the FINAL attempt. Be maximally defensive:
+- Add try/except around every external call.
+- Validate all inputs before use.
+- Include detailed error messages in every except block.
+- Do NOT repeat the same approach if it failed before.
+- Use a fundamentally different strategy if needed.
+
+Before writing the script, analyze the root cause in <analysis> tags.
+</previous_error>"""
+        elif attempt > 2:
+            # Second retry — different strategy
+            prompt += f"""
+
+<previous_error attempt="{attempt - 1}">
+{code_section}
+Error output:
+```
+{previous_error}
+```
+
+The previous approach failed. Do NOT repeat the same approach.
+Identify what went wrong and use a fundamentally different strategy.
+
+Before writing the script, analyze the root cause in <analysis> tags.
+</previous_error>"""
+        else:
+            # First retry
+            prompt += f"""
+
+<previous_error attempt="{attempt - 1}">
+{code_section}
+Error output:
+```
+{previous_error}
+```
+
+Before writing the corrected script, analyze the root cause of this
+error in <analysis> tags, then write the fixed script.
+</previous_error>"""
+
     return prompt
 
 
@@ -120,17 +214,19 @@ def main():
 
     client = get_llm_client()
     previous_error = None
+    previous_code = None
 
     for attempt in range(1, MAX_RETRIES + 1):
         logger.info("\n--- Attempt %d/%d ---", attempt, MAX_RETRIES)
 
-        prompt = build_prompt(task, attempt, previous_error)
+        prompt = build_prompt(task, attempt, previous_error, previous_code)
         logger.info("Querying LLM...")
         response = client.generate(prompt)
 
         code = extract_code(response)
         if not code:
             previous_error = "Failed to extract code block from LLM response."
+            previous_code = None
             logger.error("%s", previous_error)
             continue
 
@@ -146,9 +242,13 @@ def main():
             logger.info("stderr:\n%s", result["stderr"])
 
         if result["exit_code"] == 0:
+            uas_result = parse_uas_result(result["stdout"] or "")
+            if uas_result:
+                logger.info("UAS_RESULT: %s", json.dumps(uas_result))
             logger.info("\nSUCCESS on attempt %d.", attempt)
             sys.exit(0)
 
+        previous_code = code
         previous_error = (
             result["stderr"] or result["stdout"] or "Non-zero exit code"
         )

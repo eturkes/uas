@@ -273,6 +273,8 @@ _STDERR_PATTERN = re.compile(
 
 _FILES_PATTERN = re.compile(r"(/workspace/[\w./\-]+)")
 
+_UAS_RESULT_PATTERN = re.compile(r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE)
+
 
 def truncate_output(text: str, max_length: int = MAX_CONTEXT_LENGTH) -> str:
     """Truncate text to max_length, appending a note if truncated."""
@@ -366,3 +368,20 @@ def extract_workspace_files(orchestrator_output: str) -> list[str]:
             seen.add(m)
             files.append(m)
     return files
+
+
+def parse_uas_result(orchestrator_output: str) -> dict | None:
+    """Extract a UAS_RESULT JSON line from orchestrator output.
+
+    Searches the full orchestrator stderr/stdout for a line matching:
+        UAS_RESULT: {"status": "ok", ...}
+    Returns the parsed dict or None if not found/invalid.
+    """
+    import json
+    match = _UAS_RESULT_PATTERN.search(orchestrator_output)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except (json.JSONDecodeError, ValueError):
+        return None

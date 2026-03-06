@@ -1,4 +1,4 @@
-"""Tests for orchestrator.main: build_prompt, get_task, and main loop."""
+"""Tests for orchestrator.main: build_prompt, parse_uas_result, get_task, and main loop."""
 
 import argparse
 import io
@@ -7,43 +7,122 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestrator.main import build_prompt, get_task, main, MAX_RETRIES
+from orchestrator.main import build_prompt, get_task, main, parse_uas_result, MAX_RETRIES
 
 
 class TestBuildPrompt:
     def test_first_attempt_no_error(self):
         prompt = build_prompt("Write hello world", attempt=1)
         assert "Write hello world" in prompt
-        assert "Previous Error" not in prompt
+        assert "previous_error" not in prompt
 
-    def test_includes_environment_section(self):
+    def test_includes_xml_role_section(self):
         prompt = build_prompt("any task", attempt=1)
-        assert "Environment" in prompt
+        assert "<role>" in prompt
+        assert "</role>" in prompt
+        assert "expert Python engineer" in prompt
+
+    def test_includes_xml_environment_section(self):
+        prompt = build_prompt("any task", attempt=1)
+        assert "<environment>" in prompt
+        assert "</environment>" in prompt
         assert "WORKSPACE" in prompt
 
-    def test_includes_constraints(self):
+    def test_includes_xml_task_section(self):
+        prompt = build_prompt("do something", attempt=1)
+        assert "<task>" in prompt
+        assert "do something" in prompt
+        assert "</task>" in prompt
+
+    def test_includes_xml_constraints_section(self):
         prompt = build_prompt("any task", attempt=1)
+        assert "<constraints>" in prompt
+        assert "</constraints>" in prompt
         assert "Exit with code 0" in prompt
         assert "stdout" in prompt
+
+    def test_includes_xml_verification_section(self):
+        prompt = build_prompt("any task", attempt=1)
+        assert "<verification>" in prompt
+        assert "</verification>" in prompt
+        assert "UAS_RESULT" in prompt
 
     def test_includes_sandbox_constraints(self):
         prompt = build_prompt("any task", attempt=1)
         assert "unrestricted network access" in prompt
         assert "Install any packages" in prompt
 
+    def test_includes_common_failure_guidance(self):
+        prompt = build_prompt("any task", attempt=1)
+        assert "exponential backoff" in prompt
+        assert "os.path.join" in prompt
+        assert "Check if files exist" in prompt
+
     def test_with_previous_error(self):
         prompt = build_prompt("fix it", attempt=2, previous_error="NameError: x")
-        assert "Previous Error (attempt 1)" in prompt
+        assert "<previous_error" in prompt
         assert "NameError: x" in prompt
-        assert "Fix the error" in prompt
+        assert "analysis" in prompt
+
+    def test_with_previous_error_includes_code(self):
+        prompt = build_prompt("fix it", attempt=2,
+                              previous_error="NameError: x",
+                              previous_code="print(x)")
+        assert "print(x)" in prompt
+        assert "script that failed" in prompt
 
     def test_no_error_section_on_attempt1_even_with_error(self):
         prompt = build_prompt("task", attempt=1, previous_error="some error")
-        assert "Previous Error" not in prompt
+        assert "previous_error" not in prompt
 
     def test_no_error_section_when_error_is_none(self):
         prompt = build_prompt("task", attempt=2, previous_error=None)
-        assert "Previous Error" not in prompt
+        assert "previous_error" not in prompt
+
+    def test_final_attempt_defensive_instructions(self):
+        prompt = build_prompt("task", attempt=MAX_RETRIES,
+                              previous_error="error",
+                              previous_code="code")
+        assert "FINAL attempt" in prompt
+        assert "maximally defensive" in prompt
+        assert "try/except" in prompt
+
+    def test_second_retry_different_strategy(self):
+        prompt = build_prompt("task", attempt=3,
+                              previous_error="error",
+                              previous_code="code")
+        assert "fundamentally different strategy" in prompt
+
+    def test_environment_hints(self):
+        prompt = build_prompt("task", attempt=1,
+                              environment=["pandas", "requests"])
+        assert "pandas" in prompt
+        assert "requests" in prompt
+        assert "pip" in prompt
+
+
+class TestParseUasResult:
+    def test_valid_result(self):
+        stdout = 'some output\nUAS_RESULT: {"status": "ok", "files_written": ["a.txt"], "summary": "done"}\n'
+        result = parse_uas_result(stdout)
+        assert result is not None
+        assert result["status"] == "ok"
+        assert result["files_written"] == ["a.txt"]
+
+    def test_no_result_line(self):
+        assert parse_uas_result("just regular output\n") is None
+
+    def test_invalid_json(self):
+        assert parse_uas_result("UAS_RESULT: {not valid json}\n") is None
+
+    def test_empty_string(self):
+        assert parse_uas_result("") is None
+
+    def test_error_result(self):
+        stdout = 'UAS_RESULT: {"status": "error", "error": "file missing"}\n'
+        result = parse_uas_result(stdout)
+        assert result is not None
+        assert result["status"] == "error"
 
 
 class TestGetTask:
@@ -158,3 +237,21 @@ class TestMainLoop:
             with pytest.raises(SystemExit) as exc_info:
                 main()
         assert exc_info.value.code == 1
+
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_uas_result_parsed_on_success(self, mock_client_factory, mock_sandbox, mock_args):
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '```python\nprint("hello")\n```'
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.return_value = {
+            "exit_code": 0,
+            "stdout": 'output\nUAS_RESULT: {"status": "ok", "files_written": [], "summary": "done"}\n',
+            "stderr": "",
+        }
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0

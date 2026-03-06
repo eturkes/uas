@@ -350,3 +350,4 @@ If a step produced a `UAS_RESULT` JSON line, parse it and validate:
 - [LLM Code Generation Survey](https://arxiv.org/html/2508.00083v1)
 <!-- DONE: Section 1 -->
 <!-- DONE: Section 2 -->
+<!-- DONE: Section 3 -->

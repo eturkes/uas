@@ -203,14 +203,24 @@ after every significant event (step start, completion, failure, rewrite).
 1. Receive task (CLI arg / env var / stdin)
 2. Verify sandbox works (trivial print statement)
 3. For attempt = 1..3:
-   a. Build prompt (include previous error if retrying)
+   a. Build XML-structured prompt (<role>, <environment>,
+      <task>, <constraints>, <verification>)
    b. Send prompt to LLM -> receive response
    c. Extract code block from response
    d. Execute code in sandbox container
-   e. If exit_code == 0 -> SUCCESS, stop
-   f. Else -> feed error back into prompt, retry
+   e. Parse UAS_RESULT JSON line from stdout if present
+   f. If exit_code == 0 -> SUCCESS, stop
+   g. Else -> escalating error feedback:
+      - 1st retry: root cause analysis + corrected script
+      - 2nd retry: fundamentally different strategy required
+      - 3rd retry: maximally defensive (try/except everywhere)
 4. If all 3 attempts fail -> exit with error
 ```
+
+Scripts are instructed to print a structured summary line:
+`UAS_RESULT: {"status": "ok", "files_written": [...], "summary": "..."}`
+which is parsed by both the Orchestrator and Architect for richer
+context propagation and result validation.
 
 ### Security Model
 

@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 
-from .state import init_state, save_state, load_state, add_steps
+from .state import init_state, save_state, load_state, add_steps, append_scratchpad, read_scratchpad
 from .planner import (
     decompose_goal,
     reflect_and_rewrite,
@@ -234,6 +234,11 @@ def build_context(step: dict, completed_outputs: dict,
                 + "\n</workspace_files>"
             )
 
+    # Scratchpad section
+    scratchpad = read_scratchpad()
+    if scratchpad:
+        parts.append(f"<scratchpad>\n{scratchpad}\n</scratchpad>")
+
     context = "\n\n".join(parts)
 
     # Context length management
@@ -334,6 +339,48 @@ def create_blocker(state: dict, step: dict):
     logger.info("Blocker written to %s", blocker_path)
 
 
+_env_probed = False
+
+
+def _probe_environment():
+    """Run a lightweight environment probe and write results to scratchpad."""
+    global _env_probed
+    if _env_probed:
+        return
+    _env_probed = True
+    import subprocess as _sp
+    lines = ["Environment discovery:"]
+    try:
+        ver = _sp.run(
+            [sys.executable, "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+        lines.append(f"- Python: {ver.stdout.strip()}")
+    except Exception:
+        lines.append("- Python version: unknown")
+    try:
+        pip = _sp.run(
+            [sys.executable, "-m", "pip", "list", "--format=columns"],
+            capture_output=True, text=True, timeout=15,
+        )
+        pkg_lines = pip.stdout.strip().split("\n")
+        lines.append(f"- Installed packages: {len(pkg_lines) - 2}")
+        for p in pkg_lines[:12]:
+            lines.append(f"  {p}")
+        if len(pkg_lines) > 12:
+            lines.append(f"  ... and {len(pkg_lines) - 12} more")
+    except Exception:
+        lines.append("- Installed packages: unknown")
+    try:
+        df = _sp.run(["df", "-h", WORKSPACE], capture_output=True, text=True, timeout=5)
+        df_lines = df.stdout.strip().split("\n")
+        if len(df_lines) >= 2:
+            lines.append(f"- Disk: {df_lines[1]}")
+    except Exception:
+        pass
+    append_scratchpad("\n".join(lines))
+
+
 def execute_step(step: dict, state: dict, completed_outputs: dict,
                  progress_counts: dict | None = None) -> bool:
     """Execute a single step, with spec rewrite retries.
@@ -341,6 +388,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
     Returns True on success, False on unrecoverable failure.
     """
     total = len(state["steps"])
+    _probe_environment()
     context = build_context(step, completed_outputs, state=state,
                             workspace_path=WORKSPACE)
     counts = progress_counts or {"completed": 0, "failed": 0}
@@ -395,6 +443,16 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             logger.info("  Step %s SUCCEEDED.", step["id"])
             if step["output"]:
                 logger.info("  Output: %s", step["output"][:OUTPUT_PREVIEW_LENGTH])
+            # Scratchpad: record success
+            files_info = ""
+            if step.get("files_written"):
+                files_info = f"\nFiles created: {', '.join(step['files_written'])}"
+            summary = step.get("summary", step["output"][:200] if step["output"] else "")
+            append_scratchpad(
+                f"Step {step['id']} ({step['title']}) SUCCEEDED "
+                f"in {step['elapsed']:.1f}s.{files_info}\n"
+                f"Summary: {summary}"
+            )
             return True
 
         # Failed
@@ -405,6 +463,13 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
 
         logger.error("  Step %s FAILED.", step["id"])
         logger.error("  Error: %s", error_info[:LOG_PREVIEW_LENGTH])
+
+        # Scratchpad: record failure
+        append_scratchpad(
+            f"Step {step['id']} ({step['title']}) FAILED "
+            f"(attempt {spec_attempt + 1}).\n"
+            f"Error: {error_info[:500]}"
+        )
 
         if spec_attempt < MAX_SPEC_REWRITES:
             logger.info(

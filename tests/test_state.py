@@ -3,7 +3,7 @@
 import json
 import os
 
-from architect.state import init_state, save_state, load_state, add_steps
+from architect.state import init_state, save_state, load_state, add_steps, append_scratchpad, read_scratchpad
 
 
 class TestInitState:
@@ -68,3 +68,42 @@ class TestAddSteps:
         add_steps(state, [{"title": "S", "description": "D"}])
         loaded = load_state()
         assert len(loaded["steps"]) == 1
+
+
+class TestScratchpad:
+    def test_append_creates_file(self, tmp_workspace):
+        append_scratchpad("first entry")
+        content = read_scratchpad()
+        assert "first entry" in content
+
+    def test_append_adds_timestamp(self, tmp_workspace):
+        append_scratchpad("timestamped")
+        content = read_scratchpad()
+        # Timestamp format: [YYYY-MM-DDTHH:MM:SSZ]
+        assert "[20" in content
+        assert "timestamped" in content
+
+    def test_multiple_entries(self, tmp_workspace):
+        append_scratchpad("entry one")
+        append_scratchpad("entry two")
+        content = read_scratchpad()
+        assert "entry one" in content
+        assert "entry two" in content
+
+    def test_read_empty_returns_empty(self, tmp_workspace):
+        assert read_scratchpad() == ""
+
+    def test_read_truncates_to_max_chars(self, tmp_workspace):
+        # Write a large entry
+        append_scratchpad("x" * 5000)
+        content = read_scratchpad(max_chars=200)
+        assert len(content) <= 250  # 200 + prefix overhead
+        assert "earlier entries omitted" in content
+
+    def test_tail_based_reading(self, tmp_workspace):
+        append_scratchpad("old entry")
+        append_scratchpad("a" * 3000)
+        append_scratchpad("recent entry")
+        content = read_scratchpad(max_chars=500)
+        # Recent entry should be present, old may be truncated
+        assert "recent entry" in content

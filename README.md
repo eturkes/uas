@@ -183,11 +183,14 @@ that enforces self-contained steps with `title`, `description`, and
 
 **Context propagation:** When step N depends on step M, the Architect
 builds structured XML context from step M's output (`<previous_step_output>`,
-`<workspace_files>`, `<verification>` tags). Observation masking replaces
-older dependency outputs with compact summaries, keeping recent outputs in
-full. Workspace files are scanned for previews (with JSON key extraction).
-If context exceeds the limit, it is compressed via the LLM with fallback
-to truncation.
+`<workspace_files>`, `<verification>`, `<scratchpad>` tags). Observation
+masking replaces older dependency outputs with compact summaries, keeping
+recent outputs in full. Workspace files are scanned for previews (with
+JSON key extraction). A persistent scratchpad (`.state/scratchpad.md`)
+accumulates timestamped learnings across steps — successes, failures,
+and environment details — giving all steps visibility into the run's
+history. If context exceeds the limit, it is compressed via the LLM
+with fallback to truncation.
 
 **Self-correction:** If the Orchestrator fails a step (after its own 3
 internal retries), the Architect uses reflection-based error recovery
@@ -203,6 +206,9 @@ exhausted, it halts with `BLOCKER.md`.
 
 **State:** All state is persisted to `.state/state.json`
 after every significant event (step start, completion, failure, rewrite).
+An environment probe runs on the first step, recording Python version,
+installed packages, and disk space to the scratchpad so subsequent steps
+can avoid wrong assumptions about the execution environment.
 
 ### Orchestrator (Build-Run-Evaluate Loop)
 

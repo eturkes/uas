@@ -352,3 +352,4 @@ If a step produced a `UAS_RESULT` JSON line, parse it and validate:
 <!-- DONE: Section 2 -->
 <!-- DONE: Section 3 -->
 <!-- DONE: Section 4 -->
+<!-- DONE: Section 5 -->

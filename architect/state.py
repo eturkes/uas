@@ -8,6 +8,7 @@ WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 STATE_DIR = os.path.join(WORKSPACE, ".state")
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 SPECS_DIR = os.path.join(STATE_DIR, "specs")
+SCRATCHPAD_FILE = os.path.join(STATE_DIR, "scratchpad.md")
 
 
 def init_state(goal: str) -> dict:
@@ -41,6 +42,34 @@ def load_state() -> dict | None:
         return data
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def append_scratchpad(entry: str):
+    """Append a timestamped entry to the scratchpad file."""
+    os.makedirs(STATE_DIR, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(SCRATCHPAD_FILE, "a") as f:
+        f.write(f"\n## [{timestamp}]\n{entry}\n")
+
+
+def read_scratchpad(max_chars: int = 2000) -> str:
+    """Read the most recent scratchpad entries up to max_chars.
+
+    Uses tail-based reading to prioritize the most recent entries.
+    """
+    if not os.path.exists(SCRATCHPAD_FILE):
+        return ""
+    try:
+        with open(SCRATCHPAD_FILE) as f:
+            content = f.read()
+    except OSError:
+        return ""
+    if not content:
+        return ""
+    if len(content) <= max_chars:
+        return content
+    # Return the tail (most recent entries)
+    return "...[earlier entries omitted]\n" + content[-max_chars:]
 
 
 def add_steps(state: dict, steps: list[dict]) -> dict:

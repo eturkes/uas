@@ -96,12 +96,19 @@ def _run_container(code: str, timeout: int) -> dict:
 
     container_name = f"uas-sandbox-{uuid.uuid4().hex[:8]}"
 
+    user_args = []
+    host_uid = os.environ.get("UAS_HOST_UID")
+    host_gid = os.environ.get("UAS_HOST_GID")
+    if host_uid and host_uid != "0":
+        user_args = ["--user", f"{host_uid}:{host_gid or host_uid}"]
+
     try:
         result = subprocess.run(
             [
                 "podman", "--storage-driver=vfs",
                 "run", "--rm",
                 "--name", container_name,
+            ] + user_args + [
                 "-v", f"{script_path}:/sandbox/script.py:ro,Z",
                 "-v", f"{WORKSPACE_PATH}:/workspace:Z",
                 "-e", "WORKSPACE=/workspace",

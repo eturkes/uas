@@ -62,6 +62,8 @@ mkdir -p "$AUTH_DIR"
 exec "$ENGINE" run --rm -it \
     --privileged \
     -e IS_SANDBOX=1 \
+    -e UAS_HOST_UID="$(id -u)" \
+    -e UAS_HOST_GID="$(id -g)" \
     -v "$AUTH_DIR:/root/.claude:Z" \
     -v "$PWD:/workspace:Z" \
     -w /workspace \

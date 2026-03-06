@@ -2,6 +2,16 @@
 set -euo pipefail
 
 # =============================================================================
+# File ownership fix: ensure workspace files are owned by the launching user
+# =============================================================================
+if [ -n "${UAS_HOST_UID:-}" ] && [ "${UAS_HOST_UID}" != "0" ]; then
+    _fix_ownership() {
+        chown -R "${UAS_HOST_UID}:${UAS_HOST_GID:-$UAS_HOST_UID}" /workspace 2>/dev/null || true
+    }
+    trap _fix_ownership EXIT
+fi
+
+# =============================================================================
 # Non-interactive mode: skip Stage 1 when called programmatically
 # =============================================================================
 if [ -n "${UAS_TASK:-}" ] || [ -n "${UAS_GOAL:-}" ]; then

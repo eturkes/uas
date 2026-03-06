@@ -241,6 +241,7 @@ def _run_container(task: str, extra_env: dict | None = None) -> dict:
         "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL",
         "UAS_SANDBOX_IMAGE", "UAS_SANDBOX_TIMEOUT",
         "UAS_LLM_TIMEOUT", "UAS_MODEL", "UAS_VERBOSE",
+        "UAS_HOST_UID", "UAS_HOST_GID",
     ]:
         val = os.environ.get(var)
         if val:
@@ -267,12 +268,18 @@ def _run_container(task: str, extra_env: dict | None = None) -> dict:
             auth_args = ["-v", f"{auth_dir}:/root/.claude:ro,Z"]
             break
 
+    user_args = []
+    host_uid = os.environ.get("UAS_HOST_UID")
+    host_gid = os.environ.get("UAS_HOST_GID")
+    if host_uid and host_uid != "0":
+        user_args = ["--user", f"{host_uid}:{host_gid or host_uid}"]
+
     cmd = _podman_cmd(
         engine, "run", "--rm",
         "--name", container_name,
         "--entrypoint", "python3",
         "-v", f"{workspace}:/workspace:Z",
-    ) + auth_args + env_args + [
+    ) + user_args + auth_args + env_args + [
         SANDBOX_IMAGE_NAME,
         "-m", "orchestrator.main",
     ]

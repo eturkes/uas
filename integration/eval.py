@@ -168,28 +168,6 @@ def run_check(check, workspace):
             "detail": f"found {len(matches)}: {[os.path.relpath(m, workspace) for m in matches[:5]]}" if matches else "no matches",
         }
 
-    if ctype == "output_gt":
-        state_path = os.path.join(workspace, ".state", "state.json")
-        if not os.path.exists(state_path):
-            return {
-                "type": ctype,
-                "passed": False,
-                "detail": "state.json not found",
-            }
-        with open(state_path) as f:
-            state = json.load(f)
-        outputs = " ".join(s.get("output", "") for s in state.get("steps", []))
-        numbers = re.findall(r"\d+(?:\.\d+)?", outputs)
-        threshold = check.get("value", 0)
-        found = any(float(n) > threshold for n in numbers)
-        detail = f"found numbers: {numbers[:5]}" if numbers else "no numbers in output"
-        return {
-            "type": ctype,
-            "value": threshold,
-            "passed": found,
-            "detail": detail,
-        }
-
     return {"type": ctype, "passed": False, "detail": "unknown check type"}
 
 

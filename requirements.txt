@@ -1,5 +1,5 @@
-# No external Python dependencies required.
-# LLM calls are handled via the Claude Code CLI.
+# Terminal dashboard
+rich>=13.0
 
 # Testing
 pytest>=7.0

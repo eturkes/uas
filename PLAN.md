@@ -83,7 +83,7 @@ and content-addressed IDs.
 
 ---
 
-## Section 2: Rich Terminal Dashboard
+## Section 2: Rich Terminal Dashboard -- DONE
 
 **Goal:** Replace print-based progress reporting with a Rich Live terminal
 display that shows the DAG structure, step statuses, timing, and errors in

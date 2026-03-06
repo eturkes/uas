@@ -34,6 +34,7 @@ from .executor import (
 )
 from .events import EventType, get_event_log, reset_event_log
 from .provenance import get_provenance_graph, reset_provenance_graph
+from .dashboard import Dashboard
 
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "4"))
@@ -538,7 +539,8 @@ def validate_workspace(state: dict, workspace: str) -> dict:
 
 
 def execute_step(step: dict, state: dict, completed_outputs: dict,
-                 progress_counts: dict | None = None) -> bool:
+                 progress_counts: dict | None = None,
+                 dashboard: Dashboard | None = None) -> bool:
     """Execute a single step, with spec rewrite retries.
 
     Returns True on success, False on unrecoverable failure.
@@ -557,8 +559,13 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
     prev_error_entity = None
 
     for spec_attempt in range(1 + MAX_SPEC_REWRITES):
-        report_progress(step, total, counts["completed"], counts["failed"],
-                        attempt=spec_attempt + 1)
+        if dashboard:
+            dashboard.report_progress(step, total, counts["completed"],
+                                      counts["failed"],
+                                      attempt=spec_attempt + 1)
+        else:
+            report_progress(step, total, counts["completed"], counts["failed"],
+                            attempt=spec_attempt + 1)
         label = f"Step {step['id']}/{total}: {step['title']}"
         if spec_attempt > 0:
             label += f" (rewrite {spec_attempt}/{MAX_SPEC_REWRITES})"
@@ -580,6 +587,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         # Execute
         step["status"] = "executing"
         _save_state_threadsafe(state)
+        if dashboard:
+            dashboard.update(state)
 
         event_log.emit(EventType.LLM_CALL_START, step_id=step["id"],
                        attempt=spec_attempt + 1)
@@ -638,6 +647,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 step["error"] = ""
                 step["elapsed"] = time.monotonic() - step_start
                 _save_state_threadsafe(state)
+                if dashboard:
+                    dashboard.update(state)
                 logger.info("  Step %s SUCCEEDED.", step["id"])
 
                 # Record provenance for successful step
@@ -688,6 +699,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         step["error"] = error_info
         step["status"] = "failed"
         _save_state_threadsafe(state)
+        if dashboard:
+            dashboard.update(state)
 
         # Record error provenance for cross-attempt linking
         prev_error_entity = prov.add_entity(
@@ -727,6 +740,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 )
             step["rewrites"] = spec_attempt + 1
             _save_state_threadsafe(state)
+            if dashboard:
+                dashboard.update(state)
             event_log.emit(EventType.REWRITE_COMPLETE, step_id=step["id"],
                            attempt=spec_attempt + 1)
         else:
@@ -872,13 +887,18 @@ def main():
             deps = f" (depends on {s['depends_on']})" if s["depends_on"] else ""
             logger.info("    %s. %s%s", s["id"], s["title"], deps)
 
+    # Create dashboard
+    dashboard = Dashboard(state)
+
     # Dry-run: show the plan and exit
     if dry_run:
-        print_plan(state)
+        dashboard.print_plan(state)
         sys.exit(0)
 
     # Phase 2: Execute (resume-aware, parallel where possible)
     logger.info("\nPhase 2: Executing steps via Orchestrator...")
+    dashboard.set_phase("executing")
+    dashboard.start()
     completed_outputs = {}
     step_by_id = {s["id"]: s for s in state["steps"]}
     levels = topological_sort(state["steps"])
@@ -908,7 +928,8 @@ def main():
         if len(pending) == 1:
             # Single step — no threading overhead needed
             step = pending[0]
-            success = execute_step(step, state, completed_outputs, progress_counts)
+            success = execute_step(step, state, completed_outputs,
+                                   progress_counts, dashboard=dashboard)
             if not success:
                 progress_counts["failed"] += 1
                 state["total_elapsed"] = time.monotonic() - run_start
@@ -922,7 +943,7 @@ def main():
                     "total_elapsed": state["total_elapsed"],
                 })
                 prov.save()
-                print_summary(state)
+                dashboard.finish(state)
                 logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
                 sys.exit(1)
             progress_counts["completed"] += 1
@@ -943,7 +964,7 @@ def main():
                 future_to_step = {
                     executor.submit(
                         execute_step, step, state, completed_outputs,
-                        progress_counts,
+                        progress_counts, dashboard,
                     ): step
                     for step in pending
                 }
@@ -980,7 +1001,7 @@ def main():
                     "total_elapsed": state["total_elapsed"],
                 })
                 prov.save()
-                print_summary(state)
+                dashboard.finish(state)
                 logger.error("HALTED: Step %s failed irrecoverably.",
                              failed_step["id"])
                 sys.exit(1)
@@ -1012,7 +1033,7 @@ def main():
     logger.info("\n%s", "=" * 60)
     logger.info("  ALL STEPS COMPLETED SUCCESSFULLY")
     logger.info("%s", "=" * 60)
-    print_summary(state)
+    dashboard.finish(state)
     logger.info(
         "State saved to: %s",
         os.path.join(".state", "state.json"),

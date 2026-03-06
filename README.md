@@ -138,6 +138,8 @@ interactive Claude Code setup and proceeds directly to execution.
 ## Requirements
 
 - [Podman](https://podman.io/) or [Docker](https://www.docker.com/)
+- Python packages: `rich>=13.0` (for terminal dashboard; falls back to
+  plain text if unavailable)
 
 ## Project Structure
 
@@ -155,7 +157,8 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── executor.py           # Builds uas-sandbox image, runs Orchestrator
 │   ├── state.py              # JSON state persistence
 │   ├── events.py             # Structured event log system
-│   └── provenance.py         # W3C PROV-inspired provenance graph
+│   ├── provenance.py         # W3C PROV-inspired provenance graph
+│   └── dashboard.py          # Rich terminal dashboard
 ├── orchestrator/             # Execution Orchestrator (containerized)
 │   ├── main.py               # Build-Run-Evaluate loop
 │   ├── llm_client.py         # Claude Code CLI subprocess wrapper
@@ -253,6 +256,12 @@ after every significant event (step start, completion, failure, rewrite).
 An environment probe runs on the first step, recording Python version,
 installed packages, and disk space to the scratchpad so subsequent steps
 can avoid wrong assumptions about the execution environment.
+
+**Terminal dashboard:** During execution, a Rich Live dashboard shows
+the DAG structure with step statuses (pending/executing/completed/failed),
+active step details, and a timing breakdown. When stdout is not a TTY
+or `rich` is not installed, it falls back to the original print-based
+progress reporting.
 
 **Event log & provenance:** When `--events` is passed (or `UAS_EVENTS`
 is set), every significant action is recorded as a typed event in

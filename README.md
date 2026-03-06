@@ -137,6 +137,7 @@ interactive Claude Code setup and proceeds directly to execution.
 ├── orchestrator/             # Execution Orchestrator (containerized)
 │   ├── main.py               # Build-Run-Evaluate loop
 │   ├── llm_client.py         # Claude Code CLI subprocess wrapper
+│   ├── claude_config.py      # CLAUDE.md template for workspace guidance
 │   ├── sandbox.py            # Sandboxed code execution (local or container)
 │   └── parser.py             # Code extraction from LLM responses
 ├── tests/                    # Unit tests (pytest)
@@ -203,6 +204,11 @@ with up to 4 progressive escalation rewrites:
 Outputs are red-flagged and resampled if they show signs of confusion
 (excessive length or verbatim error repetition). If all rewrites are
 exhausted, it halts with `BLOCKER.md`.
+
+**Workspace guidance:** Before each orchestrator invocation, the Executor
+writes a `.claude/CLAUDE.md` file to the workspace. This gives the Claude
+Code CLI persistent instructions on coding standards, environment details,
+output format (`UAS_RESULT` JSON), and error handling best practices.
 
 **State:** All state is persisted to `.state/state.json`
 after every significant event (step start, completion, failure, rewrite).

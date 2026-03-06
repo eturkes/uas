@@ -8,6 +8,8 @@ import subprocess
 import sys
 import uuid
 
+from orchestrator.claude_config import get_claude_md_content
+
 SANDBOX_IMAGE_NAME = "uas-sandbox"
 MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "8000"))
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
@@ -102,11 +104,35 @@ def ensure_image(engine: str):
             os.unlink(dockerfile_path)
 
 
+def ensure_claude_md(workspace: str) -> None:
+    """Write .claude/CLAUDE.md to the workspace if missing or outdated."""
+    claude_dir = os.path.join(workspace, ".claude")
+    claude_md_path = os.path.join(claude_dir, "CLAUDE.md")
+    content = get_claude_md_content()
+    if os.path.isfile(claude_md_path):
+        try:
+            with open(claude_md_path, "r") as f:
+                if f.read() == content:
+                    return
+        except OSError:
+            pass
+    os.makedirs(claude_dir, exist_ok=True)
+    with open(claude_md_path, "w") as f:
+        f.write(content)
+    logger.debug("Wrote .claude/CLAUDE.md to %s", workspace)
+
+
 def run_orchestrator(task: str) -> dict:
     """Run the Orchestrator with the given task.
 
     Returns dict with exit_code, stdout, stderr.
     """
+    workspace = os.environ.get("UAS_WORKSPACE", os.getcwd())
+    try:
+        ensure_claude_md(workspace)
+    except OSError as e:
+        logger.warning("Could not write .claude/CLAUDE.md: %s", e)
+
     if EXECUTION_MODE == "local":
         return _run_local(task)
     return _run_container(task)

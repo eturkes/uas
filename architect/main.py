@@ -708,12 +708,16 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                        data={"context_length": len(context)})
 
         # Generate UAS spec
+        if dashboard:
+            dashboard.set_step_activity(step["id"], "Generating spec...")
         spec_file = generate_spec(step, total, context)
         logger.info("  Spec written: %s", spec_file)
 
         # Build task for Orchestrator
         task = build_task_from_spec(step, context)
         logger.info("  Sending to Orchestrator...")
+        if dashboard:
+            dashboard.set_step_activity(step["id"], "Running orchestrator...")
 
         # Execute
         step["status"] = "executing"
@@ -745,6 +749,12 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         timing["llm_time"] += max(orch_elapsed - sandbox_t, 0.0)
 
         logger.info("  Orchestrator exit code: %s (%.1fs)", result["exit_code"], orch_elapsed)
+        if dashboard:
+            status = "succeeded" if result["exit_code"] == 0 else "failed"
+            dashboard.log(
+                f"Step {step['id']} orchestrator {status} "
+                f"(exit {result['exit_code']}, {orch_elapsed:.1f}s)"
+            )
 
         if result["exit_code"] == 0:
             step["output"] = extract_sandbox_stdout(result["stderr"])
@@ -767,6 +777,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             failure_reason = validate_uas_result(step, WORKSPACE)
             if failure_reason is None and step.get("verify"):
                 logger.info("  Verifying step output...")
+                if dashboard:
+                    dashboard.set_step_activity(step["id"], "Verifying output...")
                 event_log.emit(EventType.VERIFICATION_START,
                                step_id=step["id"])
                 failure_reason = verify_step_output(step, WORKSPACE)
@@ -816,6 +828,19 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 _save_state_threadsafe(state)
                 if dashboard:
                     dashboard.update(state)
+                if dashboard:
+                    dashboard.set_step_activity(step["id"], "")
+                    summary = step.get("summary", "")
+                    files = step.get("files_written", [])
+                    parts = []
+                    if summary:
+                        parts.append(summary[:80])
+                    if files:
+                        parts.append(f"Files: {', '.join(files[:3])}")
+                    if parts:
+                        dashboard.log(f"Step {step['id']} done: {'; '.join(parts)}")
+                    else:
+                        dashboard.log(f"Step {step['id']} completed successfully")
                 logger.info("  Step %s SUCCEEDED.", step["id"])
 
                 # Record provenance for successful step
@@ -893,6 +918,18 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 spec_attempt + 1,
                 MAX_SPEC_REWRITES,
             )
+            if dashboard:
+                rewrite_label = {
+                    0: "Reflecting on failure...",
+                    1: "Trying alternative strategy...",
+                    2: "Decomposing into sub-phases...",
+                    3: "Final defensive rewrite...",
+                }.get(spec_attempt, "Rewriting...")
+                dashboard.set_step_activity(step["id"], rewrite_label)
+                dashboard.log(
+                    f"Step {step['id']} failed (attempt {spec_attempt + 1}), "
+                    f"rewriting ({spec_attempt + 1}/{MAX_SPEC_REWRITES})"
+                )
             if spec_attempt == 2:
                 # 3rd failure: decompose into sub-phases
                 logger.info("  Escalation: decomposing step into sub-phases...")
@@ -1073,6 +1110,8 @@ def main():
     completed_outputs = {}
     step_by_id = {s["id"]: s for s in state["steps"]}
     levels = topological_sort(state["steps"])
+    dashboard.log(f"Starting execution: {len(state['steps'])} steps, "
+                  f"{len(levels)} levels")
     progress_counts = {"completed": 0, "failed": 0}
     run_start = time.monotonic()
 
@@ -1129,6 +1168,10 @@ def main():
             workers = min(len(pending), MAX_PARALLEL) if MAX_PARALLEL else len(pending)
             logger.info("  Running %d independent steps in parallel (max %d workers): %s",
                         len(pending), workers, [s["id"] for s in pending])
+            dashboard.log(
+                f"Running {len(pending)} steps in parallel: "
+                + ", ".join(f"#{s['id']}" for s in pending)
+            )
             failed_step = None
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=workers,

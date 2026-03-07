@@ -1,5 +1,6 @@
 """Rich terminal dashboard for real-time UAS execution visualization."""
 
+import collections
 import sys
 import threading
 import time
@@ -27,6 +28,8 @@ STATUS_ICONS = {
     "failed": ("[x]", "red"),
 }
 
+MAX_LOG_LINES = 12
+
 
 class Dashboard:
     """Rich Live terminal dashboard showing DAG structure, step statuses, and timing.
@@ -39,6 +42,8 @@ class Dashboard:
         self._state = state
         self._phase = "initializing"
         self._active_steps: list[int] = []
+        self._step_activities: dict[int, str] = {}
+        self._log_lines: collections.deque[str] = collections.deque(maxlen=MAX_LOG_LINES)
         self._start_time = time.monotonic()
         self._lock = threading.Lock()
         self._file = file if file is not None else sys.stderr
@@ -71,6 +76,30 @@ class Dashboard:
         with self._lock:
             self._phase = phase
 
+    def set_step_activity(self, step_id: int, activity: str):
+        """Set the current sub-activity for a step (e.g. 'Generating code', 'Running sandbox')."""
+        with self._lock:
+            self._step_activities[step_id] = activity
+        if self._live:
+            try:
+                self._live.update(self._render())
+            except Exception:
+                pass
+        else:
+            print(f"  Step {step_id}: {activity}", file=self._file)
+
+    def log(self, message: str):
+        """Append a message to the activity log shown in the dashboard."""
+        with self._lock:
+            self._log_lines.append(message)
+        if self._live:
+            try:
+                self._live.update(self._render())
+            except Exception:
+                pass
+        else:
+            print(f"  {message}", file=self._file)
+
     def update(self, state: dict):
         with self._lock:
             self._state = state
@@ -87,14 +116,22 @@ class Dashboard:
 
     def _fallback_update(self, state: dict):
         """Plain-text fallback when rich is unavailable or not a TTY."""
-        for s in state.get("steps", []):
+        steps = state.get("steps", [])
+        total = len(steps)
+        completed = sum(1 for st in steps if st["status"] == "completed")
+        failed = sum(1 for st in steps if st["status"] == "failed")
+        for s in steps:
             if s["status"] == "executing":
-                total = len(state.get("steps", []))
-                completed = sum(1 for st in state["steps"] if st["status"] == "completed")
-                failed = sum(1 for st in state["steps"] if st["status"] == "failed")
+                activity = self._step_activities.get(s["id"], "")
+                activity_str = f" - {activity}" if activity else ""
                 print(
                     f"[{s['id']}/{total}] Step {s['id']}: \"{s['title']}\" "
-                    f"({completed} completed, {failed} failed)",
+                    f"({completed} completed, {failed} failed){activity_str}",
+                    file=self._file,
+                )
+            elif s["status"] == "completed" and s.get("summary"):
+                print(
+                    f"  Step {s['id']} completed: {s['summary'][:120]}",
                     file=self._file,
                 )
 
@@ -142,13 +179,18 @@ class Dashboard:
 
     def report_progress(self, step: dict, total: int, completed: int,
                         failed: int, attempt: int = 1):
+        msg = (f"Step {step['id']}/{total}: \"{step['title']}\" "
+               f"(attempt {attempt}, {completed} done, {failed} failed)")
+        with self._lock:
+            self._log_lines.append(msg)
         if self._use_rich:
-            return
-        print(
-            f"[{step['id']}/{total}] Step {step['id']}: \"{step['title']}\" "
-            f"(attempt {attempt}, {completed} completed, {failed} failed)",
-            file=self._file,
-        )
+            if self._live:
+                try:
+                    self._live.update(self._render())
+                except Exception:
+                    pass
+        else:
+            print(f"[{step['id']}/{total}] {msg}", file=self._file)
 
     def finish(self, state: dict):
         self.stop()
@@ -227,11 +269,13 @@ class Dashboard:
         layout.split_column(
             Layout(name="header", size=3),
             Layout(name="body"),
+            Layout(name="log", size=min(MAX_LOG_LINES + 2, 8)),
             Layout(name="footer", size=8),
         )
 
         layout["header"].update(self._render_header())
         layout["body"].update(self._render_dag())
+        layout["log"].update(self._render_log())
         layout["footer"].update(self._render_timing())
 
         return layout
@@ -240,13 +284,28 @@ class Dashboard:
         with self._lock:
             goal = self._state.get("goal", "")[:80]
             phase = self._phase
+            steps = self._state.get("steps", [])
+        total = len(steps)
+        completed = sum(1 for s in steps if s["status"] == "completed")
+        failed = sum(1 for s in steps if s["status"] == "failed")
+        executing = sum(1 for s in steps if s["status"] == "executing")
         elapsed = time.monotonic() - self._start_time
+
+        progress = f"{completed}/{total} done"
+        if executing:
+            progress += f", {executing} running"
+        if failed:
+            progress += f", {failed} failed"
+
         text = Text.assemble(
             ("Goal: ", "bold"),
             (goal, ""),
             ("  |  ", "dim"),
             ("Phase: ", "bold"),
             (phase, "cyan"),
+            ("  |  ", "dim"),
+            ("Progress: ", "bold"),
+            (progress, "green" if not failed else "yellow"),
             ("  |  ", "dim"),
             (f"Elapsed: {elapsed:.0f}s", ""),
         )
@@ -255,6 +314,7 @@ class Dashboard:
     def _render_dag(self) -> Panel:
         with self._lock:
             state = self._state
+            step_activities = dict(self._step_activities)
         steps = state.get("steps", [])
         if not steps:
             return Panel("[dim]No steps yet[/dim]", title="DAG")
@@ -278,16 +338,45 @@ class Dashboard:
 
                 step_node = level_branch.add(label)
 
-                # Show detail for executing steps
                 if step["status"] == "executing":
                     rewrites = step.get("rewrites", 0)
                     attempt = rewrites + 1
-                    step_node.add(f"[cyan]Attempt {attempt}[/cyan]")
+                    activity = step_activities.get(sid, "")
+                    activity_str = f" - {activity}" if activity else ""
+                    step_node.add(f"[cyan]Attempt {attempt}{activity_str}[/cyan]")
                     if step.get("error"):
-                        err_preview = step["error"][:100]
+                        err_preview = step["error"][:120]
                         step_node.add(f"[dim red]Last error: {err_preview}[/dim red]")
 
+                elif step["status"] == "completed":
+                    summary = step.get("summary") or (step.get("output") or "")[:100]
+                    if summary:
+                        step_node.add(f"[dim green]{summary[:120]}[/dim green]")
+                    files = step.get("files_written", [])
+                    if files:
+                        step_node.add(f"[dim]Files: {', '.join(files[:5])}"
+                                      f"{'...' if len(files) > 5 else ''}[/dim]")
+
+                elif step["status"] == "failed":
+                    if step.get("error"):
+                        err_preview = step["error"][:120]
+                        step_node.add(f"[dim red]{err_preview}[/dim red]")
+
         return Panel(tree, title="DAG", border_style="green")
+
+    def _render_log(self) -> Panel:
+        """Build the activity log panel."""
+        with self._lock:
+            lines = list(self._log_lines)
+        if not lines:
+            return Panel("[dim]Waiting for activity...[/dim]", title="Activity Log",
+                         border_style="dim")
+        text = Text()
+        for i, line in enumerate(lines):
+            if i > 0:
+                text.append("\n")
+            text.append(line, style="dim" if i < len(lines) - 1 else "")
+        return Panel(text, title="Activity Log", border_style="dim")
 
     def _render_timing(self) -> Table:
         with self._lock:

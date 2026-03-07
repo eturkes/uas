@@ -732,7 +732,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             "UAS_STEP_ID": str(step["id"]),
             "UAS_SPEC_ATTEMPT": str(spec_attempt),
         }
-        result = run_orchestrator(task, extra_env=extra_env)
+        output_cb = None
+        if dashboard and dashboard.use_rich:
+            output_cb = lambda line: dashboard.add_output_line(line)
+        result = run_orchestrator(task, extra_env=extra_env,
+                                  output_callback=output_cb)
         orch_elapsed = time.monotonic() - orch_start
         event_log.emit(EventType.LLM_CALL_COMPLETE, step_id=step["id"],
                        attempt=spec_attempt + 1, duration=orch_elapsed,

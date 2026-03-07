@@ -126,12 +126,15 @@ def ensure_claude_md(workspace: str) -> None:
     logger.debug("Wrote .claude/CLAUDE.md to %s", workspace)
 
 
-def run_orchestrator(task: str, extra_env: dict | None = None) -> dict:
+def run_orchestrator(task: str, extra_env: dict | None = None,
+                     output_callback=None) -> dict:
     """Run the Orchestrator with the given task.
 
     Args:
         task: The task string to pass to the orchestrator.
         extra_env: Optional extra environment variables (e.g. UAS_STEP_ID).
+        output_callback: Optional callable(line: str) invoked for each stderr
+            line as it arrives, enabling real-time output in the dashboard.
 
     Returns dict with exit_code, stdout, stderr.
     """
@@ -147,9 +150,9 @@ def run_orchestrator(task: str, extra_env: dict | None = None) -> dict:
 
     with heartbeat_log("Orchestrator running", interval=30, log=logger):
         if EXECUTION_MODE == "local":
-            result = _run_local(task, extra_env)
+            result = _run_local(task, extra_env, output_callback)
         else:
-            result = _run_container(task, extra_env)
+            result = _run_container(task, extra_env, output_callback)
 
     sandbox_elapsed = _time.monotonic() - sandbox_start
     event_log.emit(EventType.SANDBOX_COMPLETE,
@@ -158,7 +161,68 @@ def run_orchestrator(task: str, extra_env: dict | None = None) -> dict:
     return result
 
 
-def _run_local(task: str, extra_env: dict | None = None) -> dict:
+def _run_streaming(cmd, env=None, cwd=None, callback=None,
+                   container_cleanup=None) -> dict:
+    """Run a subprocess, streaming stderr lines to callback in real time.
+
+    Args:
+        cmd: Command list.
+        env: Environment dict (uses current env if None).
+        cwd: Working directory.
+        callback: callable(line: str) invoked for each stderr line.
+        container_cleanup: Optional (engine, name) tuple; if the process
+            times out, kill and remove the container.
+
+    Returns dict with exit_code, stdout, stderr.
+    """
+    import threading as _threading
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            cwd=cwd,
+        )
+    except FileNotFoundError as e:
+        return {"exit_code": -1, "stdout": "", "stderr": str(e)}
+
+    # Read stdout in a background thread to avoid deadlocks
+    stdout_chunks: list[str] = []
+
+    def _read_stdout():
+        stdout_chunks.append(proc.stdout.read())
+
+    stdout_thread = _threading.Thread(target=_read_stdout, daemon=True)
+    stdout_thread.start()
+
+    # Stream stderr line by line, invoking callback
+    stderr_lines: list[str] = []
+    try:
+        for line in proc.stderr:
+            stderr_lines.append(line)
+            if callback:
+                callback(line.rstrip("\n"))
+
+        proc.wait(timeout=RUN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        if container_cleanup:
+            _kill_container(*container_cleanup)
+        return {"exit_code": -1, "stdout": "", "stderr": "Orchestrator timed out."}
+
+    stdout_thread.join(timeout=5)
+    stdout = stdout_chunks[0] if stdout_chunks else ""
+    stderr = "".join(stderr_lines)
+    return {"exit_code": proc.returncode, "stdout": stdout, "stderr": stderr}
+
+
+def _run_local(task: str, extra_env: dict | None = None,
+               output_callback=None) -> dict:
     """Run the Orchestrator as a local subprocess (no container)."""
     framework_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
@@ -170,6 +234,12 @@ def _run_local(task: str, extra_env: dict | None = None) -> dict:
     env["UAS_TASK"] = task
     if extra_env:
         env.update(extra_env)
+
+    if output_callback:
+        return _run_streaming(
+            [sys.executable, "-m", "orchestrator.main"],
+            env=env, cwd=workspace, callback=output_callback,
+        )
 
     try:
         result = subprocess.run(
@@ -212,7 +282,8 @@ def _kill_container(engine: str, name: str):
         pass
 
 
-def _run_container(task: str, extra_env: dict | None = None) -> dict:
+def _run_container(task: str, extra_env: dict | None = None,
+                   output_callback=None) -> dict:
     """Run the Orchestrator inside a lightweight sandbox container."""
     engine = find_engine()
     if not engine:
@@ -278,6 +349,11 @@ def _run_container(task: str, extra_env: dict | None = None) -> dict:
         SANDBOX_IMAGE_NAME,
         "-m", "orchestrator.main",
     ]
+
+    if output_callback:
+        result = _run_streaming(cmd, callback=output_callback,
+                                container_cleanup=(engine, container_name))
+        return result
 
     try:
         result = subprocess.run(

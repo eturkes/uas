@@ -29,6 +29,7 @@ STATUS_ICONS = {
 }
 
 MAX_LOG_LINES = 12
+MAX_OUTPUT_LINES = 20
 
 
 class Dashboard:
@@ -44,6 +45,7 @@ class Dashboard:
         self._active_steps: list[int] = []
         self._step_activities: dict[int, str] = {}
         self._log_lines: collections.deque[str] = collections.deque(maxlen=MAX_LOG_LINES)
+        self._output_lines: collections.deque[str] = collections.deque(maxlen=MAX_OUTPUT_LINES)
         self._start_time = time.monotonic()
         self._lock = threading.Lock()
         self._file = file if file is not None else sys.stderr
@@ -99,6 +101,16 @@ class Dashboard:
                 pass
         else:
             print(f"  {message}", file=self._file)
+
+    def add_output_line(self, line: str):
+        """Append a line of live orchestrator/LLM output to the output panel."""
+        with self._lock:
+            self._output_lines.append(line)
+        if self._live:
+            try:
+                self._live.update(self._render())
+            except Exception:
+                pass
 
     def update(self, state: dict):
         with self._lock:
@@ -266,15 +278,34 @@ class Dashboard:
     def _render(self):
         """Build the rich renderable for the Live display."""
         layout = Layout()
-        layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="body"),
-            Layout(name="log", size=min(MAX_LOG_LINES + 2, 8)),
-            Layout(name="footer", size=8),
-        )
+
+        with self._lock:
+            has_output = len(self._output_lines) > 0
+
+        if has_output:
+            layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="middle"),
+                Layout(name="log", size=min(MAX_LOG_LINES + 2, 8)),
+                Layout(name="footer", size=8),
+            )
+            layout["middle"].split_row(
+                Layout(name="body", ratio=1),
+                Layout(name="output", ratio=1),
+            )
+            layout["output"].update(self._render_output())
+        else:
+            layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="middle"),
+                Layout(name="log", size=min(MAX_LOG_LINES + 2, 8)),
+                Layout(name="footer", size=8),
+            )
+            layout["middle"].update(self._render_dag())
 
         layout["header"].update(self._render_header())
-        layout["body"].update(self._render_dag())
+        if has_output:
+            layout["middle"]["body"].update(self._render_dag())
         layout["log"].update(self._render_log())
         layout["footer"].update(self._render_timing())
 
@@ -377,6 +408,22 @@ class Dashboard:
                 text.append("\n")
             text.append(line, style="dim" if i < len(lines) - 1 else "")
         return Panel(text, title="Activity Log", border_style="dim")
+
+    def _render_output(self) -> Panel:
+        """Build the live LLM/orchestrator output panel."""
+        with self._lock:
+            lines = list(self._output_lines)
+        if not lines:
+            return Panel("[dim]Waiting for output...[/dim]", title="Claude Code Output",
+                         border_style="magenta")
+        text = Text()
+        for i, line in enumerate(lines):
+            if i > 0:
+                text.append("\n")
+            # Dim older lines, highlight the latest
+            style = "dim" if i < len(lines) - 1 else ""
+            text.append(line[:200], style=style)
+        return Panel(text, title="Claude Code Output", border_style="magenta")
 
     def _render_timing(self) -> Table:
         with self._lock:

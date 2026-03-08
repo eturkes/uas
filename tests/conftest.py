@@ -31,11 +31,14 @@ def tmp_workspace(tmp_path, monkeypatch):
     specs_dir = os.path.join(state_dir, "specs")
     scratchpad_file = os.path.join(state_dir, "scratchpad.md")
 
+    progress_file = os.path.join(state_dir, "progress.md")
+
     monkeypatch.setattr(state_mod, "WORKSPACE", str(tmp_path))
     monkeypatch.setattr(state_mod, "STATE_DIR", state_dir)
     monkeypatch.setattr(state_mod, "STATE_FILE", state_file)
     monkeypatch.setattr(state_mod, "SPECS_DIR", specs_dir)
     monkeypatch.setattr(state_mod, "SCRATCHPAD_FILE", scratchpad_file)
+    monkeypatch.setattr(state_mod, "PROGRESS_FILE", progress_file)
     # spec_generator imports SPECS_DIR at module level, so patch it there too
     monkeypatch.setattr(spec_mod, "SPECS_DIR", specs_dir)
     return tmp_path

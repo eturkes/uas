@@ -453,38 +453,116 @@ def _guess_file_type(filename: str) -> str:
     return "text" if ext in TEXT_EXTENSIONS else "binary"
 
 
-def scan_workspace_files(workspace_path: str) -> dict:
-    """List files in workspace directory (non-recursive).
+_SKIP_DIRS = {".state", ".git", "__pycache__", "node_modules", "venv", ".venv"}
+_MAX_SCAN_OUTPUT = 4000
 
-    Returns dict of {filename: {size, type, preview}} where preview
-    is the first 500 chars for text files under 50KB.
+
+def scan_workspace_files(workspace_path: str, recursive: bool = True,
+                         max_depth: int = 3) -> dict:
+    """List files in workspace directory, optionally recursive.
+
+    Scans up to max_depth levels deep (Section 4b). Skips hidden dirs
+    and common non-essential directories (.state, .git, __pycache__,
+    node_modules, venv).
+
+    Returns dict of {relative_path: {size, type, preview}} where preview
+    is the first 200 chars for text files under 50KB. Files are grouped
+    by directory in the output.
     """
     if not os.path.isdir(workspace_path):
         return {}
     results = {}
-    for entry in os.listdir(workspace_path):
-        if entry.startswith("."):
-            continue
-        path = os.path.join(workspace_path, entry)
-        if not os.path.isfile(path):
-            continue
+    total_output_size = 0
+
+    def _scan_dir(dir_path: str, depth: int):
+        nonlocal total_output_size
+        if depth > max_depth or total_output_size >= _MAX_SCAN_OUTPUT:
+            return
         try:
-            stat = os.stat(path)
+            entries = sorted(os.listdir(dir_path))
         except OSError:
-            continue
-        file_info = {
-            "size": stat.st_size,
-            "type": _guess_file_type(entry),
-            "preview": "",
-        }
-        if file_info["type"] == "text" and stat.st_size < 50000:
+            return
+        for entry in entries:
+            if total_output_size >= _MAX_SCAN_OUTPUT:
+                return
+            if entry.startswith("."):
+                continue
+            full_path = os.path.join(dir_path, entry)
+            if os.path.isdir(full_path):
+                if recursive and entry not in _SKIP_DIRS:
+                    _scan_dir(full_path, depth + 1)
+                continue
+            if not os.path.isfile(full_path):
+                continue
             try:
-                with open(path, "r", errors="replace") as f:
-                    file_info["preview"] = f.read(500)
+                stat = os.stat(full_path)
             except OSError:
-                pass
-        results[entry] = file_info
+                continue
+            rel_path = os.path.relpath(full_path, workspace_path)
+            file_info = {
+                "size": stat.st_size,
+                "type": _guess_file_type(entry),
+                "preview": "",
+            }
+            if file_info["type"] == "text" and stat.st_size < 50000:
+                try:
+                    with open(full_path, "r", errors="replace") as f:
+                        file_info["preview"] = f.read(200)
+                except OSError:
+                    pass
+            results[rel_path] = file_info
+            # Estimate output size to cap at _MAX_SCAN_OUTPUT
+            total_output_size += len(rel_path) + 40 + len(file_info["preview"])
+
+    _scan_dir(workspace_path, 0)
     return results
+
+
+def format_workspace_scan(ws_files: dict,
+                          json_key_extractor=None) -> str:
+    """Format workspace scan results grouped by directory.
+
+    Args:
+        ws_files: Dict from scan_workspace_files.
+        json_key_extractor: Optional callable(preview_str) -> str for
+            extracting JSON keys from .json file previews.
+
+    Returns a string suitable for inclusion in context, capped at
+    _MAX_SCAN_OUTPUT chars.
+    """
+    if not ws_files:
+        return ""
+    # Group files by directory
+    by_dir: dict[str, list[tuple[str, dict]]] = {}
+    for fpath, info in sorted(ws_files.items()):
+        dirname = os.path.dirname(fpath) or "."
+        by_dir.setdefault(dirname, []).append((fpath, info))
+
+    lines = []
+    total_len = 0
+    for dirname in sorted(by_dir.keys()):
+        if total_len >= _MAX_SCAN_OUTPUT:
+            lines.append("  ... [scan output capped]")
+            break
+        if dirname != ".":
+            lines.append(f"  [{dirname}/]")
+        for fpath, info in by_dir[dirname]:
+            fname = os.path.basename(fpath) if dirname != "." else fpath
+            line = f"  {fname} ({info['size']} bytes, {info['type']})"
+            preview = info.get("preview", "")
+            if preview:
+                if fpath.endswith(".json") and json_key_extractor:
+                    line += f"\n    keys: {json_key_extractor(preview)}"
+                else:
+                    line += f"\n    preview: {preview[:200]}"
+            if total_len + len(line) > _MAX_SCAN_OUTPUT:
+                lines.append("  ... [scan output capped]")
+                total_len = _MAX_SCAN_OUTPUT
+                break
+            lines.append(line)
+            total_len += len(line)
+
+    return "\n".join(lines)
 
 
 def extract_workspace_files(orchestrator_output: str) -> list[str]:

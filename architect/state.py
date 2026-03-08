@@ -9,6 +9,7 @@ STATE_DIR = os.path.join(WORKSPACE, ".state")
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 SPECS_DIR = os.path.join(STATE_DIR, "specs")
 SCRATCHPAD_FILE = os.path.join(STATE_DIR, "scratchpad.md")
+PROGRESS_FILE = os.path.join(STATE_DIR, "progress.md")
 
 
 def init_state(goal: str) -> dict:
@@ -70,6 +71,109 @@ def read_scratchpad(max_chars: int = 2000) -> str:
         return content
     # Return the tail (most recent entries)
     return "...[earlier entries omitted]\n" + content[-max_chars:]
+
+
+def update_progress_file(state: dict, event: str | None = None):
+    """Write a structured progress file summarizing execution state.
+
+    Replaces the flat scratchpad for context building (Section 4a).
+    The progress file has sections: Current State, Key Decisions,
+    Completed Steps, and Lessons Learned.
+    """
+    os.makedirs(STATE_DIR, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    steps = state.get("steps", [])
+    completed = [s for s in steps if s["status"] == "completed"]
+    failed = [s for s in steps if s["status"] == "failed"]
+    pending = [s for s in steps if s["status"] == "pending"]
+    executing = [s for s in steps if s["status"] == "executing"]
+
+    lines = []
+
+    # Current State section
+    lines.append("## Current State")
+    lines.append(f"- Steps completed: {len(completed)}/{len(steps)}")
+    if executing:
+        titles = ", ".join(f'"{s["title"]}"' for s in executing)
+        lines.append(f"- Currently executing: {titles}")
+    if pending:
+        lines.append(f"- Steps remaining: {len(pending)}")
+    if failed:
+        blockers = "; ".join(
+            f'step {s["id"]} "{s["title"]}": {s.get("error", "")[:100]}'
+            for s in failed
+        )
+        lines.append(f"- Known blockers: {blockers}")
+    lines.append("")
+
+    # Key Decisions section (from reflections)
+    decisions = []
+    for s in steps:
+        for r in s.get("reflections", []):
+            lesson = r.get("lesson", "")
+            if lesson:
+                decisions.append(
+                    f"- [{timestamp}] Step {s['id']} attempt {r.get('attempt', '?')}: {lesson[:200]}"
+                )
+    if decisions:
+        lines.append("## Key Decisions")
+        lines.extend(decisions[-10:])  # Keep last 10 decisions
+        lines.append("")
+
+    # Completed Steps section
+    if completed:
+        lines.append("## Completed Steps")
+        for s in completed:
+            summary = s.get("summary", "")
+            if not summary and s.get("output"):
+                summary = s["output"][:100]
+            files = s.get("files_written", [])
+            files_str = f", files: [{', '.join(files[:5])}]" if files else ""
+            elapsed = s.get("elapsed", 0.0)
+            lines.append(
+                f"- Step {s['id']} ({s['title']}): {summary[:150]}{files_str}, time: {elapsed:.1f}s"
+            )
+        lines.append("")
+
+    # Lessons Learned section (from reflections across all steps)
+    lessons = []
+    for s in steps:
+        for r in s.get("reflections", []):
+            lesson = r.get("lesson", "")
+            what_next = r.get("what_to_try_next", "")
+            if lesson:
+                lessons.append(f"- Step {s['id']}: {lesson[:200]}")
+            if what_next:
+                lessons.append(f"- Step {s['id']} next: {what_next[:200]}")
+    if lessons:
+        lines.append("## Lessons Learned")
+        lines.extend(lessons[-10:])  # Keep last 10 lessons
+        lines.append("")
+
+    # Append event if provided
+    if event:
+        lines.append(f"## Latest Event [{timestamp}]")
+        lines.append(event)
+        lines.append("")
+
+    content = "\n".join(lines)
+    with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def read_progress_file() -> str:
+    """Read the structured progress file.
+
+    Returns empty string if the file doesn't exist.
+    """
+    if not os.path.exists(PROGRESS_FILE):
+        return ""
+    try:
+        with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
 
 
 def add_steps(state: dict, steps: list[dict]) -> dict:

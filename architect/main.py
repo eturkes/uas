@@ -13,7 +13,11 @@ import sys
 import threading
 import time
 
-from .state import init_state, save_state, load_state, add_steps, append_scratchpad, read_scratchpad
+from .state import (
+    init_state, save_state, load_state, add_steps,
+    append_scratchpad, read_scratchpad,
+    update_progress_file, read_progress_file,
+)
 from .planner import (
     decompose_goal,
     decompose_goal_with_voting,
@@ -33,6 +37,7 @@ from .executor import (
     extract_workspace_files,
     parse_uas_result,
     scan_workspace_files,
+    format_workspace_scan,
     MAX_CONTEXT_LENGTH,
 )
 from .events import EventType, get_event_log, reset_event_log
@@ -175,12 +180,129 @@ def summarize_context(context: str, goal: str, max_length: int) -> str:
     return context[:max_length] + f"\n... [compressed, {len(context)} chars total]"
 
 
+def compress_context(context: str, max_length: int,
+                     goal: str = "",
+                     progress_content: str = "") -> str:
+    """Tiered context compression (Section 4c).
+
+    Tier 1 (< 60% of limit): No compression, include everything.
+    Tier 2 (60-80%): Remove file previews, truncate stdout per step.
+    Tier 3 (80-100%): Summarize dep outputs via LLM; keep progress file.
+    Tier 4 (> 100%): Emergency truncation — progress file + last dep only.
+    """
+    if max_length <= 0:
+        return context
+
+    ratio = len(context) / max_length
+
+    # Tier 1: No compression needed
+    if ratio < 0.6:
+        return context
+
+    # Tier 2: Deterministic compression — remove previews, truncate stdout
+    if ratio < 0.8:
+        import re
+        compressed = context
+        # Remove preview lines (indented lines starting with "preview:")
+        compressed = re.sub(r'\n    preview: [^\n]*', '', compressed)
+        # Remove JSON key lines
+        compressed = re.sub(r'\n    keys: [^\n]*', '', compressed)
+        # Truncate stdout within dependency blocks to last 500 chars
+        def _truncate_stdout(m):
+            text = m.group(1)
+            if len(text) > 500:
+                return f"stdout: ...{text[-500:]}"
+            return m.group(0)
+        compressed = re.sub(
+            r'stdout: (.*?)(?=\n(?:stderr:|files:|</)|$)',
+            _truncate_stdout,
+            compressed,
+            flags=re.DOTALL,
+        )
+        if len(compressed) <= max_length:
+            return compressed
+        # If still too long, fall through to Tier 3
+
+    # Tier 3: LLM summarization of dependency outputs, keep progress file
+    if ratio < 1.0 or (ratio >= 0.8 and ratio < 1.0):
+        try:
+            return summarize_context(context, goal, max_length)
+        except Exception:
+            pass
+        # Fall through to Tier 4
+
+    # Tier 4: Emergency truncation — progress file + tail of context
+    if progress_content:
+        budget = max_length - len(progress_content) - 50
+        if budget > 200:
+            return (
+                progress_content + "\n\n"
+                + "... [emergency truncation]\n"
+                + context[-budget:]
+            )
+        return progress_content[:max_length]
+
+    return context[:max_length] + f"\n... [truncated, {len(context)} chars total]"
+
+
+def _distill_dependency_output(dep_id: int, dep_step: dict,
+                               output: str | dict) -> str:
+    """Distill a dependency's output into structured XML (Section 4d).
+
+    Uses the step's summary/UAS_RESULT as primary info, falling back
+    to raw stdout only when no structured summary is available.
+    """
+    title = dep_step.get("title", f"Step {dep_id}")
+    summary = dep_step.get("summary", "")
+    files_written = dep_step.get("files_written", [])
+    verify = dep_step.get("verify", "")
+
+    # Build files_produced line
+    files_str = ""
+    if files_written:
+        files_str = ", ".join(files_written[:10])
+
+    # Build key_outputs from summary or output
+    key_outputs = summary
+    if not key_outputs:
+        if isinstance(output, dict):
+            stdout = output.get("stdout", "")
+            key_outputs = stdout[:300] if stdout else ""
+        elif isinstance(output, str):
+            key_outputs = output[:300]
+
+    # Build relevant_data from raw output (truncated)
+    relevant_data = ""
+    if isinstance(output, dict):
+        stderr = output.get("stderr", "")
+        if stderr:
+            relevant_data = f"stderr: {stderr[:200]}"
+    elif isinstance(output, str) and not summary:
+        # Only include raw output as fallback when no structured summary
+        relevant_data = output[:500]
+
+    parts = [f'<dependency step="{dep_id}" title="{title}">']
+    if files_str:
+        parts.append(f"  <files_produced>{files_str}</files_produced>")
+    if key_outputs:
+        parts.append(f"  <key_outputs>{key_outputs}</key_outputs>")
+    if relevant_data:
+        parts.append(f"  <relevant_data>{relevant_data}</relevant_data>")
+    if verify:
+        parts.append(f"  <verification>{verify}</verification>")
+    parts.append("</dependency>")
+
+    return "\n".join(parts)
+
+
 def build_context(step: dict, completed_outputs: dict,
                   state: dict | None = None,
                   workspace_path: str | None = None) -> str:
     """Build structured XML context from outputs of dependency steps.
 
-    Includes workspace file info and verification criteria from completed steps.
+    Uses distilled dependency summaries (Section 4d), structured progress
+    file (Section 4a), recursive workspace scan (Section 4b), and tiered
+    compression (Section 4c).
 
     Each entry in completed_outputs can be a plain string or a dict
     with 'stdout', 'stderr', and 'files' keys.
@@ -191,18 +313,27 @@ def build_context(step: dict, completed_outputs: dict,
     parts = []
     dep_ids = sorted(step["depends_on"])
 
-    # Build step lookup for verify fields
+    # Build step lookup
     step_by_id = {}
     goal = ""
     if state:
         step_by_id = {s["id"]: s for s in state.get("steps", [])}
         goal = state.get("goal", "")
 
+    # Section 4d: Distilled dependency outputs
     for dep_id in dep_ids:
         output = completed_outputs.get(dep_id, "")
         dep_step = step_by_id.get(dep_id, {})
-        verify = dep_step.get("verify", "")
 
+        # Use distilled output if we have step metadata
+        if dep_step:
+            distilled = _distill_dependency_output(dep_id, dep_step, output)
+            # Only include if there's actual content
+            if "<key_outputs>" in distilled or "<files_produced>" in distilled:
+                parts.append(distilled)
+                continue
+
+        # Fallback: legacy format for plain string/dict outputs
         lines = []
         if isinstance(output, dict):
             stdout = output.get("stdout", "")
@@ -217,6 +348,7 @@ def build_context(step: dict, completed_outputs: dict,
         elif output:
             lines.append(output)
 
+        verify = dep_step.get("verify", "")
         if verify:
             lines.append(f"<verification>{verify}</verification>")
 
@@ -228,39 +360,41 @@ def build_context(step: dict, completed_outputs: dict,
                 f"</previous_step_output>"
             )
 
-    # Workspace files section
+    # Section 4b: Recursive workspace files section
     if workspace_path:
         try:
             ws_files = scan_workspace_files(workspace_path)
         except Exception:
             ws_files = {}
         if ws_files:
-            ws_lines = []
-            for fname, info in sorted(ws_files.items()):
-                line = f"  {fname} ({info['size']} bytes, {info['type']})"
-                preview = info.get("preview", "")
-                if preview:
-                    if fname.endswith(".json"):
-                        line += f"\n    keys: {_extract_json_keys(preview)}"
-                    else:
-                        line += f"\n    preview: {preview[:200]}"
-                ws_lines.append(line)
-            parts.append(
-                "<workspace_files>\n"
-                + "\n".join(ws_lines)
-                + "\n</workspace_files>"
+            formatted = format_workspace_scan(
+                ws_files, json_key_extractor=_extract_json_keys
             )
+            if formatted:
+                parts.append(
+                    "<workspace_files>\n"
+                    + formatted
+                    + "\n</workspace_files>"
+                )
 
-    # Scratchpad section
-    scratchpad = read_scratchpad()
-    if scratchpad:
-        parts.append(f"<scratchpad>\n{scratchpad}\n</scratchpad>")
+    # Section 4a: Structured progress file (replaces raw scratchpad)
+    progress = read_progress_file()
+    if progress:
+        parts.append(f"<progress>\n{progress}\n</progress>")
+    else:
+        # Fallback to scratchpad if no progress file yet
+        scratchpad = read_scratchpad()
+        if scratchpad:
+            parts.append(f"<scratchpad>\n{scratchpad}\n</scratchpad>")
 
     context = "\n\n".join(parts)
 
-    # Context length management
+    # Section 4c: Tiered context compression
     if MAX_CONTEXT_LENGTH and len(context) > MAX_CONTEXT_LENGTH:
-        context = summarize_context(context, goal, MAX_CONTEXT_LENGTH)
+        context = compress_context(
+            context, MAX_CONTEXT_LENGTH,
+            goal=goal, progress_content=progress,
+        )
 
     return context
 
@@ -949,6 +1083,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     f"in {step['elapsed']:.1f}s.{files_info}\n"
                     f"Summary: {summary}"
                 )
+                # Section 4a: Update structured progress file
+                update_progress_file(
+                    state,
+                    event=f"Step {step['id']} ({step['title']}) completed successfully",
+                )
                 return True
 
             # Validation failed — treat as step failure
@@ -977,6 +1116,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             f"Step {step['id']} ({step['title']}) FAILED "
             f"(attempt {spec_attempt + 1}).\n"
             f"Error: {error_info[:500]}"
+        )
+        # Section 4a: Update structured progress file
+        update_progress_file(
+            state,
+            event=f"Step {step['id']} ({step['title']}) failed (attempt {spec_attempt + 1})",
         )
 
         # Section 3b: Classify error for adaptive retry budgets

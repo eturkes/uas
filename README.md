@@ -341,14 +341,23 @@ dependency relationship) are merged to reduce LLM calls and sandbox
 invocations.
 
 **Context propagation:** When step N depends on step M, the Architect
-builds structured XML context from step M's output (`<previous_step_output>`,
-`<workspace_files>`, `<verification>`, `<scratchpad>` tags). Observation
-Workspace files are scanned for previews (with
-JSON key extraction). A persistent scratchpad (`.state/scratchpad.md`)
-accumulates timestamped learnings across steps — successes, failures,
-and environment details — giving all steps visibility into the run's
-history. When `UAS_MAX_CONTEXT_LENGTH` is set and context exceeds the
-limit, it is compressed via the LLM with fallback to truncation.
+builds structured XML context using **dependency output distillation**:
+each completed dependency is summarized into a `<dependency>` element
+with `<files_produced>`, `<key_outputs>`, and `<relevant_data>` tags,
+using the step's `UAS_RESULT` summary as the primary source and raw
+stdout only as a fallback. A **structured progress file**
+(`.state/progress.md`) replaces the flat scratchpad for context
+building, with sections for current state, key decisions, completed
+steps, and lessons learned — updated after every step completion or
+failure. **Recursive workspace scanning** (up to 3 levels deep, skipping
+`.state/`, `.git/`, `__pycache__/`, `node_modules/`, `venv/`) groups
+files by directory with previews and JSON key extraction, capped at
+4000 chars. When `UAS_MAX_CONTEXT_LENGTH` is set and context exceeds
+the limit, **tiered context compression** applies: Tier 1 (< 60%)
+passes through unchanged, Tier 2 (60–80%) deterministically strips
+previews and truncates stdout, Tier 3 (80–100%) uses LLM
+summarization, and Tier 4 (> 100%) performs emergency truncation
+retaining only the progress file and the tail of context.
 
 **Self-correction:** If the Orchestrator fails a step (after its own 3
 internal retries), the Architect uses Reflexion-based error recovery

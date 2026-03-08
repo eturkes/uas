@@ -2,7 +2,8 @@
 """Prompt evaluation system for UAS.
 
 Runs prompt cases through the Architect Agent, checks expected outcomes,
-and generates an assessment report. Uses container isolation by default.
+and generates an assessment report.  Runs inside the uas-engine container
+by default; use ``--local`` for direct subprocess mode.
 
 Usage:
     python3 integration/eval.py                # Run all cases (container mode)
@@ -30,6 +31,10 @@ DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 PROMPTS_FILE = os.path.join(SCRIPT_DIR, "prompts.json")
 RESULTS_FILE = os.path.join(SCRIPT_DIR, "eval_results.json")
 
+UAS_AUTH_DIR = os.path.join(REPO_ROOT, ".uas_auth")
+CLAUDE_JSON = os.path.join(UAS_AUTH_DIR, "claude.json")
+IMAGE_TAG = "uas-engine:latest"
+
 
 def load_prompts(filter_pattern=None):
     with open(PROMPTS_FILE) as f:
@@ -42,7 +47,7 @@ def load_prompts(filter_pattern=None):
     return prompts
 
 
-def run_case(case, verbose=False, local=False):
+def run_case(case, verbose=False, local=False, engine=None):
     """Run a single prompt case and return results."""
     name = case["name"]
     goal = case["goal"]
@@ -66,28 +71,60 @@ def run_case(case, verbose=False, local=False):
 
     output_file = os.path.join(workspace, "output.json")
 
-    env = os.environ.copy()
-    env["UAS_GOAL"] = goal
-    env["UAS_WORKSPACE"] = workspace
-    env["UAS_OUTPUT"] = output_file
-    env["PYTHONPATH"] = REPO_ROOT
-    if local:
-        env["UAS_SANDBOX_MODE"] = "local"
-    if verbose:
-        env["UAS_VERBOSE"] = "1"
-
     result = {"name": name, "goal": goal, "workspace": workspace, "checks": []}
 
     start = time.monotonic()
     try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "architect.main"],
-            env=env,
-            cwd=workspace,
-            capture_output=not verbose,
-            text=True,
-            stdin=subprocess.DEVNULL,
-        )
+        if engine and not local:
+            # Container mode — run architect inside uas-engine.
+            container_env = {
+                "UAS_GOAL": goal,
+                "UAS_WORKSPACE": "/workspace",
+                "UAS_OUTPUT": "/workspace/output.json",
+            }
+            if verbose:
+                container_env["UAS_VERBOSE"] = "1"
+            cmd = [
+                engine, "run", "--rm",
+                "--privileged",
+                "-e", "IS_SANDBOX=1",
+                "-v", f"{UAS_AUTH_DIR}:/root/.claude:Z",
+                "-v", f"{CLAUDE_JSON}:/root/.claude.json:Z",
+                "-v", f"{workspace}:/workspace:Z",
+            ]
+            for k, v in container_env.items():
+                cmd.extend(["-e", f"{k}={v}"])
+            cmd.extend([
+                "--entrypoint", "", "-w", "/uas", IMAGE_TAG,
+                "python3", "-m", "architect.main",
+            ])
+            proc = subprocess.run(
+                cmd,
+                capture_output=not verbose,
+                text=True,
+                stdin=subprocess.DEVNULL,
+            )
+        else:
+            # Local subprocess mode.
+            env = os.environ.copy()
+            env["UAS_GOAL"] = goal
+            env["UAS_WORKSPACE"] = workspace
+            env["UAS_OUTPUT"] = output_file
+            env["PYTHONPATH"] = REPO_ROOT
+            env["CLAUDE_CONFIG_DIR"] = UAS_AUTH_DIR
+            if local:
+                env["UAS_SANDBOX_MODE"] = "local"
+            if verbose:
+                env["UAS_VERBOSE"] = "1"
+            proc = subprocess.run(
+                [sys.executable, "-m", "architect.main"],
+                env=env,
+                cwd=workspace,
+                capture_output=not verbose,
+                text=True,
+                stdin=subprocess.DEVNULL,
+            )
+
         result["exit_code"] = proc.returncode
         result["elapsed"] = time.monotonic() - start
         if not verbose and proc.stderr:
@@ -202,6 +239,54 @@ def print_report(results):
     print("=" * 60)
 
 
+def _find_engine():
+    """Return 'podman' or 'docker', whichever is found first."""
+    for cmd in ["podman", "docker"]:
+        if shutil.which(cmd):
+            return cmd
+    return None
+
+
+def _ensure_image(engine):
+    """Rebuild uas-engine:latest if missing or stale."""
+    import datetime as _dt
+
+    try:
+        r = subprocess.run(
+            [engine, "image", "inspect", IMAGE_TAG,
+             "--format", "{{.Created}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0:
+            raw = r.stdout.strip()
+            raw = re.sub(r'(\.\d{6})\d+', r'\1', raw)
+            raw = raw.replace('Z', '+00:00')
+            build_time = _dt.datetime.fromisoformat(raw).timestamp()
+        else:
+            build_time = 0.0
+    except Exception:
+        build_time = 0.0
+
+    patterns = [
+        "Containerfile", "requirements.txt", "entrypoint.sh",
+        "architect/*.py", "orchestrator/*.py",
+    ]
+    latest = 0.0
+    for pat in patterns:
+        for path in globmod.glob(os.path.join(REPO_ROOT, pat)):
+            latest = max(latest, os.path.getmtime(path))
+
+    if build_time > 0 and build_time >= latest:
+        return
+    print("Rebuilding uas-engine:latest (stale or missing)...",
+          file=sys.stderr)
+    subprocess.run(
+        [engine, "build", "-t", IMAGE_TAG,
+         "-f", os.path.join(REPO_ROOT, "Containerfile"), REPO_ROOT],
+        check=True,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="UAS Prompt Evaluation")
     parser.add_argument("-k", "--filter", help="Run cases matching pattern")
@@ -229,6 +314,22 @@ def main():
             print(f"    {c['goal'][:80]}")
         return 0
 
+    # Discover container engine (unless --local).
+    engine = None
+    if not args.local:
+        engine = _find_engine()
+        if engine is None:
+            print("WARNING: No container engine found, falling back to "
+                  "local mode.", file=sys.stderr)
+        else:
+            _ensure_image(engine)
+
+    # Seed claude.json if missing.
+    if not os.path.isfile(CLAUDE_JSON):
+        os.makedirs(UAS_AUTH_DIR, exist_ok=True)
+        with open(CLAUDE_JSON, "w", encoding="utf-8") as f:
+            f.write("{}")
+
     if args.clean and os.path.exists(WORKSPACES_DIR):
         shutil.rmtree(WORKSPACES_DIR)
 
@@ -239,7 +340,8 @@ def main():
         label = case["goal"][:70]
         print(f"[{i}/{len(cases)}] {case['name']}: {label}...",
               file=sys.stderr)
-        result = run_case(case, verbose=args.verbose, local=args.local)
+        result = run_case(case, verbose=args.verbose, local=args.local,
+                          engine=engine)
         results.append(result)
         status = "PASS" if result["passed"] else "FAIL"
         print(f"        -> {status} ({result.get('elapsed', 0):.1f}s)",

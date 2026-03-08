@@ -53,6 +53,10 @@ Re-run the script at any time to change configuration.
 
 ### Running Tests
 
+Integration tests run inside the `uas-engine` container using
+credentials from `.uas_auth/`.  The container image is automatically
+rebuilt when source files change.
+
 ```bash
 # Run the full test suite (unit + integration):
 python3 -m pytest tests/
@@ -60,15 +64,26 @@ python3 -m pytest tests/
 # Run only unit tests (no auth required):
 python3 -m pytest tests/ -m "not integration"
 
-# Run only integration tests (requires bash setup_auth.sh first):
-python3 -m pytest tests/ -m integration
+# Run only integration tests (use -s to see Claude output):
+python3 -m pytest -s -m integration
 ```
 
-### Quick Test
+### Local & Container Runners
 
 ```bash
-# Quick test from the repo (requires bash setup_auth.sh first):
+# Run UAS locally (no container) — useful for TUI testing:
+bash run_local.sh "your goal here"
+bash run_local.sh --dry-run "your goal here"
+
+# Run UAS in the uas-engine container:
+bash run_container.sh "your goal here"
+
+# Quick integration test (container, auto-rebuilds):
 bash integration/quick_test.sh
+
+# Prompt evaluation suite (container by default, --local available):
+python3 integration/eval.py
+python3 integration/eval.py --local
 ```
 
 ### Resuming a Run
@@ -268,13 +283,16 @@ interactive Claude Code setup and proceeds directly to execution.
 │   ├── sandbox.py            # Sandboxed code execution (local or container)
 │   └── parser.py             # Code extraction from LLM responses
 ├── tests/                    # Unit and integration tests (pytest)
-│   ├── conftest.py           # Shared fixtures and auth helpers
-│   ├── test_integration.py   # Integration tests (real Claude CLI)
+│   ├── conftest.py           # Shared fixtures, container helpers, auth
+│   ├── test_integration.py   # Integration tests (run in uas-engine)
 │   └── test_*.py             # Unit test modules
-└── integration/              # Integration tests
-    ├── quick_test.sh            # Quick test (creates hello.txt)
-    ├── eval.py                # Prompt evaluation runner
-    └── prompts.json           # Prompt cases with goals and checks
+├── integration/              # Integration tests
+│   ├── quick_test.sh         # Quick test (creates hello.txt)
+│   ├── eval.py               # Prompt evaluation runner
+│   └── prompts.json          # Prompt cases with goals and checks
+├── setup_auth.sh             # One-time auth setup (interactive)
+├── run_local.sh              # Run UAS locally (for TUI testing)
+└── run_container.sh          # Run UAS in uas-engine container
 ```
 
 ## Architecture

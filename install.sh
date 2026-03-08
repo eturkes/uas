@@ -59,12 +59,18 @@ fi
 AUTH_DIR="$PWD/.uas_auth"
 mkdir -p "$AUTH_DIR"
 
+# Claude Code stores user-level state in ~/.claude.json (separate from
+# ~/.claude/).  Seed an empty file so the bind mount works on first run.
+CLAUDE_JSON="$AUTH_DIR/claude.json"
+[ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
+
 exec "$ENGINE" run --rm -it \
     --privileged \
     -e IS_SANDBOX=1 \
     -e UAS_HOST_UID="$(id -u)" \
     -e UAS_HOST_GID="$(id -g)" \
     -v "$AUTH_DIR:/root/.claude:Z" \
+    -v "$CLAUDE_JSON:/root/.claude.json:Z" \
     -v "$PWD:/workspace:Z" \
     -w /workspace \
     uas-engine:latest \

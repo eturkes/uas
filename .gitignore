@@ -15,7 +15,7 @@ integration/hello.txt
 integration/.uas_auth/
 integration/.state/
 
-# Project-level auth (contains secrets; may be a symlink or directory)
+# Project-level auth (contains secrets; created by setup_auth.sh)
 .uas_auth
 
 # Python

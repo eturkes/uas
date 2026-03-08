@@ -36,6 +36,9 @@ done
 AUTH_DIR="${PWD}/.uas_auth"
 mkdir -p "$AUTH_DIR"
 
+CLAUDE_JSON="$AUTH_DIR/claude.json"
+[ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
+
 # --- Launch the Orchestrator with nested-container privileges ---
 echo "Launching Orchestrator..."
 TTY_ARGS=()
@@ -50,6 +53,7 @@ exec "$ENGINE" run --rm \
     -e "UAS_HOST_UID=$(id -u)" \
     -e "UAS_HOST_GID=$(id -g)" \
     -v "${AUTH_DIR}:/root/.claude:Z" \
+    -v "${CLAUDE_JSON}:/root/.claude.json:Z" \
     -v "$PWD:/workspace:Z" \
     -w /workspace \
     "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \

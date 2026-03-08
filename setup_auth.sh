@@ -39,6 +39,12 @@ fi
 AUTH_DIR="${SCRIPT_DIR}/.uas_auth"
 mkdir -p "$AUTH_DIR"
 
+# Claude Code stores user-level state in ~/.claude.json (separate from the
+# ~/.claude/ config directory).  Seed an empty file so the bind mount works,
+# then persist it across runs.
+CLAUDE_JSON="$AUTH_DIR/claude.json"
+[ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
+
 echo "============================================================"
 echo "  UAS Auth Setup"
 echo "============================================================"
@@ -54,6 +60,7 @@ echo ""
     --privileged \
     -e IS_SANDBOX=1 \
     -v "$AUTH_DIR:/root/.claude:Z" \
+    -v "$CLAUDE_JSON:/root/.claude.json:Z" \
     --entrypoint claude \
     "$IMAGE_TAG"
 

@@ -147,8 +147,8 @@ class TestValidateWorkspace:
         result = validate_workspace(state, str(tmp_path))
         assert result["workspace_empty"] is True
         assert result["missing_files"] == []
-        # VALIDATION.md should be written
-        assert (tmp_path / "VALIDATION.md").exists()
+        # validation.md should be written inside .state/
+        assert (tmp_path / ".state" / "validation.md").exists()
 
     def test_workspace_with_files(self, tmp_path):
         (tmp_path / "output.txt").write_text("hello")
@@ -183,7 +183,7 @@ class TestValidateWorkspace:
             ],
         }
         validate_workspace(state, str(tmp_path))
-        content = (tmp_path / "VALIDATION.md").read_text()
+        content = (tmp_path / ".state" / "validation.md").read_text()
         assert "analyze data" in content
         assert "2/2" in content
         assert "result.txt" in content
@@ -202,12 +202,12 @@ class TestValidateWorkspace:
             ],
         }
         validate_workspace(state, str(tmp_path))
-        content = (tmp_path / "VALIDATION.md").read_text()
+        content = (tmp_path / ".state" / "validation.md").read_text()
         assert "Missing Files" in content
         assert "ghost.txt" in content
 
     def test_write_failure_does_not_crash(self, tmp_path):
-        """validate_workspace should not crash if it can't write VALIDATION.md."""
+        """validate_workspace should not crash if it can't write validation.md."""
         state = {"goal": "test", "steps": []}
         # Use a non-writable path
         result = validate_workspace(state, "/nonexistent/path")

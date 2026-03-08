@@ -82,8 +82,8 @@ def parse_args():
         help="Show the decomposition plan without executing it",
     )
     parser.add_argument(
-        "-o", "--output", type=str, default=None,
-        help="Write a JSON results summary to this file",
+        "-o", "--output", type=str, default=None, nargs="?", const="auto",
+        help="Write a JSON results summary (default: .state/output.json)",
     )
     parser.add_argument(
         "--events", type=str, default=None, nargs="?", const="auto",
@@ -338,7 +338,9 @@ def write_json_output(state: dict, output_path: str):
 
 
 def create_blocker(state: dict, step: dict):
-    blocker_path = os.path.join(WORKSPACE, "BLOCKER.md")
+    state_dir = os.path.join(WORKSPACE, ".state")
+    os.makedirs(state_dir, exist_ok=True)
+    blocker_path = os.path.join(state_dir, "blocker.md")
     with open(blocker_path, "w") as f:
         f.write("# Architect Blocker\n\n")
         f.write(f"**Goal:** {state['goal']}\n\n")
@@ -353,6 +355,12 @@ def create_blocker(state: dict, step: dict):
         f.write("1. Simplify the goal.\n")
         f.write("2. Provide missing credentials or resources.\n")
         f.write("3. Manually fix the failing step and re-run.\n")
+    # Store blocker info in state for programmatic access
+    state["blocker"] = {
+        "step_id": step["id"],
+        "title": step["title"],
+        "error": step["error"][:MAX_ERROR_LENGTH or None],
+    }
     logger.info("Blocker written to %s", blocker_path)
 
 
@@ -635,19 +643,24 @@ def validate_workspace(state: dict, workspace: str) -> dict:
             lines.append(f"- {w}\n")
         lines.append("\n")
 
+    state_dir = os.path.join(workspace, ".state")
     try:
-        validation_path = os.path.join(workspace, "VALIDATION.md")
+        os.makedirs(state_dir, exist_ok=True)
+        validation_path = os.path.join(state_dir, "validation.md")
         with open(validation_path, "w") as f:
             f.writelines(lines)
         logger.info("Validation report written to %s", validation_path)
     except OSError as e:
-        logger.warning("Could not write VALIDATION.md: %s", e)
+        logger.warning("Could not write validation.md: %s", e)
 
-    return {
+    validation_data = {
         "missing_files": missing_files,
         "workspace_empty": len(ws_entries) == 0,
         "best_practice_warnings": bp_warnings,
     }
+    # Store validation data in state for programmatic access
+    state["validation"] = validation_data
+    return validation_data
 
 
 def _finalize_code_tracking():
@@ -992,7 +1005,16 @@ def main():
         "1", "true", "yes",
     )
 
-    output_path = args.output or os.environ.get("UAS_OUTPUT") or None
+    output_flag = args.output or os.environ.get("UAS_OUTPUT") or None
+    if output_flag:
+        state_dir = os.path.join(WORKSPACE, ".state")
+        output_path = (
+            os.path.join(state_dir, "output.json")
+            if output_flag == "auto"
+            else output_flag
+        )
+    else:
+        output_path = None
 
     # Report flag
     report_flag = args.report or os.environ.get("UAS_REPORT") or None

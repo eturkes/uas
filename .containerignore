@@ -8,5 +8,7 @@ install.sh
 integration/
 tests/
 .state/
-BLOCKER.md
+.uas_auth
+VALIDATION.md
+hello.txt
 Sandbox.Dockerfile

@@ -21,6 +21,11 @@ class TestOutputFlag:
             args = parse_args()
             assert args.output == "out.json"
 
+    def test_output_flag_auto_mode(self):
+        with patch("sys.argv", ["prog", "-o", "--", "test goal"]):
+            args = parse_args()
+            assert args.output == "auto"
+
     def test_output_flag_default_none(self):
         with patch("sys.argv", ["prog", "test goal"]):
             args = parse_args()

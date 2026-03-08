@@ -75,7 +75,7 @@ This plan identifies concrete improvements to maximize UAS's problem-solving abi
 
 ---
 
-## Section 3: Reflexion-Based Error Recovery
+## Section 3: Reflexion-Based Error Recovery [DONE]
 
 **Rationale:** Reflexion with persistent memory raises HumanEval from 76.4% to 82.6% in multi-agent settings. The current system's scratchpad partially implements this, but lacks structured reflection and adaptive retry budgets. This section upgrades error recovery from "try harder" to "learn from failure."
 

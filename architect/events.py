@@ -31,6 +31,10 @@ class EventType(Enum):
     CONTEXT_BUILT = "context_built"
     COMPLEXITY_ESTIMATE = "complexity_estimate"
     VOTING_COMPLETE = "voting_complete"
+    REFLECTION_GENERATED = "reflection_generated"
+    ROOT_CAUSE_TRACED = "root_cause_traced"
+    BACKTRACK_START = "backtrack_start"
+    BACKTRACK_COMPLETE = "backtrack_complete"
     RUN_COMPLETE = "run_complete"
 
 

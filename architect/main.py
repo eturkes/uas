@@ -19,6 +19,8 @@ from .planner import (
     decompose_goal_with_voting,
     reflect_and_rewrite,
     decompose_failing_step,
+    generate_reflection,
+    trace_root_cause,
     topological_sort,
     critique_and_refine_plan,
     merge_trivial_steps,
@@ -39,13 +41,27 @@ from .code_tracker import get_code_tracker, reset_code_tracker
 from .dashboard import Dashboard
 from .report import generate_report
 from .trace_export import TraceExporter
-from .explain import RunExplainer
+from .explain import RunExplainer, classify_failure
 
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
+
+# Section 3b: Error-type-adaptive retry budgets.
+# Maps error type to max retries before early escalation.
+# Does not reduce MAX_SPEC_REWRITES — just exits the loop early for
+# error types where additional retries are unlikely to help.
+_ERROR_RETRY_BUDGETS = {
+    "dependency_error": 1,
+    "logic_error": MAX_SPEC_REWRITES,
+    "environment_error": 1,
+    "network_error": 2,
+    "timeout": 0,
+    "format_error": 2,
+    "unknown": MAX_SPEC_REWRITES,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -685,10 +701,15 @@ def _finalize_code_tracking():
 
 def execute_step(step: dict, state: dict, completed_outputs: dict,
                  progress_counts: dict | None = None,
-                 dashboard: Dashboard | None = None) -> bool:
+                 dashboard: Dashboard | None = None,
+                 backtracked_steps: set | None = None) -> bool:
     """Execute a single step, with spec rewrite retries.
 
     Returns True on success, False on unrecoverable failure.
+
+    Args:
+        backtracked_steps: Set of step IDs already backtracked to (Section 3d).
+            Used to limit backtracking depth to 1 and avoid re-backtracking.
     """
     total = len(state["steps"])
     _probe_environment()
@@ -696,6 +717,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                             workspace_path=WORKSPACE)
     counts = progress_counts or {"completed": 0, "failed": 0}
     step_start = time.monotonic()
+    if backtracked_steps is None:
+        backtracked_steps = set()
 
     # Build step context for dynamic CLAUDE.md (Section 1d)
     completed_steps_info = [
@@ -956,6 +979,47 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             f"Error: {error_info[:500]}"
         )
 
+        # Section 3b: Classify error for adaptive retry budgets
+        error_type = classify_failure(error_info)
+        logger.info("  Error type: %s", error_type)
+
+        # Section 3a: Generate structured reflection
+        try:
+            reflection = generate_reflection(
+                step,
+                result.get("stdout", "") or "",
+                result.get("stderr", "") or error_info,
+                attempt=spec_attempt + 1,
+            )
+        except Exception as e:
+            logger.warning("  Reflection generation failed: %s", e)
+            reflection = {
+                "attempt": spec_attempt + 1,
+                "error_type": error_type,
+                "root_cause": error_info[:200],
+                "strategy_tried": f"attempt {spec_attempt + 1}",
+                "lesson": "",
+                "what_to_try_next": "",
+            }
+
+        # Store reflection in step state
+        step.setdefault("reflections", []).append(reflection)
+        _save_state_threadsafe(state)
+
+        event_log.emit(EventType.REFLECTION_GENERATED,
+                       step_id=step["id"],
+                       attempt=spec_attempt + 1,
+                       data={"error_type": reflection["error_type"],
+                             "root_cause": reflection["root_cause"][:100]})
+
+        # Write reflection to scratchpad for cross-step learning
+        append_scratchpad(
+            f"Reflection for step {step['id']} (attempt {spec_attempt + 1}): "
+            f"error_type={reflection['error_type']}, "
+            f"root_cause={reflection['root_cause'][:150]}, "
+            f"lesson={reflection.get('lesson', '')[:150]}"
+        )
+
         # Track attempt history for reflection (Section 1c)
         strategy = {
             0: "initial attempt",
@@ -969,7 +1033,120 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             "strategy": strategy,
         })
 
+        # Section 3b: Check error-type-adaptive retry budget
+        error_budget = _ERROR_RETRY_BUDGETS.get(error_type, MAX_SPEC_REWRITES)
+        attempts_so_far = spec_attempt + 1  # 1-indexed count of attempts done
+        if attempts_so_far > error_budget and spec_attempt < MAX_SPEC_REWRITES:
+            logger.info(
+                "  Error type '%s' exceeded retry budget (%d/%d). "
+                "Escalating early.",
+                error_type, attempts_so_far, error_budget,
+            )
+            # For timeout errors, try decomposing once before giving up
+            if error_type == "timeout" and spec_attempt == 0:
+                logger.info("  Timeout: decomposing step into sub-phases...")
+                step["description"] = decompose_failing_step(
+                    step, result.get("stdout", ""), result.get("stderr", "")
+                )
+                step["rewrites"] = spec_attempt + 1
+                _save_state_threadsafe(state)
+                continue
+            break
+
         if spec_attempt < MAX_SPEC_REWRITES:
+            # Section 3c: Counterfactual root cause tracing
+            did_backtrack = False
+            if step["depends_on"]:
+                event_log.emit(EventType.ROOT_CAUSE_TRACED,
+                               step_id=step["id"],
+                               data={"checking": True})
+                root_target, dep_id = trace_root_cause(
+                    step, error_info, completed_outputs, state,
+                )
+                event_log.emit(EventType.ROOT_CAUSE_TRACED,
+                               step_id=step["id"],
+                               data={"target": root_target,
+                                     "dep_id": dep_id})
+
+                # Section 3d: Backtracking
+                if (root_target == "dependency"
+                        and dep_id is not None
+                        and dep_id not in backtracked_steps):
+                    step_by_id = {s["id"]: s for s in state["steps"]}
+                    dep_step = step_by_id.get(dep_id)
+                    if dep_step:
+                        logger.info(
+                            "  Root cause in dependency step %d. "
+                            "Backtracking to re-execute...",
+                            dep_id,
+                        )
+                        backtracked_steps.add(dep_id)
+                        event_log.emit(EventType.BACKTRACK_START,
+                                       step_id=step["id"],
+                                       data={"backtrack_to": dep_id})
+                        if dashboard:
+                            dashboard.set_step_activity(
+                                step["id"],
+                                f"Backtracking to step {dep_id}...",
+                            )
+                            dashboard.log(
+                                f"Step {step['id']}: root cause in "
+                                f"step {dep_id}, backtracking"
+                            )
+
+                        # Reset dependency step for re-execution
+                        dep_step["status"] = "pending"
+                        dep_step["error"] = ""
+                        _save_state_threadsafe(state)
+                        if dashboard:
+                            dashboard.update(state)
+
+                        dep_success = execute_step(
+                            dep_step, state, completed_outputs,
+                            progress_counts, dashboard,
+                            backtracked_steps,
+                        )
+                        event_log.emit(
+                            EventType.BACKTRACK_COMPLETE,
+                            step_id=step["id"],
+                            data={"backtrack_to": dep_id,
+                                  "success": dep_success},
+                        )
+
+                        if dep_success:
+                            # Update completed outputs from re-executed dep
+                            completed_outputs[dep_id] = {
+                                "stdout": dep_step.get("output", ""),
+                                "stderr": dep_step.get(
+                                    "stderr_output", ""),
+                                "files": dep_step.get(
+                                    "files_written", []),
+                            }
+                            # Rebuild context with updated dep output
+                            context = build_context(
+                                step, completed_outputs,
+                                state=state,
+                                workspace_path=WORKSPACE,
+                            )
+                            did_backtrack = True
+                            logger.info(
+                                "  Backtrack to step %d succeeded. "
+                                "Retrying current step...",
+                                dep_id,
+                            )
+                        else:
+                            logger.warning(
+                                "  Backtrack to step %d also failed.",
+                                dep_id,
+                            )
+
+            if did_backtrack:
+                # Retry current step with updated context (no rewrite)
+                step["rewrites"] = spec_attempt + 1
+                _save_state_threadsafe(state)
+                continue
+
+            # Standard rewrite path
             event_log.emit(EventType.REWRITE_START, step_id=step["id"],
                            attempt=spec_attempt + 1)
             logger.info(
@@ -1001,6 +1178,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     step, result["stdout"], result["stderr"],
                     escalation_level=spec_attempt,
                     previous_attempts=attempt_history,
+                    reflections=step.get("reflections", []),
                 )
             step["rewrites"] = spec_attempt + 1
             _save_state_threadsafe(state)

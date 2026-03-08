@@ -84,6 +84,7 @@ def add_steps(state: dict, steps: list[dict]) -> dict:
             "status": "pending",
             "spec_file": None,
             "rewrites": 0,
+            "reflections": [],
             "output": "",
             "error": "",
             "timing": {

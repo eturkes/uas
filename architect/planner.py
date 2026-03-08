@@ -583,6 +583,182 @@ explicit about what the Python code should do. Do not include any explanation.
 </process>
 """
 
+REFLECTION_GEN_PROMPT = """\
+<error_output>
+<stdout>{stdout}</stdout>
+<stderr>{stderr}</stderr>
+</error_output>
+
+<task_description>{description}</task_description>
+<attempt_number>{attempt}</attempt_number>
+
+<instructions>
+Generate a structured reflection on this failure. Respond with ONLY a JSON object \
+(no markdown, no code fences, no explanation) with exactly these fields:
+{{"error_type": "one of: dependency_error, logic_error, environment_error, network_error, timeout, format_error, unknown",
+"root_cause": "brief description of what caused the failure",
+"strategy_tried": "what approach was used in this attempt",
+"lesson": "what was learned from this failure",
+"what_to_try_next": "concrete suggestion for the next attempt"}}
+</instructions>
+"""
+
+
+ROOT_CAUSE_PROMPT = """\
+<failed_step>
+<description>{description}</description>
+<error>{error}</error>
+</failed_step>
+
+<completed_dependencies>
+{dependency_info}
+</completed_dependencies>
+
+<instructions>
+A step failed with the error shown above. This step depends on previously completed steps.
+
+Determine: is the root cause of this failure in the current step itself, or was it \
+caused by incorrect or incomplete output from one of its dependency steps?
+
+Consider:
+- If this step reads files produced by a dependency, are those files likely correct?
+- Could the dependency have produced subtly wrong output that causes this step to fail?
+- Is the error clearly a code issue in this step (syntax, logic, missing import)?
+
+Respond with ONLY one of:
+- SELF (if the root cause is in this step)
+- STEP_N (where N is the dependency step number, if the root cause is in that dependency)
+</instructions>
+"""
+
+
+def generate_reflection(step: dict, stdout: str, stderr: str,
+                        attempt: int) -> dict:
+    """Generate a structured reflection on a step failure via LLM.
+
+    Returns a dict with keys: error_type, root_cause, strategy_tried,
+    lesson, what_to_try_next. Falls back to a basic reflection on failure.
+    """
+    client = get_llm_client()
+    prompt = REFLECTION_GEN_PROMPT.format(
+        description=step["description"],
+        stdout=stdout[-2000:] if len(stdout) > 2000 else stdout,
+        stderr=stderr[-2000:] if len(stderr) > 2000 else stderr,
+        attempt=attempt,
+    )
+
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START,
+                   data={"purpose": "generate_reflection"})
+    try:
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "generate_reflection"})
+    except Exception as e:
+        logger.warning("Reflection generation failed: %s", e)
+        return {
+            "attempt": attempt,
+            "error_type": "unknown",
+            "root_cause": stderr[:200] if stderr else "unknown",
+            "strategy_tried": f"attempt {attempt}",
+            "lesson": "LLM reflection failed",
+            "what_to_try_next": "retry with different approach",
+        }
+
+    # Parse JSON from response
+    text = response.strip()
+    # Strip code fences if present
+    if text.startswith("```"):
+        text = re.sub(r"```(?:json)?\s*\n?", "", text)
+        text = text.rstrip("`").strip()
+
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            reflection = {
+                "attempt": attempt,
+                "error_type": data.get("error_type", "unknown"),
+                "root_cause": data.get("root_cause", "unknown"),
+                "strategy_tried": data.get("strategy_tried", "unknown"),
+                "lesson": data.get("lesson", ""),
+                "what_to_try_next": data.get("what_to_try_next", ""),
+            }
+            return reflection
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: extract what we can
+    logger.warning("Could not parse reflection JSON, using fallback.")
+    return {
+        "attempt": attempt,
+        "error_type": "unknown",
+        "root_cause": stderr[:200] if stderr else "unknown",
+        "strategy_tried": f"attempt {attempt}",
+        "lesson": text[:200] if text else "",
+        "what_to_try_next": "retry with different approach",
+    }
+
+
+def trace_root_cause(step: dict, error: str,
+                     completed_outputs: dict,
+                     state: dict) -> tuple[str, int | None]:
+    """Determine if a failure's root cause is in this step or a dependency.
+
+    Only called when the step has dependencies. Uses an LLM to reason about
+    whether the error was caused by incorrect dependency output.
+
+    Returns ("self", None) or ("dependency", step_id).
+    """
+    if not step.get("depends_on"):
+        return ("self", None)
+
+    step_by_id = {s["id"]: s for s in state.get("steps", [])}
+    dep_lines = []
+    for dep_id in step["depends_on"]:
+        dep_step = step_by_id.get(dep_id, {})
+        output = completed_outputs.get(dep_id, "")
+        if isinstance(output, dict):
+            stdout = output.get("stdout", "")
+            files = output.get("files", [])
+        else:
+            stdout = str(output)
+            files = []
+        dep_lines.append(
+            f"Step {dep_id} ({dep_step.get('title', '?')}): "
+            f"files={files}, output_preview={stdout[:300]}"
+        )
+
+    dependency_info = "\n".join(dep_lines)
+    client = get_llm_client()
+    prompt = ROOT_CAUSE_PROMPT.format(
+        description=step["description"],
+        error=error[:1000],
+        dependency_info=dependency_info,
+    )
+
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START,
+                   data={"purpose": "trace_root_cause"})
+    try:
+        response = client.generate(prompt).strip().upper()
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "trace_root_cause"})
+    except Exception as e:
+        logger.warning("Root cause tracing failed: %s", e)
+        return ("self", None)
+
+    # Parse response
+    match = re.search(r"STEP_(\d+)", response)
+    if match:
+        dep_id = int(match.group(1))
+        if dep_id in step["depends_on"]:
+            logger.info("  Root cause traced to dependency step %d.", dep_id)
+            return ("dependency", dep_id)
+        logger.warning("  Root cause traced to step %d but it's not a dependency.", dep_id)
+
+    return ("self", None)
+
+
 ESCALATION_INSTRUCTIONS = {
     0: "",
     1: (
@@ -635,7 +811,8 @@ def _is_confused_output(result: str, original_desc: str, error: str) -> bool:
 def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
                         orchestrator_stderr: str,
                         escalation_level: int = 0,
-                        previous_attempts: list[dict] | None = None) -> str:
+                        previous_attempts: list[dict] | None = None,
+                        reflections: list[dict] | None = None) -> str:
     """Reflection-based task rewrite with progressive escalation.
 
     Uses structured diagnosis/strategy/rewrite phases instead of simple rewriting.
@@ -645,6 +822,10 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
         previous_attempts: List of prior attempt summaries for this step,
             each with keys: attempt, error, strategy. Included in the prompt
             so the LLM can see the full history and avoid repeating failed strategies.
+        reflections: List of structured reflections from prior failures
+            (Section 3a), each with keys: attempt, error_type, root_cause,
+            strategy_tried, lesson, what_to_try_next. Included as
+            <reflection_history> in the prompt.
     """
     client = get_llm_client()
 
@@ -667,6 +848,24 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
             "Summary of ALL prior attempts for this step (do NOT repeat failed strategies):\n"
             + "\n".join(lines)
             + "\n</previous_attempts>"
+        )
+
+    # Section 3a: Include structured reflection history
+    if reflections:
+        ref_lines = []
+        for ref in reflections:
+            ref_lines.append(
+                f"- Attempt {ref['attempt']}: "
+                f"error_type={ref['error_type']}, "
+                f"root_cause={ref['root_cause']}, "
+                f"lesson={ref['lesson']}, "
+                f"try_next={ref.get('what_to_try_next', 'N/A')}"
+            )
+        previous_attempts_section += (
+            "\n<reflection_history>\n"
+            "Structured reflections from ALL prior failures for this step:\n"
+            + "\n".join(ref_lines)
+            + "\n</reflection_history>"
         )
 
     prompt = REFLECT_PROMPT.format(

@@ -329,20 +329,39 @@ history. When `UAS_MAX_CONTEXT_LENGTH` is set and context exceeds the
 limit, it is compressed via the LLM with fallback to truncation.
 
 **Self-correction:** If the Orchestrator fails a step (after its own 3
-internal retries), the Architect uses reflection-based error recovery
+internal retries), the Architect uses Reflexion-based error recovery
 with up to 4 progressive escalation rewrites:
 1. Structured reflection with root cause diagnosis
 2. Forced alternative strategy
 3. Decomposition into granular sub-phases
 4. Maximally defensive final attempt
 
-Each rewrite prompt includes a `<previous_attempts>` section summarizing
-all prior attempts so the LLM avoids repeating failed strategies. A
-`<counterfactual>` reasoning step determines whether the root cause is
-in the current step or propagated from a dependency. Outputs are
-red-flagged and resampled if they show signs of confusion (excessive
-length or verbatim error repetition). If all rewrites are exhausted, it
-halts with `.state/blocker.md`.
+After each failure, the Architect generates a **structured reflection**
+via LLM (error type, root cause, lesson learned, next strategy) and
+stores it in the step's persistent `reflections` list. All accumulated
+reflections are passed as `<reflection_history>` into subsequent rewrite
+prompts, enabling the LLM to learn from the full failure history and
+avoid repeating failed strategies. Reflections are also written to the
+global scratchpad so other steps can learn from them.
+
+**Error-type-adaptive retry budgets** classify each failure (dependency,
+logic, environment, network, timeout, format) and exit the retry loop
+early when additional retries are unlikely to help — for example,
+dependency errors get 1 retry, timeouts get 0 (immediate decomposition),
+while logic errors get the full budget.
+
+**Counterfactual root cause tracing:** When a failing step has
+dependencies, the Architect asks the LLM whether the root cause is in
+the current step or propagated from a dependency. If a dependency is
+identified as the root cause, **backtracking** re-executes that
+dependency step, updates the context with fresh output, and retries the
+current step — limited to depth 1 to avoid infinite loops.
+
+Each rewrite prompt also includes a `<previous_attempts>` section and a
+`<counterfactual>` reasoning step. Outputs are red-flagged and resampled
+if they show signs of confusion (excessive length or verbatim error
+repetition). If all rewrites are exhausted, it halts with
+`.state/blocker.md`.
 
 **Verification:** After a step exits successfully (code 0), post-execution
 validation checks the `UAS_RESULT` JSON (status field, file existence)

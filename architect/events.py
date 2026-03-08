@@ -29,6 +29,8 @@ class EventType(Enum):
     VERIFICATION_START = "verification_start"
     VERIFICATION_COMPLETE = "verification_complete"
     CONTEXT_BUILT = "context_built"
+    COMPLEXITY_ESTIMATE = "complexity_estimate"
+    VOTING_COMPLETE = "voting_complete"
     RUN_COMPLETE = "run_complete"
 
 

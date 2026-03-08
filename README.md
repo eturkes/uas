@@ -308,9 +308,15 @@ that enforces self-contained steps with `title`, `description`, and
 (data) at the top and instructions at the bottom for optimal response
 quality. The LLM must produce a `<complexity_assessment>` justifying the
 number of steps and an `<anti_patterns>` checklist guards against common
-decomposition mistakes. After critique, trivially combinable steps in the
-same execution level (both with short descriptions and no dependency
-relationship) are merged to reduce LLM calls and sandbox invocations.
+decomposition mistakes. For medium and complex goals, **multi-plan voting**
+generates three decomposition plans in parallel (each with a different
+strategy bias: default, simplicity, robustness) and selects the
+highest-scoring plan based on parallelism ratio, description specificity,
+and step compactness. A quick complexity estimation gate skips voting
+overhead for trivial and simple goals. After critique, trivially combinable
+steps in the same execution level (both with short descriptions and no
+dependency relationship) are merged to reduce LLM calls and sandbox
+invocations.
 
 **Context propagation:** When step N depends on step M, the Architect
 builds structured XML context from step M's output (`<previous_step_output>`,

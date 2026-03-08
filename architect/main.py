@@ -16,6 +16,7 @@ import time
 from .state import init_state, save_state, load_state, add_steps, append_scratchpad, read_scratchpad
 from .planner import (
     decompose_goal,
+    decompose_goal_with_voting,
     reflect_and_rewrite,
     decompose_failing_step,
     topological_sort,
@@ -1111,19 +1112,24 @@ def main():
         goal_entity = prov.add_entity("goal", content=goal)
         planner_agent = prov.add_agent("planner_llm")
 
-        # Phase 1: Decompose
+        # Phase 1: Decompose (with multi-plan voting for complex goals)
         logger.info("Phase 1: Decomposing goal into atomic steps...")
         event_log.emit(EventType.DECOMPOSITION_START)
         decompose_start = time.monotonic()
         state = init_state(goal)
         try:
-            steps = decompose_goal(goal)
+            steps = decompose_goal_with_voting(goal)
         except Exception as e:
             logger.error("Failed to decompose goal: %s", e)
             state["status"] = "failed"
             save_state(state)
             sys.exit(1)
         decompose_elapsed = time.monotonic() - decompose_start
+
+        # Store estimated complexity in state
+        complexity = getattr(decompose_goal_with_voting, "last_complexity", None)
+        if isinstance(complexity, str):
+            state["complexity"] = complexity
 
         decompose_activity = prov.add_activity(
             "decompose", content=json.dumps([s.get("title", "") for s in steps]),

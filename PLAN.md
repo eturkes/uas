@@ -46,7 +46,7 @@ This plan identifies concrete improvements to maximize UAS's problem-solving abi
 
 ---
 
-## Section 2: Self-Consistency Planning (Multi-Plan Voting)
+## Section 2: Self-Consistency Planning (Multi-Plan Voting) [DONE]
 
 **Rationale:** Self-consistency (generating N plans and voting) is one of the most reliably effective techniques across benchmarks. Confidence-weighted voting achieves the same accuracy with 46% fewer samples. For UAS, this means the decomposition phase produces better plans, especially for complex goals.
 

@@ -110,7 +110,7 @@ class TestWriteJsonOutput:
 
 
 class TestOutputIntegration:
-    @patch("architect.main.decompose_goal")
+    @patch("architect.main.decompose_goal_with_voting")
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
     @patch("architect.main.build_task_from_spec")
@@ -137,7 +137,7 @@ class TestOutputIntegration:
         assert len(data["steps"]) == 1
         assert data["steps"][0]["status"] == "completed"
 
-    @patch("architect.main.decompose_goal")
+    @patch("architect.main.decompose_goal_with_voting")
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
     @patch("architect.main.build_task_from_spec")
@@ -174,7 +174,7 @@ class TestOutputIntegration:
         assert data["status"] == "blocked"
         assert data["steps"][0]["status"] == "failed"
 
-    @patch("architect.main.decompose_goal")
+    @patch("architect.main.decompose_goal_with_voting")
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
     @patch("architect.main.build_task_from_spec")
@@ -200,7 +200,7 @@ class TestOutputIntegration:
             data = json.load(f)
         assert data["status"] == "completed"
 
-    @patch("architect.main.decompose_goal")
+    @patch("architect.main.decompose_goal_with_voting")
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
     @patch("architect.main.build_task_from_spec")

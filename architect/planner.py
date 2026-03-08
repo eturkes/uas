@@ -1,5 +1,6 @@
 """LLM-based task decomposition into atomic steps."""
 
+import concurrent.futures
 import json
 import logging
 import re
@@ -274,6 +275,200 @@ def decompose_goal(goal: str) -> list[dict]:
 
     validate_depends_on(steps)
     return steps
+
+
+COMPLEXITY_PROMPT = """\
+<goal>{goal}</goal>
+
+Rate the complexity of this goal for an autonomous code-generation system.
+Categories:
+- trivial: single action, 1 step (e.g. print a value, run one command)
+- simple: 2-3 straightforward steps with clear dependencies
+- medium: 4-7 steps, may involve external APIs, data processing pipelines, or multi-file projects
+- complex: 8+ steps, significant architecture, multiple interacting components
+
+Respond with ONLY one word: trivial, simple, medium, or complex.
+"""
+
+# Prompt suffixes used to elicit diverse decomposition plans for voting.
+_VOTING_SUFFIXES = [
+    "",  # Plan A: default
+    (
+        "\n\n<approach_hint>Approach this from the angle of SIMPLICITY: "
+        "minimize the number of steps and prefer combining related work "
+        "into single steps where safe.</approach_hint>"
+    ),
+    (
+        "\n\n<approach_hint>Approach this from the angle of ROBUSTNESS: "
+        "prefer more granular steps with explicit error handling between "
+        "phases, even if it means more steps.</approach_hint>"
+    ),
+]
+
+
+def estimate_complexity(goal: str) -> str:
+    """Make a quick LLM call to estimate goal complexity.
+
+    Returns one of: 'trivial', 'simple', 'medium', 'complex'.
+    Falls back to 'medium' on parse failure.
+    """
+    client = get_llm_client()
+    prompt = COMPLEXITY_PROMPT.format(goal=goal)
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START, data={"purpose": "estimate_complexity"})
+    try:
+        response = client.generate(prompt).strip().lower()
+    except Exception as e:
+        logger.warning("Complexity estimation failed, defaulting to medium: %s", e)
+        return "medium"
+    event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "estimate_complexity"})
+
+    for category in ("trivial", "simple", "medium", "complex"):
+        if category in response:
+            return category
+    logger.warning("Could not parse complexity '%s', defaulting to medium.", response)
+    return "medium"
+
+
+def score_plan(steps: list[dict]) -> float:
+    """Score a decomposition plan for selection during voting.
+
+    Score = parallelism_ratio * 0.4 + specificity * 0.3 + compactness * 0.3
+
+    - parallelism_ratio: 1 - (num_levels / num_steps), higher = more parallel
+    - specificity: avg description length / 500, capped at 1.0
+    - compactness: 1 / num_steps, fewer steps = higher score
+    """
+    n = len(steps)
+    if n == 0:
+        return 0.0
+
+    # Parallelism: compute execution levels
+    indexed = [{**s, "id": i + 1} for i, s in enumerate(steps)]
+    try:
+        levels = topological_sort(indexed)
+        num_levels = len(levels)
+    except ValueError:
+        num_levels = n  # Invalid DAG, worst-case parallelism
+
+    parallelism_ratio = max(0.0, 1.0 - (num_levels / n)) if n > 1 else 0.0
+
+    # Specificity: average description length, capped
+    avg_desc_len = sum(len(s.get("description", "")) for s in steps) / n
+    specificity = min(avg_desc_len / 500.0, 1.0)
+
+    # Compactness: fewer steps is better
+    compactness = 1.0 / n
+
+    return parallelism_ratio * 0.4 + specificity * 0.3 + compactness * 0.3
+
+
+def decompose_goal_with_voting(goal: str, n_samples: int = 3) -> list[dict]:
+    """Generate multiple decomposition plans and select the best one.
+
+    Uses a complexity gate: trivial/simple goals skip voting entirely.
+    Medium/complex goals generate n_samples plans in parallel and pick
+    the highest-scoring one.
+
+    Returns (steps, complexity) tuple-style via the steps list, with the
+    estimated complexity stored in the module-level for the caller to read.
+    """
+    event_log = get_event_log()
+
+    # 2c: Complexity estimation gate
+    complexity = estimate_complexity(goal)
+    event_log.emit(EventType.COMPLEXITY_ESTIMATE, data={"complexity": complexity})
+    logger.info("  Estimated complexity: %s", complexity)
+
+    # Store for caller access
+    decompose_goal_with_voting.last_complexity = complexity
+
+    if complexity in ("trivial", "simple"):
+        logger.info("  Skipping voting for %s goal, using single decomposition.", complexity)
+        return decompose_goal(goal)
+
+    # 2a: Generate N plans in parallel
+    logger.info("  Generating %d plans for voting...", n_samples)
+
+    def _generate_plan(suffix_idx: int) -> list[dict] | None:
+        """Generate a single plan variant. Returns None on failure."""
+        try:
+            client = get_llm_client()
+            suffix = _VOTING_SUFFIXES[suffix_idx] if suffix_idx < len(_VOTING_SUFFIXES) else ""
+            prompt = DECOMPOSITION_PROMPT.format(goal=goal) + suffix
+            response = client.generate(prompt)
+            steps = parse_steps_json(response)
+            if not steps:
+                return None
+            for step in steps:
+                if "title" not in step or "description" not in step:
+                    return None
+                step.setdefault("depends_on", [])
+                step.setdefault("verify", "")
+                step.setdefault("environment", [])
+            # Normalize 0-indexed depends_on
+            has_zero_ref = any(0 in s.get("depends_on", []) for s in steps)
+            if has_zero_ref:
+                for step in steps:
+                    step["depends_on"] = [d + 1 for d in step["depends_on"]]
+            validate_depends_on(steps)
+            return steps
+        except Exception as e:
+            logger.warning("  Plan generation variant %d failed: %s", suffix_idx, e)
+            return None
+
+    plans: list[list[dict]] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_samples) as executor:
+        futures = {
+            executor.submit(_generate_plan, i): i
+            for i in range(n_samples)
+        }
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result is not None:
+                plans.append(result)
+
+    if not plans:
+        logger.warning("  All voting plans failed, falling back to single decomposition.")
+        return decompose_goal(goal)
+
+    if len(plans) == 1:
+        logger.info("  Only 1 valid plan generated, using it directly.")
+        event_log.emit(EventType.VOTING_COMPLETE, data={
+            "plans_generated": 1,
+            "plans_valid": 1,
+            "winning_score": score_plan(plans[0]),
+        })
+        return plans[0]
+
+    # 2b: Score and select
+    scored = [(score_plan(p), i, p) for i, p in enumerate(plans)]
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    for score, idx, plan in scored:
+        logger.info(
+            "  Plan %d: %d steps, score=%.3f",
+            idx + 1, len(plan), score,
+        )
+
+    best_score, best_idx, best_plan = scored[0]
+    logger.info("  Selected plan %d (score=%.3f, %d steps).",
+                best_idx + 1, best_score, len(best_plan))
+
+    event_log.emit(EventType.VOTING_COMPLETE, data={
+        "plans_generated": n_samples,
+        "plans_valid": len(plans),
+        "scores": [{"plan": i, "score": round(s, 4), "steps": len(p)}
+                   for s, i, p in scored],
+        "winning_plan": best_idx,
+        "winning_score": round(best_score, 4),
+    })
+
+    return best_plan
+
+
+# Initialize the attribute for complexity storage
+decompose_goal_with_voting.last_complexity = None
 
 
 CRITIQUE_PROMPT = """\

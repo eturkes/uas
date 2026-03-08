@@ -72,7 +72,7 @@ class TestPrintPlan:
 
 
 class TestDryRunMode:
-    @patch("architect.main.decompose_goal")
+    @patch("architect.main.decompose_goal_with_voting")
     def test_dry_run_skips_executor(self, mock_decompose, tmp_workspace, monkeypatch):
         """Dry-run should decompose but not call run_orchestrator."""
         mock_decompose.return_value = [
@@ -90,7 +90,7 @@ class TestDryRunMode:
         mock_decompose.assert_called_once()
         mock_orch.assert_not_called()
 
-    @patch("architect.main.decompose_goal")
+    @patch("architect.main.decompose_goal_with_voting")
     def test_dry_run_env_var_skips_executor(self, mock_decompose, tmp_workspace, monkeypatch):
         """UAS_DRY_RUN=1 should also trigger dry-run mode."""
         mock_decompose.return_value = [

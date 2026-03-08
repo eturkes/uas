@@ -304,10 +304,13 @@ the Orchestrator to execute them sequentially.
 
 **Planning:** The Planner sends the goal to the LLM with a structured prompt
 that enforces self-contained steps with `title`, `description`, and
-`depends_on` fields (JSON array). After critique, trivially combinable
-steps in the same execution level (both with short descriptions and no
-dependency relationship) are merged to reduce LLM calls and sandbox
-invocations.
+`depends_on` fields (JSON array). The prompt places the goal and examples
+(data) at the top and instructions at the bottom for optimal response
+quality. The LLM must produce a `<complexity_assessment>` justifying the
+number of steps and an `<anti_patterns>` checklist guards against common
+decomposition mistakes. After critique, trivially combinable steps in the
+same execution level (both with short descriptions and no dependency
+relationship) are merged to reduce LLM calls and sandbox invocations.
 
 **Context propagation:** When step N depends on step M, the Architect
 builds structured XML context from step M's output (`<previous_step_output>`,
@@ -327,9 +330,13 @@ with up to 4 progressive escalation rewrites:
 3. Decomposition into granular sub-phases
 4. Maximally defensive final attempt
 
-Outputs are red-flagged and resampled if they show signs of confusion
-(excessive length or verbatim error repetition). If all rewrites are
-exhausted, it halts with `.state/blocker.md`.
+Each rewrite prompt includes a `<previous_attempts>` section summarizing
+all prior attempts so the LLM avoids repeating failed strategies. A
+`<counterfactual>` reasoning step determines whether the root cause is
+in the current step or propagated from a dependency. Outputs are
+red-flagged and resampled if they show signs of confusion (excessive
+length or verbatim error repetition). If all rewrites are exhausted, it
+halts with `.state/blocker.md`.
 
 **Verification:** After a step exits successfully (code 0), post-execution
 validation checks the `UAS_RESULT` JSON (status field, file existence)
@@ -357,7 +364,9 @@ and a dependency file exist. Warnings appear in `.state/validation.md`.
 writes a `.claude/CLAUDE.md` file to the workspace. This gives the Claude
 Code CLI persistent instructions on coding standards, environment details,
 output format (`UAS_RESULT` JSON), security, and error handling best
-practices.
+practices. The file is dynamic per-step: it includes the current step
+number, total steps, dependencies, and a summary of what prior steps
+produced, so the LLM has full context of its position in the plan.
 
 **Parallel execution:** Independent steps (no dependency relationship)
 run concurrently, optionally capped by `UAS_MAX_PARALLEL`. Per-step timing tracks LLM call time vs sandbox
@@ -426,8 +435,9 @@ included as a fifth tab in the HTML report.
 1. Receive task (CLI arg / env var / stdin)
 2. Verify sandbox works (trivial print statement)
 3. For attempt = 1..3:
-   a. Build XML-structured prompt (<role>, <environment>,
-      <task>, <constraints>, <verification>)
+   a. Build XML-structured prompt (data first: <environment>,
+      <task>, <workspace_state>; then instructions: <role>,
+      <constraints>, <verification>)
    b. Send prompt to LLM -> receive response
    c. Extract code block from response
    d. Execute code in sandbox container

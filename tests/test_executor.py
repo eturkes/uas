@@ -304,3 +304,44 @@ class TestStdoutNoTruncationByDefault:
         log = f"stderr:\n{content}\nExit code: 0"
         result = extract_sandbox_stderr(log)
         assert result == content
+
+
+class TestDynamicClaudeMd:
+    def test_get_claude_md_without_context(self):
+        from orchestrator.claude_config import get_claude_md_content
+        content = get_claude_md_content()
+        assert "Workspace Instructions" in content
+        assert "Current Task Context" not in content
+
+    def test_get_claude_md_with_step_context(self):
+        from orchestrator.claude_config import get_claude_md_content
+        ctx = {
+            "step_number": 3,
+            "total_steps": 5,
+            "step_title": "Process data",
+            "dependencies": [1, 2],
+            "prior_steps": [
+                {"id": 1, "title": "Download", "summary": "Downloaded CSV", "files": ["data.csv"]},
+                {"id": 2, "title": "Clean", "summary": "Cleaned data", "files": ["clean.csv"]},
+            ],
+        }
+        content = get_claude_md_content(step_context=ctx)
+        assert "Current Task Context" in content
+        assert "3 of 5" in content
+        assert "Process data" in content
+        assert "steps [1, 2]" in content
+        assert "Downloaded CSV" in content
+        assert "data.csv" in content
+
+    def test_get_claude_md_independent_step(self):
+        from orchestrator.claude_config import get_claude_md_content
+        ctx = {
+            "step_number": 1,
+            "total_steps": 3,
+            "step_title": "Init repo",
+            "dependencies": [],
+            "prior_steps": [],
+        }
+        content = get_claude_md_content(step_context=ctx)
+        assert "none (independent step)" in content
+        assert "Prior Steps Output" not in content

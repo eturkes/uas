@@ -696,11 +696,30 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
     counts = progress_counts or {"completed": 0, "failed": 0}
     step_start = time.monotonic()
 
+    # Build step context for dynamic CLAUDE.md (Section 1d)
+    completed_steps_info = [
+        {
+            "id": s["id"],
+            "title": s["title"],
+            "summary": s.get("summary", ""),
+            "files": s.get("files_written", []),
+        }
+        for s in state["steps"] if s["status"] == "completed"
+    ]
+    step_context = {
+        "step_number": step["id"],
+        "total_steps": total,
+        "step_title": step["title"],
+        "dependencies": step["depends_on"],
+        "prior_steps": completed_steps_info,
+    }
+
     event_log = get_event_log()
     prov = get_provenance_graph()
     event_log.emit(EventType.STEP_START, step_id=step["id"],
                    data={"title": step["title"]})
     prev_error_entity = None
+    attempt_history = []  # Track prior attempts for reflection (Section 1c)
 
     for spec_attempt in range(1 + MAX_SPEC_REWRITES):
         if dashboard:
@@ -745,11 +764,20 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             "UAS_STEP_ID": str(step["id"]),
             "UAS_SPEC_ATTEMPT": str(spec_attempt),
         }
+        # Scan workspace files for orchestrator prompt context (Section 1a)
+        ws_files = scan_workspace_files(WORKSPACE)
+        if ws_files:
+            ws_listing = "\n".join(
+                f"  {fname} ({info['size']} bytes, {info['type']})"
+                for fname, info in sorted(ws_files.items())
+            )
+            extra_env["UAS_WORKSPACE_FILES"] = ws_listing
         output_cb = None
         if dashboard and dashboard.use_rich:
             output_cb = lambda line: dashboard.add_output_line(line)
         result = run_orchestrator(task, extra_env=extra_env,
-                                  output_callback=output_cb)
+                                  output_callback=output_cb,
+                                  step_context=step_context)
         orch_elapsed = time.monotonic() - orch_start
         event_log.emit(EventType.LLM_CALL_COMPLETE, step_id=step["id"],
                        attempt=spec_attempt + 1, duration=orch_elapsed,
@@ -927,6 +955,19 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             f"Error: {error_info[:500]}"
         )
 
+        # Track attempt history for reflection (Section 1c)
+        strategy = {
+            0: "initial attempt",
+            1: "alternative strategy",
+            2: "decompose into sub-phases",
+            3: "final defensive rewrite",
+        }.get(spec_attempt, f"rewrite attempt {spec_attempt}")
+        attempt_history.append({
+            "attempt": spec_attempt + 1,
+            "error": error_info[:300],
+            "strategy": strategy,
+        })
+
         if spec_attempt < MAX_SPEC_REWRITES:
             event_log.emit(EventType.REWRITE_START, step_id=step["id"],
                            attempt=spec_attempt + 1)
@@ -958,6 +999,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 step["description"] = reflect_and_rewrite(
                     step, result["stdout"], result["stderr"],
                     escalation_level=spec_attempt,
+                    previous_attempts=attempt_history,
                 )
             step["rewrites"] = spec_attempt + 1
             _save_state_threadsafe(state)

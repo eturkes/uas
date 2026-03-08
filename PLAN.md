@@ -11,7 +11,7 @@ This plan identifies concrete improvements to maximize UAS's problem-solving abi
 
 ---
 
-## Section 1: Prompt Architecture Overhaul
+## Section 1: Prompt Architecture Overhaul [DONE]
 
 **Rationale:** Claude best practices show that prompt structure alone can improve response quality by up to 30%. The current prompts put instructions before data — Claude performs better with data first, instructions last. Additionally, adding structured thinking sections and workspace-aware context dramatically improves code correctness.
 

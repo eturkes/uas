@@ -8,6 +8,8 @@ import pytest
 from architect.planner import (
     parse_steps_json,
     DECOMPOSITION_PROMPT,
+    REFLECT_PROMPT,
+    DECOMPOSE_STEP_PROMPT,
     critique_and_refine_plan,
     reflect_and_rewrite,
     decompose_failing_step,
@@ -109,6 +111,70 @@ class TestDecompositionPromptConstraints:
 
     def test_parallelism_instruction(self):
         assert "parallelism" in DECOMPOSITION_PROMPT.lower()
+
+    def test_goal_at_top(self):
+        """Goal data should appear at the top of the prompt."""
+        goal_pos = DECOMPOSITION_PROMPT.index("<goal>")
+        instructions_pos = DECOMPOSITION_PROMPT.index("<instructions>")
+        rules_pos = DECOMPOSITION_PROMPT.index("<rules>")
+        assert goal_pos < instructions_pos
+        assert goal_pos < rules_pos
+
+    def test_complexity_assessment_tag(self):
+        assert "<complexity_assessment>" in DECOMPOSITION_PROMPT
+
+    def test_anti_patterns_section(self):
+        assert "<anti_patterns>" in DECOMPOSITION_PROMPT
+        assert "Over-splitting" in DECOMPOSITION_PROMPT
+        assert "Under-splitting" in DECOMPOSITION_PROMPT
+        assert "Missing dependencies" in DECOMPOSITION_PROMPT
+
+    def test_analysis_strengthened(self):
+        assert "failure modes" in DECOMPOSITION_PROMPT.lower()
+        assert "risk areas" in DECOMPOSITION_PROMPT.lower()
+        assert "parallelization" in DECOMPOSITION_PROMPT.lower()
+
+
+class TestComplexityAssessmentStripped:
+    def test_complexity_assessment_tags_stripped(self):
+        raw = (
+            '<analysis>This is medium.</analysis>\n'
+            '<complexity_assessment>medium — 3 steps</complexity_assessment>\n'
+            '[{"title": "a", "description": "b"}]'
+        )
+        result = parse_steps_json(raw)
+        assert len(result) == 1
+        assert result[0]["title"] == "a"
+
+    def test_both_analysis_and_complexity_stripped(self):
+        raw = (
+            '<analysis>\nMulti-line\nanalysis\n</analysis>\n'
+            '<complexity_assessment>complex — 8+ steps needed</complexity_assessment>\n'
+            '[{"title": "x", "description": "y"}, {"title": "z", "description": "w"}]'
+        )
+        result = parse_steps_json(raw)
+        assert len(result) == 2
+
+
+class TestPromptStructureOrdering:
+    def test_reflect_prompt_data_before_instructions(self):
+        """Failure output should appear before instructions in REFLECT_PROMPT."""
+        failure_pos = REFLECT_PROMPT.index("<failure_output>")
+        instructions_pos = REFLECT_PROMPT.index("<instructions>")
+        assert failure_pos < instructions_pos
+
+    def test_reflect_prompt_has_counterfactual(self):
+        assert "<counterfactual>" in REFLECT_PROMPT
+        assert "root cause" in REFLECT_PROMPT.lower()
+
+    def test_reflect_prompt_has_previous_attempts_placeholder(self):
+        assert "{previous_attempts_section}" in REFLECT_PROMPT
+
+    def test_decompose_step_prompt_data_before_instructions(self):
+        """Failed task data should appear before instructions."""
+        task_pos = DECOMPOSE_STEP_PROMPT.index("<failed_task>")
+        instructions_pos = DECOMPOSE_STEP_PROMPT.index("<instructions>")
+        assert task_pos < instructions_pos
 
 
 class TestCritiqueAndRefinePlan:
@@ -261,6 +327,54 @@ class TestReflectAndRewrite:
         # Full stdout and stderr are passed through (no default truncation)
         assert "x" * 5000 in prompt
         assert "y" * 5000 in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_previous_attempts_included(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "improved task"
+        mock_get_client.return_value = client
+
+        step = {"description": "do something"}
+        attempts = [
+            {"attempt": 1, "error": "ModuleNotFoundError: pandas", "strategy": "initial attempt"},
+            {"attempt": 2, "error": "FileNotFoundError: data.csv", "strategy": "alternative strategy"},
+        ]
+        result = reflect_and_rewrite(step, "out", "err", previous_attempts=attempts)
+        prompt = client.generate.call_args[0][0]
+        assert "<previous_attempts>" in prompt
+        assert "ModuleNotFoundError" in prompt
+        assert "initial attempt" in prompt
+        assert "alternative strategy" in prompt
+        assert result == "improved task"
+
+    @patch("architect.planner.get_llm_client")
+    def test_no_previous_attempts_section_when_none(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "rewritten"
+        mock_get_client.return_value = client
+
+        step = {"description": "task"}
+        reflect_and_rewrite(step, "out", "err")
+        prompt = client.generate.call_args[0][0]
+        assert "<previous_attempts>" not in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_counterfactual_tags_stripped(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = (
+            "<diagnosis>Logic error</diagnosis>\n"
+            "<counterfactual>Root cause is in this step, not a dependency.</counterfactual>\n"
+            "<strategies>1. Fix parsing. Pick 1.</strategies>\n"
+            "Improved: fix the parsing logic"
+        )
+        mock_get_client.return_value = client
+
+        step = {"description": "parse data"}
+        result = reflect_and_rewrite(step, "out", "err")
+        assert "fix the parsing logic" in result
+        assert "<counterfactual>" not in result
+        assert "<diagnosis>" not in result
+        assert "<strategies>" not in result
 
 
 class TestIsConfusedOutput:

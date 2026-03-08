@@ -65,11 +65,13 @@ def get_task(args) -> str:
 
 def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  previous_code: str | None = None,
-                 environment: list[str] | None = None) -> str:
+                 environment: list[str] | None = None,
+                 workspace_files: str | None = None) -> str:
     """Build the structured prompt for code generation.
 
-    Uses XML tags to separate role, environment, task, constraints,
-    and verification sections for clarity.
+    Uses XML tags with data sections (environment, task, workspace state)
+    at the top and instruction sections (role, constraints, verification)
+    at the bottom for optimal Claude response quality.
     """
     env_setup = ""
     if environment:
@@ -81,14 +83,8 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
             f"'{pkgs}'], check=True)\n"
         )
 
+    # Data sections at top (environment, task, workspace state)
     prompt = f"""\
-<role>
-You are an expert Python engineer generating production-quality scripts
-inside an isolated container. Respond with a SINGLE fenced code block
-tagged as ```python. Do NOT include any explanation or text outside the
-code block. The script must be complete and self-contained.
-</role>
-
 <environment>
 - Python 3.12 with full root access.
 - Workspace directory: use os.environ.get("WORKSPACE", "/workspace").
@@ -100,7 +96,28 @@ code block. The script must be complete and self-contained.
 
 <task>
 {task}
-</task>
+</task>"""
+
+    if workspace_files:
+        prompt += f"""
+
+<workspace_state>
+Files already present in the workspace from prior steps:
+{workspace_files}
+Do not regenerate these files unless the task explicitly requires modifying them.
+Reference them by path using os.path.join(workspace, ...).
+</workspace_state>"""
+
+    # Instruction sections at bottom (role, constraints, verification)
+    prompt += """
+
+<role>
+You are an expert Python engineer generating production-quality scripts
+inside an isolated container. First, analyze the task in <analysis> tags
+to identify your approach, potential pitfalls, and key decisions. Then
+respond with a SINGLE fenced code block tagged as ```python.
+The script must be complete and self-contained.
+</role>
 
 <constraints>
 - Exit with code 0 on success, non-zero on failure.
@@ -125,9 +142,9 @@ At the end of your script, include a self-verification section that:
 1. Checks that any output files actually exist and are non-empty.
 2. Validates the output format if applicable.
 3. Prints a machine-readable summary as the LAST line of stdout:
-   UAS_RESULT: {{"status": "ok", "files_written": [...], "summary": "..."}}
+   UAS_RESULT: {"status": "ok", "files_written": [...], "summary": "..."}
    If verification fails, exit with code 1 and print:
-   UAS_RESULT: {{"status": "error", "error": "description of what failed"}}
+   UAS_RESULT: {"status": "error", "error": "description of what failed"}
 </verification>"""
 
     if previous_error and attempt > 1:
@@ -259,11 +276,13 @@ def main():
     client = get_llm_client()
     previous_error = None
     previous_code = None
+    workspace_files = os.environ.get("UAS_WORKSPACE_FILES")
 
     for attempt in range(1, MAX_RETRIES + 1):
         logger.info("\n--- Attempt %d/%d ---", attempt, MAX_RETRIES)
 
-        prompt = build_prompt(task, attempt, previous_error, previous_code)
+        prompt = build_prompt(task, attempt, previous_error, previous_code,
+                              workspace_files=workspace_files)
         logger.info("Querying LLM...")
         response = client.generate(prompt)
 

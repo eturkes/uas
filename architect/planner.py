@@ -10,13 +10,75 @@ from .events import EventType, get_event_log
 logger = logging.getLogger(__name__)
 
 DECOMPOSITION_PROMPT = """\
+<goal>{goal}</goal>
+
+<examples>
+Example 1 — Trivial (single step):
+Goal: "Print the current date and time"
+<analysis>
+Complexity: trivial (1 step). Single action, no dependencies, no external packages.
+Sub-problems: none. Risk areas: none. Parallelization: N/A.
+Failure modes: none expected.
+</analysis>
+<complexity_assessment>trivial — single standard library call, 1 step</complexity_assessment>
+[{{"title": "Print datetime", "description": "Write a Python script that prints the current date and time using the datetime module.", "depends_on": [], "verify": "stdout contains a date/time string", "environment": []}}]
+
+Example 2 — Medium with dependencies:
+Goal: "Download a CSV from a URL, clean it, and produce summary statistics"
+<analysis>
+Complexity: medium. Three distinct phases: download, clean, analyze.
+Sub-problems: network reliability for download, data quality for cleaning, correct statistics.
+Risk areas: CSV format variability, missing values handling.
+Parallelization: none — strictly sequential pipeline.
+Failure modes: network timeout, malformed CSV, empty dataset after cleaning.
+</analysis>
+<complexity_assessment>medium — 3 sequential data processing steps</complexity_assessment>
+[
+  {{"title": "Download CSV", "description": "Download the CSV file from the given URL using requests and save it to the workspace as raw_data.csv. Print the number of rows and columns.", "depends_on": [], "verify": "raw_data.csv exists in workspace and has >0 rows", "environment": ["requests"]}},
+  {{"title": "Clean data", "description": "Read raw_data.csv from the workspace, handle missing values (drop rows with >50% nulls, fill numeric nulls with median), remove duplicates, and save as cleaned_data.csv. Print cleaning summary.", "depends_on": [1], "verify": "cleaned_data.csv exists and has fewer or equal rows to raw_data.csv", "environment": ["pandas"]}},
+  {{"title": "Summary statistics", "description": "Read cleaned_data.csv, compute summary statistics (mean, median, std, min, max for numeric columns), and save results to summary.json and summary.txt. Print the summary.", "depends_on": [2], "verify": "summary.json and summary.txt exist in workspace", "environment": ["pandas"]}}
+]
+
+Example 3 — Complex with parallelism:
+Goal: "Scrape product info from two websites and compare prices"
+<analysis>
+Complexity: medium. Two independent scraping tasks plus a comparison.
+Sub-problems: web scraping reliability, product name matching across sites.
+Risk areas: website structure changes, rate limiting, inconsistent product naming.
+Parallelization: scraping site A and B are fully independent — run in parallel.
+Failure modes: blocked by site, empty results, no matching products.
+</analysis>
+<complexity_assessment>medium — 2 parallel scraping steps + 1 comparison</complexity_assessment>
+[
+  {{"title": "Scrape site A", "description": "Scrape product names and prices from site A using requests and BeautifulSoup. Save results as site_a_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_a_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"]}},
+  {{"title": "Scrape site B", "description": "Scrape product names and prices from site B using requests and BeautifulSoup. Save results as site_b_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_b_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"]}},
+  {{"title": "Compare prices", "description": "Read site_a_products.json and site_b_products.json from the workspace. Match products by name and compare prices. Save comparison to price_comparison.csv and print a summary of which site is cheaper on average.", "depends_on": [1, 2], "verify": "price_comparison.csv exists and contains matched products", "environment": ["pandas"]}}
+]
+</examples>
+
+<anti_patterns>
+Common decomposition mistakes to avoid:
+- Over-splitting trivial tasks: a single pip install + script does not need 3 separate steps
+- Under-splitting complex tasks: a step that does "download, parse, transform, analyze, and visualize" should be broken down
+- Missing dependencies: if step 3 reads a file written by step 1, it must list step 1 in depends_on
+- Implicit ordering: steps that must run sequentially need explicit depends_on, even if the order seems obvious
+- Overly vague descriptions: "process the data" tells the code-generating LLM nothing — be specific about format, method, and expected output
+- Forgetting error boundaries: each step should handle its own errors rather than assuming upstream perfection
+</anti_patterns>
+
 <instructions>
-You are a task decomposition engine. Given a high-level goal, break it into \
+You are a task decomposition engine. Given the goal above, break it into \
 atomic, independently executable steps that form a directed acyclic graph (DAG).
 
-First, reason about the goal in <analysis> tags: assess its complexity, identify \
-the key sub-problems, and determine appropriate granularity. Think thoroughly \
-about dependencies and which steps can run in parallel.
+First, in <analysis> tags, thoroughly reason about:
+- Key sub-problems and how they relate to each other
+- Risk areas and likely failure modes for each sub-problem
+- Parallelization opportunities (which sub-problems are independent?)
+- External dependencies (network, APIs, large data) that may fail
+
+Then, in <complexity_assessment> tags, explicitly estimate:
+- Complexity category: trivial (1 step), simple (2-3), medium (4-7), complex (8+)
+- Justification for the number of steps chosen
 
 Then produce the step DAG as a JSON array.
 </instructions>
@@ -47,7 +109,8 @@ to read them from environment variables.
 </rules>
 
 <output_format>
-Respond with your analysis in <analysis> tags, then ONLY a JSON array. Each element:
+Respond with <analysis> tags, then <complexity_assessment> tags, then ONLY a JSON \
+array. Each element:
 {{"title": "short name", \
 "description": "detailed task for a code-generating LLM", \
 "depends_on": [step_numbers], \
@@ -57,39 +120,13 @@ Respond with your analysis in <analysis> tags, then ONLY a JSON array. Each elem
 Steps are numbered starting from 1. depends_on references must use 1-based step \
 numbers (e.g. step 2 depending on step 1 should have "depends_on": [1]).
 </output_format>
-
-<examples>
-Example 1 — Trivial (single step):
-Goal: "Print the current date and time"
-<analysis>This is a trivial single-action task requiring no external packages.</analysis>
-[{{"title": "Print datetime", "description": "Write a Python script that prints the current date and time using the datetime module.", "depends_on": [], "verify": "stdout contains a date/time string", "environment": []}}]
-
-Example 2 — Medium with dependencies:
-Goal: "Download a CSV from a URL, clean it, and produce summary statistics"
-<analysis>Three distinct phases: download, clean, analyze. Cleaning depends on download, analysis depends on cleaning. No parallelism possible since each step feeds the next.</analysis>
-[
-  {{"title": "Download CSV", "description": "Download the CSV file from the given URL using requests and save it to the workspace as raw_data.csv. Print the number of rows and columns.", "depends_on": [], "verify": "raw_data.csv exists in workspace and has >0 rows", "environment": ["requests"]}},
-  {{"title": "Clean data", "description": "Read raw_data.csv from the workspace, handle missing values (drop rows with >50% nulls, fill numeric nulls with median), remove duplicates, and save as cleaned_data.csv. Print cleaning summary.", "depends_on": [1], "verify": "cleaned_data.csv exists and has fewer or equal rows to raw_data.csv", "environment": ["pandas"]}},
-  {{"title": "Summary statistics", "description": "Read cleaned_data.csv, compute summary statistics (mean, median, std, min, max for numeric columns), and save results to summary.json and summary.txt. Print the summary.", "depends_on": [2], "verify": "summary.json and summary.txt exist in workspace", "environment": ["pandas"]}}
-]
-
-Example 3 — Complex with parallelism:
-Goal: "Scrape product info from two websites and compare prices"
-<analysis>Scraping each website is independent — these can run in parallel. Comparison depends on both. Three steps total, two parallel.</analysis>
-[
-  {{"title": "Scrape site A", "description": "Scrape product names and prices from site A using requests and BeautifulSoup. Save results as site_a_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_a_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"]}},
-  {{"title": "Scrape site B", "description": "Scrape product names and prices from site B using requests and BeautifulSoup. Save results as site_b_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_b_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"]}},
-  {{"title": "Compare prices", "description": "Read site_a_products.json and site_b_products.json from the workspace. Match products by name and compare prices. Save comparison to price_comparison.csv and print a summary of which site is cheaper on average.", "depends_on": [1, 2], "verify": "price_comparison.csv exists and contains matched products", "environment": ["pandas"]}}
-]
-</examples>
-
-Goal: {goal}
 """
 
 
 def parse_steps_json(response: str) -> list[dict]:
-    # Strip <analysis> tags if present (LLM reasoning preamble)
+    # Strip <analysis> and <complexity_assessment> tags if present (LLM reasoning preamble)
     text = re.sub(r"<analysis>.*?</analysis>", "", response, flags=re.DOTALL).strip()
+    text = re.sub(r"<complexity_assessment>.*?</complexity_assessment>", "", text, flags=re.DOTALL).strip()
 
     # Direct parse
     try:
@@ -240,16 +277,16 @@ def decompose_goal(goal: str) -> list[dict]:
 
 
 CRITIQUE_PROMPT = """\
-<instructions>
-You are reviewing a task decomposition plan. Analyze the proposed steps and \
-identify any issues. Be concise and actionable.
-</instructions>
-
 <goal>{goal}</goal>
 
 <proposed_steps>
 {steps_json}
 </proposed_steps>
+
+<instructions>
+You are reviewing a task decomposition plan. Analyze the proposed steps and \
+identify any issues. Be concise and actionable.
+</instructions>
 
 <review_criteria>
 1. Are any steps too broad and should be split further?
@@ -320,30 +357,33 @@ def critique_and_refine_plan(goal: str, steps: list[dict]) -> list[dict]:
 
 
 REFLECT_PROMPT = """\
+<failure_output>
+<stdout>{stdout}</stdout>
+<stderr>{stderr}</stderr>
+</failure_output>
+
+<original_task>{description}</original_task>
+{previous_attempts_section}{escalation_instruction}
 <instructions>
 You are diagnosing and fixing a failed code-generation task. Follow the structured \
 reflection process below.
 </instructions>
 
-<original_task>{description}</original_task>
-
-<failure_output>
-<stdout>{stdout}</stdout>
-<stderr>{stderr}</stderr>
-</failure_output>
-{escalation_instruction}
 <process>
 1. In <diagnosis> tags, analyze: What specifically went wrong? Why? Categorize the \
 error as one of: dependency issue, logic error, environment problem, network issue, \
-or data format mismatch. Determine whether the error originated in this step or \
-propagated from a previous step.
+or data format mismatch.
 
-2. In <strategies> tags, propose 2-3 alternative strategies to solve the task. \
+2. In <counterfactual> tags, reason about whether the root cause is in this step \
+or propagated from a dependency step. If a prior step produced incorrect output \
+that this step consumes, identify which step and what output is wrong.
+
+3. In <strategies> tags, propose 2-3 alternative strategies to solve the task. \
 Select the best one with justification. Ensure the chosen strategy follows best \
 practices: use HTTPS URLs, pin dependency versions, use context managers for I/O, \
 catch specific exceptions, use git init -b main for repos, and never hardcode secrets.
 
-3. After the tags, provide ONLY the improved task description. Be more specific and \
+4. After the tags, provide ONLY the improved task description. Be more specific and \
 explicit about what the Python code should do. Do not include any explanation.
 </process>
 """
@@ -366,11 +406,6 @@ ESCALATION_INSTRUCTIONS = {
 }
 
 DECOMPOSE_STEP_PROMPT = """\
-<instructions>
-A code-generation task has failed multiple times. Break it down into 2-3 smaller, \
-more manageable sub-phases that can be expressed as a single sequential script.
-</instructions>
-
 <failed_task>{description}</failed_task>
 
 <failure_output>
@@ -378,11 +413,16 @@ more manageable sub-phases that can be expressed as a single sequential script.
 <stderr>{stderr}</stderr>
 </failure_output>
 
+<instructions>
+A code-generation task has failed multiple times. Break it down into 2-3 smaller, \
+more manageable sub-phases that can be expressed as a single sequential script.
+
 Rewrite the task as a detailed, step-by-step description that breaks the work into \
 explicit sequential phases within a single script. Each phase should be simple enough \
 to be unlikely to fail. Include explicit error handling between phases.
 
 Provide ONLY the improved task description. No explanation.
+</instructions>
 """
 
 
@@ -399,11 +439,17 @@ def _is_confused_output(result: str, original_desc: str, error: str) -> bool:
 
 def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
                         orchestrator_stderr: str,
-                        escalation_level: int = 0) -> str:
+                        escalation_level: int = 0,
+                        previous_attempts: list[dict] | None = None) -> str:
     """Reflection-based task rewrite with progressive escalation.
 
     Uses structured diagnosis/strategy/rewrite phases instead of simple rewriting.
     Includes red-flagging: outputs showing signs of confusion are resampled once.
+
+    Args:
+        previous_attempts: List of prior attempt summaries for this step,
+            each with keys: attempt, error, strategy. Included in the prompt
+            so the LLM can see the full history and avoid repeating failed strategies.
     """
     client = get_llm_client()
 
@@ -412,11 +458,28 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
 
     escalation = ESCALATION_INSTRUCTIONS.get(escalation_level, "")
 
+    previous_attempts_section = ""
+    if previous_attempts:
+        lines = []
+        for attempt in previous_attempts:
+            lines.append(
+                f"- Attempt {attempt['attempt']}: "
+                f"error={attempt['error'][:200]} | "
+                f"strategy={attempt['strategy']}"
+            )
+        previous_attempts_section = (
+            "\n<previous_attempts>\n"
+            "Summary of ALL prior attempts for this step (do NOT repeat failed strategies):\n"
+            + "\n".join(lines)
+            + "\n</previous_attempts>"
+        )
+
     prompt = REFLECT_PROMPT.format(
         description=step["description"],
         stdout=stdout_trimmed,
         stderr=stderr_trimmed,
         escalation_instruction=escalation,
+        previous_attempts_section=previous_attempts_section,
     )
 
     event_log = get_event_log()
@@ -427,8 +490,9 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
     event_log.emit(EventType.LLM_CALL_COMPLETE,
                    data={"purpose": "reflect_and_rewrite"})
 
-    # Strip diagnosis and strategies tags to get just the description
+    # Strip diagnosis, counterfactual, and strategies tags to get just the description
     result = re.sub(r"<diagnosis>.*?</diagnosis>", "", response, flags=re.DOTALL)
+    result = re.sub(r"<counterfactual>.*?</counterfactual>", "", result, flags=re.DOTALL)
     result = re.sub(r"<strategies>.*?</strategies>", "", result, flags=re.DOTALL)
     result = result.strip()
 
@@ -437,6 +501,7 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
         logger.warning("  Red-flag detected in rewrite output, resampling...")
         response = client.generate(prompt)
         result = re.sub(r"<diagnosis>.*?</diagnosis>", "", response, flags=re.DOTALL)
+        result = re.sub(r"<counterfactual>.*?</counterfactual>", "", result, flags=re.DOTALL)
         result = re.sub(r"<strategies>.*?</strategies>", "", result, flags=re.DOTALL)
         result = result.strip()
 

@@ -100,6 +100,37 @@ class TestBuildPrompt:
         assert "requests" in prompt
         assert "pip" in prompt
 
+    def test_workspace_files_included(self):
+        ws_files = "  output.txt (100 bytes, text)\n  data.json (500 bytes, text)"
+        prompt = build_prompt("do work", attempt=1, workspace_files=ws_files)
+        assert "<workspace_state>" in prompt
+        assert "</workspace_state>" in prompt
+        assert "output.txt" in prompt
+        assert "data.json" in prompt
+        assert "Do not regenerate" in prompt
+
+    def test_no_workspace_state_when_none(self):
+        prompt = build_prompt("do work", attempt=1)
+        assert "workspace_state" not in prompt
+
+    def test_analysis_instruction_in_role(self):
+        prompt = build_prompt("any task", attempt=1)
+        assert "<analysis>" in prompt
+        assert "analyze the task" in prompt
+
+    def test_data_before_instructions(self):
+        """Data sections (environment, task) should appear before instructions (role, constraints)."""
+        prompt = build_prompt("my task", attempt=1)
+        env_pos = prompt.index("<environment>")
+        task_pos = prompt.index("<task>")
+        role_pos = prompt.index("<role>")
+        constraints_pos = prompt.index("<constraints>")
+        verification_pos = prompt.index("<verification>")
+        assert env_pos < role_pos
+        assert task_pos < role_pos
+        assert role_pos < constraints_pos
+        assert constraints_pos < verification_pos
+
 
 class TestParseUasResult:
     def test_valid_result(self):

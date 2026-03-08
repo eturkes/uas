@@ -108,11 +108,11 @@ def ensure_image(engine: str):
             os.unlink(dockerfile_path)
 
 
-def ensure_claude_md(workspace: str) -> None:
+def ensure_claude_md(workspace: str, step_context: dict | None = None) -> None:
     """Write .claude/CLAUDE.md to the workspace if missing or outdated."""
     claude_dir = os.path.join(workspace, ".claude")
     claude_md_path = os.path.join(claude_dir, "CLAUDE.md")
-    content = get_claude_md_content()
+    content = get_claude_md_content(step_context=step_context)
     if os.path.isfile(claude_md_path):
         try:
             with open(claude_md_path, "r") as f:
@@ -127,7 +127,8 @@ def ensure_claude_md(workspace: str) -> None:
 
 
 def run_orchestrator(task: str, extra_env: dict | None = None,
-                     output_callback=None) -> dict:
+                     output_callback=None,
+                     step_context: dict | None = None) -> dict:
     """Run the Orchestrator with the given task.
 
     Args:
@@ -135,12 +136,13 @@ def run_orchestrator(task: str, extra_env: dict | None = None,
         extra_env: Optional extra environment variables (e.g. UAS_STEP_ID).
         output_callback: Optional callable(line: str) invoked for each stderr
             line as it arrives, enabling real-time output in the dashboard.
+        step_context: Optional dict with step metadata for dynamic CLAUDE.md.
 
     Returns dict with exit_code, stdout, stderr.
     """
     workspace = os.environ.get("UAS_WORKSPACE", os.getcwd())
     try:
-        ensure_claude_md(workspace)
+        ensure_claude_md(workspace, step_context=step_context)
     except OSError as e:
         logger.warning("Could not write .claude/CLAUDE.md: %s", e)
 

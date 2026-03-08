@@ -66,6 +66,43 @@ When the task involves creating a project or application (not a simple one-off s
 """
 
 
-def get_claude_md_content() -> str:
-    """Return the CLAUDE.md template content."""
-    return CLAUDE_MD_TEMPLATE
+def _format_step_context(ctx: dict) -> str:
+    """Format step-specific context as a CLAUDE.md section."""
+    lines = [
+        "## Current Task Context",
+        f"- **Step:** {ctx.get('step_number', '?')} of {ctx.get('total_steps', '?')}",
+        f"- **Current Step:** {ctx.get('step_title', 'unknown')}",
+    ]
+    deps = ctx.get("dependencies", [])
+    if deps:
+        lines.append(f"- **Dependencies:** steps {deps}")
+    else:
+        lines.append("- **Dependencies:** none (independent step)")
+
+    prior_steps = ctx.get("prior_steps", [])
+    if prior_steps:
+        lines.append("")
+        lines.append("### Prior Steps Output")
+        for ps in prior_steps:
+            entry = f"- Step {ps['id']} ({ps['title']}): completed"
+            if ps.get("summary"):
+                entry += f" — {ps['summary']}"
+            lines.append(entry)
+            if ps.get("files"):
+                lines.append(f"  Files: {', '.join(ps['files'][:5])}")
+
+    return "\n".join(lines) + "\n"
+
+
+def get_claude_md_content(step_context: dict | None = None) -> str:
+    """Return the CLAUDE.md template content, optionally with step context.
+
+    Args:
+        step_context: Optional dict with keys: step_number, total_steps,
+            step_title, dependencies, prior_steps. When provided, appends
+            a dynamic section describing the current task context.
+    """
+    content = CLAUDE_MD_TEMPLATE
+    if step_context:
+        content += "\n" + _format_step_context(step_context)
+    return content

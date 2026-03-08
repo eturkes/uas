@@ -3,11 +3,11 @@
 import json
 import os
 import shutil
-import tempfile
 
 import pytest
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UAS_AUTH_DIR = os.path.join(PROJECT_ROOT, ".uas_auth")
 
 
 @pytest.fixture
@@ -33,59 +33,41 @@ def tmp_workspace(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _find_claude_auth():
-    """Find valid Claude CLI auth credentials.
-
-    Checks .uas_auth/ (project-level) first, then ~/.claude/ (user-level).
-    Returns the real path to the auth directory, or None if not found.
-    """
-    uas_auth_dir = os.path.join(PROJECT_ROOT, ".uas_auth")
-    home_claude = os.path.join(os.path.expanduser("~"), ".claude")
-
-    for candidate in [uas_auth_dir, home_claude]:
-        real_path = os.path.realpath(candidate)
-        cred_file = os.path.join(real_path, ".credentials.json")
-        if not os.path.isfile(cred_file):
-            continue
-        try:
-            with open(cred_file, "r", encoding="utf-8") as f:
-                creds = json.load(f)
-            if creds:
-                return real_path
-        except (json.JSONDecodeError, OSError):
-            continue
-    return None
+def _has_valid_auth():
+    """Check whether .uas_auth/ contains valid Claude CLI credentials."""
+    cred_file = os.path.join(UAS_AUTH_DIR, ".credentials.json")
+    if not os.path.isfile(cred_file):
+        return False
+    try:
+        with open(cred_file, "r", encoding="utf-8") as f:
+            creds = json.load(f)
+        return bool(creds)
+    except (json.JSONDecodeError, OSError):
+        return False
 
 
 @pytest.fixture(scope="session")
 def require_auth():
     """Ensure Claude CLI auth is available for integration tests.
 
-    On first successful run, creates a .uas_auth symlink in the project
-    root pointing to ~/.claude so credentials are shared across all tests
-    and match the container-mode auth mechanism.
+    Credentials are stored in the repo-local ``.uas_auth/`` directory
+    (gitignored), completely separate from the host ``~/.claude/`` config.
 
-    Skips the test if no valid credentials or claude binary are found.
+    If credentials are missing, the test is skipped with instructions
+    to run ``bash setup_auth.sh``.
     """
-    auth_source = _find_claude_auth()
-    if auth_source is None:
-        pytest.skip(
-            "Claude CLI authentication required. "
-            "Run `claude` to authenticate, then re-run tests."
-        )
-
     if not shutil.which("claude"):
         pytest.skip(
             "Claude CLI binary not found in PATH. "
             "Install with: npm install -g @anthropic-ai/claude-code"
         )
 
-    # Create .uas_auth symlink if it doesn't exist
-    uas_auth_dir = os.path.join(PROJECT_ROOT, ".uas_auth")
-    if not os.path.exists(uas_auth_dir):
-        try:
-            os.symlink(auth_source, uas_auth_dir)
-        except OSError:
-            pass  # Non-critical -- auth still works via ~/.claude
+    if not _has_valid_auth():
+        pytest.skip(
+            "No credentials found in .uas_auth/. "
+            "Run `bash setup_auth.sh` to authenticate, then re-run tests."
+        )
 
-    return auth_source
+    # Point all Claude CLI invocations at the repo-local credentials.
+    os.environ["CLAUDE_CONFIG_DIR"] = UAS_AUTH_DIR
+    return UAS_AUTH_DIR

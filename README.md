@@ -29,17 +29,27 @@ Ensure that directory is in your `PATH`.
 
 ### Project-Level Authentication
 
-On first run, `uas` launches an interactive Claude Code session for
-authentication. Credentials are persisted to `$PWD/.uas_auth/`, which
-is bind-mounted into the container as `/root/.claude`. On subsequent
-runs, the entrypoint detects valid credentials and skips interactive
-setup entirely.
+Credentials are stored in `$PWD/.uas_auth/` (gitignored), which is
+bind-mounted into the container as `/root/.claude`.  Run `bash
+setup_auth.sh` to authenticate interactively inside the container.
+On subsequent runs, the entrypoint detects valid credentials and
+skips interactive setup entirely.
 
-To pre-seed auth for CI or automated use, copy your host Claude config:
+### Auth Setup
+
+Integration tests and production runs use credentials stored in
+`.uas_auth/` (gitignored), completely separate from your host
+`~/.claude/` config.  Run the setup script once after cloning:
 
 ```bash
-cp -r ~/.claude .uas_auth
+bash setup_auth.sh
 ```
+
+This launches Claude Code inside the same container used for testing.
+Authenticate, adjust settings if needed, then type `/exit`.
+Credentials are saved to `.uas_auth/` and reused automatically.
+
+Re-run the script at any time to change configuration.
 
 ### Running Tests
 
@@ -47,23 +57,17 @@ cp -r ~/.claude .uas_auth
 # Run the full test suite (unit + integration):
 python3 -m pytest tests/
 
-# Integration tests require a one-time Claude CLI authentication.
-# If you haven't authenticated yet, run:
-claude
-# Then re-run the tests. Credentials are cached in .uas_auth/
-# (a symlink to ~/.claude/) and reused across all future runs.
-
 # Run only unit tests (no auth required):
 python3 -m pytest tests/ -m "not integration"
 
-# Run only integration tests:
+# Run only integration tests (requires bash setup_auth.sh first):
 python3 -m pytest tests/ -m integration
 ```
 
 ### Quick Test
 
 ```bash
-# Quick test from the repo (first run requires interactive auth):
+# Quick test from the repo (requires bash setup_auth.sh first):
 bash integration/quick_test.sh
 ```
 

@@ -2,10 +2,11 @@
 
 These tests require:
 1. The ``claude`` CLI binary installed and in PATH
-2. Valid authentication credentials in ~/.claude/
+2. Valid authentication credentials in ``.uas_auth/``
 
-On first successful run, a .uas_auth symlink is created in the project
-root pointing to ~/.claude, matching the container-mode auth pattern.
+Before first run, authenticate with ``bash setup_auth.sh``.
+Credentials are saved to the repo-local ``.uas_auth/`` directory
+(gitignored) and reused by all subsequent runs.
 
 Run only integration tests::
 

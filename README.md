@@ -514,10 +514,12 @@ included as a fifth tab in the HTML report.
    a. Build XML-structured prompt (data first: <environment>,
       <task>, <workspace_state>; then instructions: <role>,
       <constraints>, <verification>)
-   b. Send prompt to LLM (JSON output mode) -> receive response
-   c. Parse JSON response, extract result field (text fallback)
-   d. Extract code block from response
-   e. Execute code in sandbox container
+   b. Determine sample count N for this attempt (see below)
+   c. If N=1: send prompt to LLM, extract code, execute in sandbox
+   d. If N>1: generate N code samples in parallel with different
+      prompt hints (default, robustness, simplicity), execute all
+      in sandbox, select the best by execution score
+   e. Parse JSON response, extract result field (text fallback)
    f. Emit delimited stdout/stderr blocks for reliable parsing
    g. Parse UAS_RESULT JSON line from stdout if present
    h. If exit_code == 0 -> SUCCESS, stop
@@ -532,6 +534,17 @@ Scripts are instructed to print a structured summary line:
 `UAS_RESULT: {"status": "ok", "files_written": [...], "summary": "..."}`
 which is parsed by both the Orchestrator and Architect for richer
 context propagation and result validation.
+
+**Best-of-N code generation:** When `UAS_BEST_OF_N` is set to 2 or 3,
+the Orchestrator generates multiple code samples in parallel on retry
+attempts and selects the best one by execution score. The first attempt
+is always single-sample; on the second attempt N scales to 2, on the
+third to 3 (capped by `UAS_BEST_OF_N`). Each sample uses a different
+prompt variation (default, robustness-focused, simplicity-focused).
+Samples are scored by exit code (success strongly preferred), UAS_RESULT
+richness (files written, summary presence), and stdout informativeness.
+This allocates extra compute budget where it's most needed — on harder
+problems that have already failed once.
 
 ### Security Model
 
@@ -580,6 +593,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
 | `UAS_MODEL_PLANNER` | Model for planning, decomposition, and reflection | `UAS_MODEL` |
 | `UAS_MODEL_CODER` | Model for code generation | `UAS_MODEL` |
+| `UAS_BEST_OF_N` | Max parallel code samples per retry attempt (1 = disabled) | `1` |
 | `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | *(unlimited)* |
 | `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | *(unlimited)* |
 | `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | *(unlimited)* |

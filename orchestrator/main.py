@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from .llm_client import get_llm_client
@@ -253,6 +254,128 @@ error in <analysis> tags, then write the fixed script.
     return prompt
 
 
+# Section 7a: Prompt variation hints for best-of-N code generation.
+_APPROACH_HINTS = [
+    "",  # Approach A: no hint (original prompt)
+    (
+        "\n\n<approach_hint>"
+        "Prioritize robustness: add thorough input validation, comprehensive "
+        "error handling, and defensive checks throughout."
+        "</approach_hint>"
+    ),
+    (
+        "\n\n<approach_hint>"
+        "Prioritize simplicity and efficiency: use the most direct approach, "
+        "minimize dependencies, and prefer standard-library solutions."
+        "</approach_hint>"
+    ),
+]
+
+
+def _get_best_of_n(attempt: int) -> int:
+    """Return the number of parallel samples to generate for this attempt.
+
+    Section 7c: Budget-aware gating.
+    - Attempt 1 is always single-sample (N=1).
+    - On retries, N scales with attempt count, capped by UAS_BEST_OF_N.
+    - If UAS_BEST_OF_N is unset or 1, best-of-N is disabled entirely.
+    """
+    max_n = int(os.environ.get("UAS_BEST_OF_N", "1"))
+    if max_n <= 1 or attempt <= 1:
+        return 1
+    # attempt 2 → N=2, attempt 3 → N=3, capped by max_n
+    return min(attempt, max_n)
+
+
+def score_result(result: dict) -> int:
+    """Score a sandbox execution result for selection among candidates.
+
+    Section 7b: Prefer successful runs, then richer UAS_RESULT output.
+    Returns an integer score (higher is better).
+    """
+    score = 0
+    if result["exit_code"] == 0:
+        score += 1000
+
+    uas = parse_uas_result(result.get("stdout", ""))
+    if uas:
+        score += 100  # has any UAS_RESULT
+        if uas.get("files_written"):
+            score += 50 + len(uas["files_written"]) * 10
+        if uas.get("summary"):
+            score += 50
+        if uas.get("status") == "ok":
+            score += 50
+
+    # Prefer runs with more stdout (more informative)
+    stdout_len = len(result.get("stdout", ""))
+    score += min(stdout_len // 100, 50)
+    return score
+
+
+def _generate_one(client, prompt: str, hint: str):
+    """Generate code from a single prompt variant and execute it.
+
+    Returns (code, sandbox_result) or (None, None) on extraction failure.
+    """
+    full_prompt = prompt + hint if hint else prompt
+    response = client.generate(full_prompt)
+    code = extract_code(response)
+    if not code:
+        return None, None
+    result = run_in_sandbox(code)
+    return code, result
+
+
+def generate_and_vote(client, prompt: str, n: int) -> tuple[str | None, dict | None]:
+    """Generate N code samples in parallel, execute each, and pick the best.
+
+    Section 7a/7b: Parallel code generation with execution-based selection.
+
+    Returns (best_code, best_result). If all extractions fail, returns
+    (None, None).
+    """
+    hints = [_APPROACH_HINTS[i % len(_APPROACH_HINTS)] for i in range(n)]
+
+    logger.info("Best-of-N: generating %d samples in parallel...", n)
+    candidates: list[tuple[str | None, dict | None, int]] = []
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        futures = {
+            pool.submit(_generate_one, client, prompt, hint): i
+            for i, hint in enumerate(hints)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                code, result = future.result()
+            except Exception as exc:
+                logger.warning("Best-of-N sample %d failed: %s", idx, exc)
+                code, result = None, None
+            candidates.append((code, result, idx))
+
+    # Filter out extraction failures
+    valid = [(code, result, idx) for code, result, idx in candidates
+             if code is not None and result is not None]
+
+    if not valid:
+        logger.warning("Best-of-N: all %d samples failed code extraction.", n)
+        return None, None
+
+    # Score and select
+    scored = [(code, result, idx, score_result(result))
+              for code, result, idx in valid]
+    scored.sort(key=lambda x: x[3], reverse=True)
+
+    best_code, best_result, best_idx, best_score = scored[0]
+    successes = sum(1 for _, r, _, _ in scored if r["exit_code"] == 0)
+    logger.info(
+        "Best-of-N: %d/%d succeeded, selected sample %d (score=%d).",
+        successes, len(valid), best_idx, best_score,
+    )
+    return best_code, best_result
+
+
 def _record_code_version(step_id, spec_attempt, orch_attempt, code, prompt,
                          exit_code=-1, error_summary=""):
     """Record a code version to disk for the architect's code tracker."""
@@ -336,22 +459,37 @@ def main():
 
         prompt = build_prompt(task, attempt, previous_error, previous_code,
                               workspace_files=workspace_files)
-        logger.info("Querying LLM...")
-        response = client.generate(prompt)
 
-        code = extract_code(response)
-        if not code:
-            previous_error = "Failed to extract code block from LLM response."
-            previous_code = None
-            logger.error("%s", previous_error)
-            logger.debug("Raw LLM response (%d chars):\n%s",
-                         len(response), response[:2000])
-            continue
+        # Section 7c: Determine N for this attempt (budget-aware gating).
+        n = _get_best_of_n(attempt)
 
-        logger.debug("Generated code (%d chars):\n---\n%s\n---", len(code), code)
+        if n > 1:
+            # Section 7a/7b: Parallel best-of-N generation + execution voting.
+            code, result = generate_and_vote(client, prompt, n)
+            if code is None:
+                previous_error = "Failed to extract code block from LLM response."
+                previous_code = None
+                logger.error("%s", previous_error)
+                continue
+        else:
+            # Standard single-sample path.
+            logger.info("Querying LLM...")
+            response = client.generate(prompt)
 
-        logger.info("Executing in sandbox...")
-        result = run_in_sandbox(code)
+            code = extract_code(response)
+            if not code:
+                previous_error = "Failed to extract code block from LLM response."
+                previous_code = None
+                logger.error("%s", previous_error)
+                logger.debug("Raw LLM response (%d chars):\n%s",
+                             len(response), response[:2000])
+                continue
+
+            logger.debug("Generated code (%d chars):\n---\n%s\n---",
+                         len(code), code)
+
+            logger.info("Executing in sandbox...")
+            result = run_in_sandbox(code)
 
         # Record code version for tracking
         if _step_id is not None:

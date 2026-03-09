@@ -248,7 +248,7 @@ def topological_sort(steps: list[dict]) -> list[list[int]]:
 
 
 def decompose_goal(goal: str) -> list[dict]:
-    client = get_llm_client()
+    client = get_llm_client(role="planner")
     prompt = DECOMPOSITION_PROMPT.format(goal=goal)
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "decompose_goal"})
@@ -312,7 +312,7 @@ def estimate_complexity(goal: str) -> str:
     Returns one of: 'trivial', 'simple', 'medium', 'complex'.
     Falls back to 'medium' on parse failure.
     """
-    client = get_llm_client()
+    client = get_llm_client(role="planner")
     prompt = COMPLEXITY_PROMPT.format(goal=goal)
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "estimate_complexity"})
@@ -393,7 +393,7 @@ def decompose_goal_with_voting(goal: str, n_samples: int = 3) -> list[dict]:
     def _generate_plan(suffix_idx: int) -> list[dict] | None:
         """Generate a single plan variant. Returns None on failure."""
         try:
-            client = get_llm_client()
+            client = get_llm_client(role="planner")
             suffix = _VOTING_SUFFIXES[suffix_idx] if suffix_idx < len(_VOTING_SUFFIXES) else ""
             prompt = DECOMPOSITION_PROMPT.format(goal=goal) + suffix
             response = client.generate(prompt)
@@ -509,7 +509,7 @@ def critique_and_refine_plan(goal: str, steps: list[dict]) -> list[dict]:
     Single-pass review: if the LLM identifies issues it returns a corrected
     plan, otherwise returns the original steps unchanged.
     """
-    client = get_llm_client()
+    client = get_llm_client(role="planner")
     steps_json = json.dumps(steps, indent=2)
     prompt = CRITIQUE_PROMPT.format(goal=goal, steps_json=steps_json)
 
@@ -639,7 +639,7 @@ def generate_reflection(step: dict, stdout: str, stderr: str,
     Returns a dict with keys: error_type, root_cause, strategy_tried,
     lesson, what_to_try_next. Falls back to a basic reflection on failure.
     """
-    client = get_llm_client()
+    client = get_llm_client(role="planner")
     prompt = REFLECTION_GEN_PROMPT.format(
         description=step["description"],
         stdout=stdout[-2000:] if len(stdout) > 2000 else stdout,
@@ -729,7 +729,7 @@ def trace_root_cause(step: dict, error: str,
         )
 
     dependency_info = "\n".join(dep_lines)
-    client = get_llm_client()
+    client = get_llm_client(role="planner")
     prompt = ROOT_CAUSE_PROMPT.format(
         description=step["description"],
         error=error[:1000],
@@ -827,7 +827,7 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
             strategy_tried, lesson, what_to_try_next. Included as
             <reflection_history> in the prompt.
     """
-    client = get_llm_client()
+    client = get_llm_client(role="planner")
 
     stdout_trimmed = orchestrator_stdout
     stderr_trimmed = orchestrator_stderr
@@ -1012,7 +1012,7 @@ def merge_trivial_steps(steps: list[dict]) -> list[dict]:
 def decompose_failing_step(step: dict, orchestrator_stdout: str,
                            orchestrator_stderr: str) -> str:
     """Decompose a failing step into a more granular multi-phase description."""
-    client = get_llm_client()
+    client = get_llm_client(role="planner")
 
     stdout_trimmed = orchestrator_stdout
     stderr_trimmed = orchestrator_stderr

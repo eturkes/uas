@@ -177,7 +177,7 @@ This plan identifies concrete improvements to maximize UAS's problem-solving abi
 
 ---
 
-## Section 5: Claude CLI Optimization
+## Section 5: Claude CLI Optimization [DONE]
 
 **Rationale:** The LLM client currently uses `claude -p` with basic text output. Using JSON output mode enables cleaner parsing, and passing workspace context improves code quality. Model selection allows using cheaper/faster models for simple sub-tasks.
 

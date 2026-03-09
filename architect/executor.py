@@ -315,6 +315,8 @@ def _run_container(task: str, extra_env: dict | None = None,
         "UAS_SANDBOX_IMAGE", "UAS_SANDBOX_TIMEOUT",
         "UAS_LLM_TIMEOUT", "UAS_MODEL", "UAS_VERBOSE",
         "UAS_HOST_UID", "UAS_HOST_GID",
+        # Section 5c: Model tiering env vars
+        "UAS_MODEL_PLANNER", "UAS_MODEL_CODER",
     ]:
         val = os.environ.get(var)
         if val:
@@ -403,6 +405,16 @@ _STDERR_PATTERN = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 
+# Section 5d: Delimited output patterns (preferred over regex).
+_DELIMITED_STDOUT = re.compile(
+    r"===STDOUT_START===\n(.*?)\n===STDOUT_END===",
+    re.DOTALL,
+)
+_DELIMITED_STDERR = re.compile(
+    r"===STDERR_START===\n(.*?)\n===STDERR_END===",
+    re.DOTALL,
+)
+
 _FILES_PATTERN = re.compile(r"(/workspace/[\w./\-]+)")
 
 _UAS_RESULT_PATTERN = re.compile(r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE)
@@ -418,9 +430,18 @@ def truncate_output(text: str, max_length: int = MAX_CONTEXT_LENGTH) -> str:
 def extract_sandbox_stdout(orchestrator_output: str) -> str:
     """Extract the sandbox script's stdout from orchestrator log.
 
-    Uses regex-based extraction. If multiple stdout blocks exist (from
-    retries), returns the last one.
+    Prefers Section 5d delimited markers (``===STDOUT_START===`` /
+    ``===STDOUT_END===``).  Falls back to regex-based extraction for
+    backwards compatibility.  If multiple blocks exist (from retries),
+    returns the last one.
     """
+    # Section 5d: Try delimited extraction first
+    delimited = list(_DELIMITED_STDOUT.finditer(orchestrator_output))
+    if delimited:
+        result = delimited[-1].group(1).strip()
+        return truncate_output(result)
+
+    # Fallback to regex
     matches = list(_STDOUT_PATTERN.finditer(orchestrator_output))
     if not matches:
         return ""
@@ -431,9 +452,18 @@ def extract_sandbox_stdout(orchestrator_output: str) -> str:
 def extract_sandbox_stderr(orchestrator_output: str) -> str:
     """Extract the sandbox script's stderr from orchestrator log.
 
-    Uses regex-based extraction. If multiple stderr blocks exist (from
-    retries), returns the last one.
+    Prefers Section 5d delimited markers (``===STDERR_START===`` /
+    ``===STDERR_END===``).  Falls back to regex-based extraction for
+    backwards compatibility.  If multiple blocks exist (from retries),
+    returns the last one.
     """
+    # Section 5d: Try delimited extraction first
+    delimited = list(_DELIMITED_STDERR.finditer(orchestrator_output))
+    if delimited:
+        result = delimited[-1].group(1).strip()
+        return truncate_output(result)
+
+    # Fallback to regex
     matches = list(_STDERR_PATTERN.finditer(orchestrator_output))
     if not matches:
         return ""

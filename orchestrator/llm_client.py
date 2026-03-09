@@ -1,6 +1,7 @@
 """LLM client via the Claude Code CLI subprocess wrapper."""
 
 import contextlib
+import json
 import logging
 import os
 import shutil
@@ -113,6 +114,10 @@ class ClaudeCodeClient:
 
         When stream=True, output is printed to stderr line-by-line as it
         arrives, providing real-time visibility into LLM generation.
+
+        For non-streaming calls, uses ``--output-format json`` for cleaner
+        response extraction (Section 5a), falling back to text mode on
+        JSON parse failure.
         """
         # Resolve the absolute path to the claude binary so subprocess
         # never fails due to a missing or overwritten PATH.
@@ -124,6 +129,13 @@ class ClaudeCodeClient:
                 "npx", "-y", "@anthropic-ai/claude-code",
                 "-p", prompt, "--dangerously-skip-permissions",
             ]
+
+        # Section 5a: Use JSON output for non-streaming calls for cleaner
+        # response extraction.  Streaming keeps text mode since it reads
+        # stdout line-by-line.
+        use_json = not stream
+        if use_json:
+            cmd.extend(["--output-format", "json"])
 
         if self.model:
             cmd.extend(["--model", self.model])
@@ -186,16 +198,58 @@ class ClaudeCodeClient:
                     continue
                 raise error
 
-            return stdout.strip()
+            raw = stdout.strip()
+
+            # Section 5a: Parse JSON output when available
+            if use_json:
+                parsed = _extract_from_json(raw)
+                if parsed is not None:
+                    return parsed
+                logger.debug("JSON parse failed, falling back to text mode.")
+
+            return raw
 
         # Should not be reached, but satisfy type checker.
         raise last_error  # type: ignore[misc]
 
 
-def get_llm_client() -> ClaudeCodeClient:
-    """Factory: return a ClaudeCodeClient instance."""
+def _extract_from_json(raw: str) -> str | None:
+    """Try to extract the ``result`` field from a JSON CLI response.
+
+    Claude Code's ``--output-format json`` emits a JSON object with a
+    ``result`` field containing the LLM's text response.  Returns the
+    extracted text, or None if parsing fails.
+    """
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "result" in data:
+            return data["result"].strip()
+    except (json.JSONDecodeError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def get_llm_client(role: str | None = None) -> ClaudeCodeClient:
+    """Factory: return a ClaudeCodeClient instance.
+
+    Args:
+        role: Optional role hint for model tiering (Section 5c).
+            ``"planner"`` uses ``UAS_MODEL_PLANNER`` env var,
+            ``"coder"`` uses ``UAS_MODEL_CODER`` env var.
+            Falls back to ``UAS_MODEL`` when the role-specific var
+            is unset.
+    """
     timeout_str = os.environ.get("UAS_LLM_TIMEOUT")
     timeout = int(timeout_str) if timeout_str else DEFAULT_TIMEOUT
-    model = os.environ.get("UAS_MODEL") or None
-    logger.info("Using Claude Code CLI")
+
+    # Section 5c: Model tiering — role-specific model selection
+    model = None
+    if role == "planner":
+        model = os.environ.get("UAS_MODEL_PLANNER") or None
+    elif role == "coder":
+        model = os.environ.get("UAS_MODEL_CODER") or None
+    if not model:
+        model = os.environ.get("UAS_MODEL") or None
+
+    logger.info("Using Claude Code CLI (role=%s, model=%s)", role, model)
     return ClaudeCodeClient(timeout=timeout, model=model)

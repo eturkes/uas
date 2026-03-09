@@ -13,6 +13,12 @@ from .llm_client import get_llm_client
 from .parser import extract_code
 from .sandbox import run_in_sandbox
 
+# Section 5d: Delimited output markers for reliable parsing by the architect.
+STDOUT_START = "===STDOUT_START==="
+STDOUT_END = "===STDOUT_END==="
+STDERR_START = "===STDERR_START==="
+STDERR_END = "===STDERR_END==="
+
 MAX_RETRIES = 3
 
 logger = logging.getLogger(__name__)
@@ -61,6 +67,45 @@ def get_task(args) -> str:
         return sys.stdin.read().strip()
     print("Enter task (submit with Ctrl+D):", file=sys.stderr)
     return sys.stdin.read().strip()
+
+
+_TEXT_EXTENSIONS = {
+    ".txt", ".csv", ".json", ".py", ".md", ".html", ".xml",
+    ".yaml", ".yml", ".log", ".tsv", ".sh", ".cfg", ".ini", ".toml",
+}
+_SKIP_DIRS = {".state", ".git", "__pycache__", "node_modules", "venv", ".venv", ".claude"}
+
+
+def scan_workspace(workspace_path: str, max_chars: int = 4000) -> str:
+    """Scan workspace and return a formatted listing of existing files.
+
+    Section 5b: Allows the orchestrator to be aware of workspace contents
+    even when the architect hasn't passed UAS_WORKSPACE_FILES.
+    """
+    if not workspace_path or not os.path.isdir(workspace_path):
+        return ""
+    lines: list[str] = []
+    total = 0
+    for entry in sorted(os.listdir(workspace_path)):
+        if total >= max_chars:
+            break
+        if entry.startswith(".") or entry in _SKIP_DIRS:
+            continue
+        full = os.path.join(workspace_path, entry)
+        if os.path.isfile(full):
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                continue
+            _, ext = os.path.splitext(entry.lower())
+            ftype = "text" if ext in _TEXT_EXTENSIONS else "binary"
+            line = f"  {entry} ({size} bytes, {ftype})"
+            lines.append(line)
+            total += len(line)
+        elif os.path.isdir(full):
+            lines.append(f"  {entry}/")
+            total += len(entry) + 3
+    return "\n".join(lines)
 
 
 def build_prompt(task: str, attempt: int, previous_error: str | None = None,
@@ -273,10 +318,18 @@ def main():
         sys.exit(1)
     logger.info("Sandbox verified.")
 
-    client = get_llm_client()
+    # Section 5c: Use coder-specific model for code generation
+    client = get_llm_client(role="coder")
     previous_error = None
     previous_code = None
     workspace_files = os.environ.get("UAS_WORKSPACE_FILES")
+
+    # Section 5b: If workspace files aren't provided by the architect,
+    # scan the workspace directly so the LLM knows what already exists.
+    if not workspace_files:
+        workspace_path = os.environ.get("UAS_WORKSPACE") or os.environ.get("WORKSPACE")
+        if workspace_path:
+            workspace_files = scan_workspace(workspace_path) or None
 
     for attempt in range(1, MAX_RETRIES + 1):
         logger.info("\n--- Attempt %d/%d ---", attempt, MAX_RETRIES)
@@ -312,10 +365,12 @@ def main():
             )
 
         logger.info("Exit code: %s", result["exit_code"])
+        # Section 5d: Emit delimited stdout/stderr blocks for reliable
+        # parsing by the architect's executor.
         if result["stdout"]:
-            logger.info("stdout:\n%s", result["stdout"])
+            logger.info("%s\n%s\n%s", STDOUT_START, result["stdout"], STDOUT_END)
         if result["stderr"]:
-            logger.info("stderr:\n%s", result["stderr"])
+            logger.info("%s\n%s\n%s", STDERR_START, result["stderr"], STDERR_END)
 
         if result["exit_code"] == 0:
             uas_result = parse_uas_result(result["stdout"] or "")

@@ -314,9 +314,14 @@ User (any directory)
 ```
 
 All LLM calls go through the Claude Code CLI (`claude -p`)
-installed inside the container. Authentication is persisted to
-`$PWD/.uas_auth/` via bind mount, so interactive login is only
-required once per project.
+installed inside the container, using `--output-format json` for
+reliable response extraction with text-mode fallback. Authentication
+is persisted to `$PWD/.uas_auth/` via bind mount, so interactive
+login is only required once per project.
+
+**Model tiering:** Set `UAS_MODEL_PLANNER` and/or `UAS_MODEL_CODER`
+to use different models for planning vs code generation. Both fall
+back to `UAS_MODEL` when unset.
 
 ### Architect Agent
 
@@ -489,21 +494,24 @@ included as a fifth tab in the HTML report.
 
 ```
 1. Receive task (CLI arg / env var / stdin)
-2. Verify sandbox works (trivial print statement)
-3. For attempt = 1..3:
+2. Scan workspace for existing files (used in prompt context)
+3. Verify sandbox works (trivial print statement)
+4. For attempt = 1..3:
    a. Build XML-structured prompt (data first: <environment>,
       <task>, <workspace_state>; then instructions: <role>,
       <constraints>, <verification>)
-   b. Send prompt to LLM -> receive response
-   c. Extract code block from response
-   d. Execute code in sandbox container
-   e. Parse UAS_RESULT JSON line from stdout if present
-   f. If exit_code == 0 -> SUCCESS, stop
-   g. Else -> escalating error feedback:
+   b. Send prompt to LLM (JSON output mode) -> receive response
+   c. Parse JSON response, extract result field (text fallback)
+   d. Extract code block from response
+   e. Execute code in sandbox container
+   f. Emit delimited stdout/stderr blocks for reliable parsing
+   g. Parse UAS_RESULT JSON line from stdout if present
+   h. If exit_code == 0 -> SUCCESS, stop
+   i. Else -> escalating error feedback:
       - 1st retry: root cause analysis + corrected script
       - 2nd retry: fundamentally different strategy required
       - 3rd retry: maximally defensive (try/except everywhere)
-4. If all 3 attempts fail -> exit with error
+5. If all 3 attempts fail -> exit with error
 ```
 
 Scripts are instructed to print a structured summary line:
@@ -556,6 +564,8 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_EXPLAIN` | Print run explanation to stderr (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_LLM_TIMEOUT` | LLM call timeout in seconds | *(none)* |
 | `UAS_MODEL` | Override the Claude model (passed as `--model` to CLI) | *(default)* |
+| `UAS_MODEL_PLANNER` | Model for planning, decomposition, and reflection | `UAS_MODEL` |
+| `UAS_MODEL_CODER` | Model for code generation | `UAS_MODEL` |
 | `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | *(unlimited)* |
 | `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | *(unlimited)* |
 | `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | *(unlimited)* |

@@ -157,7 +157,7 @@ def summarize_context(context: str, goal: str, max_length: int) -> str:
     """
     try:
         from orchestrator.llm_client import get_llm_client
-        client = get_llm_client()
+        client = get_llm_client(role="planner")
         prompt = (
             f"Compress the following context to under {max_length} characters "
             "while preserving all essential information.\n\n"

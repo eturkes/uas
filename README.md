@@ -429,9 +429,23 @@ practices. The file is dynamic per-step: it includes the current step
 number, total steps, dependencies, and a summary of what prior steps
 produced, so the LLM has full context of its position in the plan.
 
+**Dynamic mid-execution re-planning:** After each step completes, the
+Architect checks whether downstream steps still align with the actual
+output. If a step produces different files than what dependent steps
+reference (e.g. `output.json` instead of expected `data.csv`), the
+Architect triggers incremental re-planning: it sends the completed
+steps, the unexpected result, and the remaining plan to the LLM, which
+adjusts pending steps to match reality. Re-planning is limited to once
+per execution level to avoid infinite adjustment loops. Additionally,
+**step description enrichment** appends concrete details (files
+produced, data summaries) from each completed step to its dependents'
+descriptions — a lightweight, LLM-free optimization that improves
+downstream code generation accuracy.
+
 **Parallel execution:** Independent steps (no dependency relationship)
-run concurrently, optionally capped by `UAS_MAX_PARALLEL`. Per-step timing tracks LLM call time vs sandbox
-execution time for performance analysis.
+run concurrently, optionally capped by `UAS_MAX_PARALLEL`. Per-step
+timing tracks LLM call time vs sandbox execution time for performance
+analysis.
 
 **State:** All state is persisted to `.state/state.json`
 after every significant event (step start, completion, failure, rewrite).

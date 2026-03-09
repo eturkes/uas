@@ -28,6 +28,8 @@ from .planner import (
     topological_sort,
     critique_and_refine_plan,
     merge_trivial_steps,
+    replan_remaining_steps,
+    enrich_step_descriptions,
 )
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import (
@@ -293,6 +295,95 @@ def _distill_dependency_output(dep_id: int, dep_step: dict,
     parts.append("</dependency>")
 
     return "\n".join(parts)
+
+
+def should_replan(step: dict, remaining_steps: list[dict],
+                  state: dict) -> tuple[bool, str]:
+    """Check if remaining steps need re-planning after a step completes.
+
+    Compares the step's actual output (files_written, summary) against what
+    downstream steps reference in their descriptions. If there's a mismatch,
+    re-planning is recommended.
+
+    Returns (needs_replan, detail) where detail describes the mismatch.
+
+    Section 6a of PLAN.md.
+    """
+    if not remaining_steps:
+        return False, ""
+
+    files_written = step.get("files_written", [])
+    uas_result = step.get("uas_result", {})
+
+    # Collect basenames for matching
+    actual_files = set()
+    for f in files_written:
+        # Handle both absolute and relative paths
+        basename = os.path.basename(f)
+        actual_files.add(basename)
+        actual_files.add(f)
+
+    # Check what downstream steps expect from this step
+    mismatches = []
+    step_id = step["id"]
+
+    for rs in remaining_steps:
+        # Only check steps that depend on the completed step
+        if step_id not in rs.get("depends_on", []):
+            continue
+
+        desc = rs.get("description", "")
+        # Look for file references in the description
+        # Common patterns: "read X.csv", "from X.json", "load X.txt",
+        # "X.py", etc.
+        import re
+        referenced_files = re.findall(
+            r'(?:read|load|open|from|import|use|parse)\s+'
+            r'(?:the\s+)?["\']?(\w+\.\w{1,5})["\']?',
+            desc, re.IGNORECASE,
+        )
+        # Also match direct filename references like "data.csv"
+        referenced_files += re.findall(
+            r'\b(\w+\.(?:csv|json|txt|py|md|html|xml|yaml|yml|toml|db|sqlite'
+            r'|parquet|xlsx|tsv|log))\b',
+            desc, re.IGNORECASE,
+        )
+        referenced_files = list(set(referenced_files))
+
+        for ref_file in referenced_files:
+            if actual_files and ref_file not in actual_files:
+                # Check if a similar file exists (fuzzy match by extension)
+                ext = os.path.splitext(ref_file)[1]
+                similar = [f for f in actual_files if f.endswith(ext)]
+                if similar:
+                    mismatches.append(
+                        f"Step {rs['id']} references '{ref_file}' but step "
+                        f"{step_id} produced {similar} instead"
+                    )
+                elif actual_files:
+                    mismatches.append(
+                        f"Step {rs['id']} references '{ref_file}' but step "
+                        f"{step_id} produced {sorted(actual_files)}"
+                    )
+
+    # Check if step produced no files when downstream steps expect files
+    if not files_written:
+        for rs in remaining_steps:
+            if step_id not in rs.get("depends_on", []):
+                continue
+            desc = rs.get("description", "").lower()
+            if any(word in desc for word in ("read", "load", "open", "parse",
+                                              "import from")):
+                mismatches.append(
+                    f"Step {rs['id']} expects to read files from step "
+                    f"{step_id}, but no files were produced"
+                )
+
+    if mismatches:
+        detail = "; ".join(mismatches[:5])
+        return True, detail
+
+    return False, ""
 
 
 def build_context(step: dict, completed_outputs: dict,
@@ -1510,9 +1601,142 @@ def main():
                   f"{len(levels)} levels")
     progress_counts = {"completed": 0, "failed": 0}
     run_start = time.monotonic()
+    replanned_levels = set()  # Section 6b: track which levels have been re-planned
 
-    for level in levels:
-        level_steps = [step_by_id[sid] for sid in level]
+    def _post_step_replan_and_enrich(completed_step, level_idx):
+        """Section 6: Post-step re-planning check and description enrichment.
+
+        Called after each successful step completion. Enriches dependent step
+        descriptions (6c) and checks if re-planning is needed (6a/6b).
+        Returns True if re-planning was performed and levels need re-sorting.
+        """
+        nonlocal levels, step_by_id
+
+        # Section 6c: Enrich dependent step descriptions
+        remaining = [
+            s for s in state["steps"]
+            if s["status"] not in ("completed",)
+        ]
+        dependents = [
+            s for s in remaining
+            if completed_step["id"] in s.get("depends_on", [])
+        ]
+        if dependents:
+            enriched = enrich_step_descriptions(completed_step, dependents)
+            if enriched:
+                logger.info(
+                    "  Enriched descriptions for steps %s from step %d output.",
+                    enriched, completed_step["id"],
+                )
+                event_log.emit(EventType.STEP_ENRICHED,
+                               step_id=completed_step["id"],
+                               data={"enriched_steps": enriched})
+                _save_state_threadsafe(state)
+
+        # Section 6a: Check if re-planning is needed
+        if level_idx in replanned_levels:
+            return False  # Already re-planned at this level
+
+        event_log.emit(EventType.REPLAN_CHECK,
+                       step_id=completed_step["id"],
+                       data={"level": level_idx})
+
+        needs_replan, detail = should_replan(
+            completed_step, remaining, state,
+        )
+
+        if not needs_replan:
+            return False
+
+        # Section 6b: Incremental re-planning
+        logger.info(
+            "  Re-planning triggered after step %d: %s",
+            completed_step["id"], detail,
+        )
+        event_log.emit(EventType.REPLAN_TRIGGERED,
+                       step_id=completed_step["id"],
+                       data={"detail": detail[:200],
+                             "level": level_idx})
+        if dashboard:
+            dashboard.log(
+                f"Re-planning after step {completed_step['id']}: {detail[:100]}"
+            )
+
+        new_remaining = replan_remaining_steps(
+            state.get("goal", ""),
+            state,
+            completed_step,
+            detail,
+        )
+
+        if new_remaining is None:
+            logger.warning("  Re-planning failed, continuing with original plan.")
+            return False
+
+        # Replace pending steps with re-planned ones
+        # Keep completed steps, replace pending/failed ones
+        completed_steps = [
+            s for s in state["steps"] if s["status"] == "completed"
+        ]
+        max_completed_id = max(
+            (s["id"] for s in completed_steps), default=0,
+        )
+
+        # Assign IDs to new steps starting after max completed ID
+        for i, new_step in enumerate(new_remaining):
+            new_step["id"] = max_completed_id + i + 1
+            new_step.setdefault("status", "pending")
+            new_step.setdefault("spec_file", "")
+            new_step.setdefault("rewrites", 0)
+            new_step.setdefault("reflections", [])
+            new_step.setdefault("output", "")
+            new_step.setdefault("stderr_output", "")
+            new_step.setdefault("error", "")
+            new_step.setdefault("files_written", [])
+            new_step.setdefault("uas_result", None)
+            new_step.setdefault("summary", "")
+
+        state["steps"] = completed_steps + new_remaining
+        step_by_id = {s["id"]: s for s in state["steps"]}
+
+        # Re-validate and re-sort
+        try:
+            levels = topological_sort(state["steps"])
+        except ValueError as e:
+            logger.warning(
+                "  Re-planned steps have invalid dependencies: %s. "
+                "Reverting to original plan.",
+                e,
+            )
+            # Revert — this shouldn't happen with good LLM output
+            state["steps"] = completed_steps + remaining
+            step_by_id = {s["id"]: s for s in state["steps"]}
+            levels = topological_sort(state["steps"])
+            return False
+
+        replanned_levels.add(level_idx)
+        _save_state_threadsafe(state)
+
+        logger.info(
+            "  Re-planned: %d pending steps, %d levels remaining.",
+            len(new_remaining), len(levels),
+        )
+        event_log.emit(EventType.REPLAN_COMPLETE,
+                       step_id=completed_step["id"],
+                       data={"new_step_count": len(new_remaining),
+                             "new_level_count": len(levels)})
+        if dashboard:
+            dashboard.log(
+                f"Re-plan complete: {len(new_remaining)} steps remaining"
+            )
+            dashboard.update(state)
+        return True
+
+    level_idx = 0
+    while level_idx < len(levels):
+        level = levels[level_idx]
+        level_steps = [step_by_id[sid] for sid in level
+                       if sid in step_by_id]
 
         # Separate already-completed from pending
         pending = []
@@ -1529,6 +1753,7 @@ def main():
                 pending.append(step)
 
         if not pending:
+            level_idx += 1
             continue
 
         if len(pending) == 1:
@@ -1559,6 +1784,13 @@ def main():
                 "stderr": step.get("stderr_output", ""),
                 "files": step.get("files_written", []),
             }
+
+            # Section 6: Post-step re-planning and enrichment
+            did_replan = _post_step_replan_and_enrich(step, level_idx)
+            if did_replan:
+                # Levels were re-sorted; restart from current position
+                # (completed steps will be skipped automatically)
+                continue
         else:
             # Multiple independent steps — run in parallel
             workers = min(len(pending), MAX_PARALLEL) if MAX_PARALLEL else len(pending)
@@ -1569,6 +1801,7 @@ def main():
                 + ", ".join(f"#{s['id']}" for s in pending)
             )
             failed_step = None
+            completed_in_level = []
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=workers,
             ) as executor:
@@ -1596,6 +1829,7 @@ def main():
                             "stderr": step.get("stderr_output", ""),
                             "files": step.get("files_written", []),
                         }
+                        completed_in_level.append(step)
                     elif failed_step is None:
                         progress_counts["failed"] += 1
                         failed_step = step
@@ -1617,6 +1851,17 @@ def main():
                 logger.error("HALTED: Step %s failed irrecoverably.",
                              failed_step["id"])
                 sys.exit(1)
+
+            # Section 6: Post-level re-planning and enrichment
+            did_replan = False
+            for cstep in completed_in_level:
+                did_replan = _post_step_replan_and_enrich(cstep, level_idx)
+                if did_replan:
+                    break  # Re-plan once per level
+            if did_replan:
+                continue  # Re-sorted levels; restart iteration
+
+        level_idx += 1
 
     # All done
     state["total_elapsed"] = time.monotonic() - run_start

@@ -220,7 +220,7 @@ This plan identifies concrete improvements to maximize UAS's problem-solving abi
 
 ---
 
-## Section 6: Dynamic Mid-Execution Re-planning
+## Section 6: Dynamic Mid-Execution Re-planning [DONE]
 
 **Rationale:** The current system executes the initial plan rigidly. If a step produces unexpected output that invalidates later steps, the system doesn't adapt — it either fails later or produces wrong results. Dynamic re-planning catches this.
 

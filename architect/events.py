@@ -35,6 +35,10 @@ class EventType(Enum):
     ROOT_CAUSE_TRACED = "root_cause_traced"
     BACKTRACK_START = "backtrack_start"
     BACKTRACK_COMPLETE = "backtrack_complete"
+    REPLAN_CHECK = "replan_check"
+    REPLAN_TRIGGERED = "replan_triggered"
+    REPLAN_COMPLETE = "replan_complete"
+    STEP_ENRICHED = "step_enriched"
     RUN_COMPLETE = "run_complete"
 
 

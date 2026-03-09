@@ -1009,6 +1009,210 @@ def merge_trivial_steps(steps: list[dict]) -> list[dict]:
     return merged
 
 
+REPLAN_PROMPT = """\
+<goal>{goal}</goal>
+
+<completed_steps>
+{completed_steps_info}
+</completed_steps>
+
+<unexpected_result>
+Step {step_id} ({step_title}) produced an unexpected result:
+{unexpected_detail}
+</unexpected_result>
+
+<remaining_steps>
+{remaining_steps_json}
+</remaining_steps>
+
+<instructions>
+The plan is being executed but a step has produced output that doesn't match \
+what downstream steps expect. Given what has been accomplished so far, adjust \
+the remaining steps to account for the actual output.
+
+Rules:
+1. Keep ALL completed steps unchanged — only modify pending steps.
+2. Fix dependency references, file names, and descriptions to match actual outputs.
+3. You may add, remove, or reorder pending steps if necessary.
+4. Preserve the overall goal — adjust HOW to achieve it, not WHAT to achieve.
+5. Each step must still be a self-contained Python script task.
+6. Maintain valid depends_on references (1-based step numbers).
+7. Do not re-number completed steps — new/modified steps should start numbering \
+after the last completed step.
+
+Respond with ONLY a JSON array of the REMAINING steps (not completed ones). \
+Each element:
+{{"title": "short name", \
+"description": "detailed task for a code-generating LLM", \
+"depends_on": [step_numbers], \
+"verify": "how to verify this step succeeded", \
+"environment": ["packages needed"]}}
+</instructions>
+"""
+
+
+def replan_remaining_steps(goal: str, state: dict,
+                           unexpected_step: dict,
+                           unexpected_detail: str) -> list[dict] | None:
+    """Incrementally re-plan remaining steps after an unexpected result.
+
+    Instead of re-decomposing from scratch, adjusts pending steps based on
+    actual outputs from completed steps. Returns the new list of remaining
+    steps, or None if re-planning fails.
+
+    Section 6b of PLAN.md.
+    """
+    client = get_llm_client(role="planner")
+    event_log = get_event_log()
+
+    # Build completed steps info
+    completed_info_lines = []
+    for s in state.get("steps", []):
+        if s["status"] == "completed":
+            files = s.get("files_written", [])
+            summary = s.get("summary", "")
+            completed_info_lines.append(
+                f"- Step {s['id']} ({s['title']}): "
+                f"files={files}, summary={summary}"
+            )
+    completed_steps_info = "\n".join(completed_info_lines) or "None yet."
+
+    # Build remaining steps JSON
+    remaining = [
+        s for s in state.get("steps", [])
+        if s["status"] not in ("completed",) and s["id"] != unexpected_step["id"]
+    ]
+    remaining_json = json.dumps([
+        {
+            "id": s["id"],
+            "title": s["title"],
+            "description": s["description"],
+            "depends_on": s["depends_on"],
+            "verify": s.get("verify", ""),
+            "environment": s.get("environment", []),
+        }
+        for s in remaining
+    ], indent=2)
+
+    prompt = REPLAN_PROMPT.format(
+        goal=goal,
+        completed_steps_info=completed_steps_info,
+        step_id=unexpected_step["id"],
+        step_title=unexpected_step["title"],
+        unexpected_detail=unexpected_detail,
+        remaining_steps_json=remaining_json,
+    )
+
+    event_log.emit(EventType.LLM_CALL_START,
+                   data={"purpose": "replan_remaining_steps"})
+    try:
+        response = client.generate(prompt, stream=True)
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "replan_remaining_steps"})
+    except Exception as e:
+        logger.warning("Re-planning LLM call failed: %s", e)
+        return None
+
+    try:
+        new_steps = parse_steps_json(response)
+        if not new_steps:
+            return None
+        for step in new_steps:
+            if "title" not in step or "description" not in step:
+                return None
+            step.setdefault("depends_on", [])
+            step.setdefault("verify", "")
+            step.setdefault("environment", [])
+        # Normalize 0-indexed depends_on
+        has_zero_ref = any(0 in s.get("depends_on", []) for s in new_steps)
+        if has_zero_ref:
+            for step in new_steps:
+                step["depends_on"] = [d + 1 for d in step["depends_on"]]
+        # Re-planned steps may reference completed step IDs outside this
+        # list, so we can't use validate_depends_on (which assumes a
+        # self-contained 1-indexed list).  Instead, validate that deps
+        # reference either completed steps or other new steps, and that
+        # there are no cycles among the new steps themselves.
+        completed_ids = {
+            s["id"] for s in state.get("steps", [])
+            if s["status"] == "completed"
+        }
+        n = len(new_steps)
+        new_step_nums = set(range(1, n + 1))
+        for i, step in enumerate(new_steps):
+            for dep in step.get("depends_on", []):
+                if not isinstance(dep, int):
+                    raise ValueError(
+                        f"New step {i + 1} has non-integer dep: {dep}"
+                    )
+                # dep is valid if it references a completed step or
+                # another step within the new list
+                if dep not in completed_ids and dep not in new_step_nums:
+                    raise ValueError(
+                        f"New step {i + 1} references unknown step {dep}"
+                    )
+                # Self-reference check: only for deps within the new list
+                # (not for deps referencing completed steps)
+                if dep == i + 1 and dep not in completed_ids:
+                    raise ValueError(
+                        f"New step {i + 1} depends on itself."
+                    )
+        return new_steps
+    except (ValueError, json.JSONDecodeError) as e:
+        logger.warning("Could not parse re-planned steps: %s", e)
+        return None
+
+
+def enrich_step_descriptions(completed_step: dict,
+                             dependent_steps: list[dict]) -> list[int]:
+    """Enrich dependent step descriptions with info from a completed step.
+
+    Appends concrete details about files produced, data formats, and
+    summaries so downstream steps have better context. This is a
+    lightweight operation with no LLM call.
+
+    Returns list of step IDs that were enriched.
+
+    Section 6c of PLAN.md.
+    """
+    enriched_ids = []
+    files_written = completed_step.get("files_written", [])
+    summary = completed_step.get("summary", "")
+    uas_result = completed_step.get("uas_result", {})
+
+    if not files_written and not summary:
+        return enriched_ids
+
+    # Build enrichment text
+    parts = []
+    if files_written:
+        parts.append(f"files produced: {', '.join(files_written[:10])}")
+    if summary:
+        parts.append(f"output summary: {summary}")
+    if uas_result and isinstance(uas_result, dict):
+        result_summary = uas_result.get("summary", "")
+        if result_summary and result_summary != summary:
+            parts.append(f"result: {result_summary}")
+
+    if not parts:
+        return enriched_ids
+
+    enrichment = (
+        f"\n[Context from step {completed_step['id']} "
+        f"({completed_step['title']}): {'; '.join(parts)}]"
+    )
+
+    for dep_step in dependent_steps:
+        # Avoid duplicate enrichment
+        marker = f"[Context from step {completed_step['id']} "
+        if marker in dep_step.get("description", ""):
+            continue
+        dep_step["description"] = dep_step["description"] + enrichment
+        enriched_ids.append(dep_step["id"])
+
+    return enriched_ids
+
+
 def decompose_failing_step(step: dict, orchestrator_stdout: str,
                            orchestrator_stderr: str) -> str:
     """Decompose a failing step into a more granular multi-phase description."""

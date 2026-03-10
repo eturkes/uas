@@ -3,10 +3,14 @@
 import concurrent.futures
 import json
 import logging
+import os
 import re
 
 from orchestrator.llm_client import get_llm_client
 from .events import EventType, get_event_log
+
+MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
+_DEFAULT_REWRITE_TRIM = 3000
 
 logger = logging.getLogger(__name__)
 
@@ -829,8 +833,9 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
     """
     client = get_llm_client(role="planner")
 
-    stdout_trimmed = orchestrator_stdout
-    stderr_trimmed = orchestrator_stderr
+    trim_limit = MAX_ERROR_LENGTH if MAX_ERROR_LENGTH > 0 else _DEFAULT_REWRITE_TRIM
+    stdout_trimmed = orchestrator_stdout[-trim_limit:] if len(orchestrator_stdout) > trim_limit else orchestrator_stdout
+    stderr_trimmed = orchestrator_stderr[-trim_limit:] if len(orchestrator_stderr) > trim_limit else orchestrator_stderr
 
     escalation = ESCALATION_INSTRUCTIONS.get(escalation_level, "")
 
@@ -1218,8 +1223,9 @@ def decompose_failing_step(step: dict, orchestrator_stdout: str,
     """Decompose a failing step into a more granular multi-phase description."""
     client = get_llm_client(role="planner")
 
-    stdout_trimmed = orchestrator_stdout
-    stderr_trimmed = orchestrator_stderr
+    trim_limit = MAX_ERROR_LENGTH if MAX_ERROR_LENGTH > 0 else _DEFAULT_REWRITE_TRIM
+    stdout_trimmed = orchestrator_stdout[-trim_limit:] if len(orchestrator_stdout) > trim_limit else orchestrator_stdout
+    stderr_trimmed = orchestrator_stderr[-trim_limit:] if len(orchestrator_stderr) > trim_limit else orchestrator_stderr
 
     prompt = DECOMPOSE_STEP_PROMPT.format(
         description=step["description"],

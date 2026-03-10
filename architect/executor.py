@@ -317,6 +317,8 @@ def _run_container(task: str, extra_env: dict | None = None,
         "UAS_HOST_UID", "UAS_HOST_GID",
         # Section 5c: Model tiering env vars
         "UAS_MODEL_PLANNER", "UAS_MODEL_CODER",
+        # Package requirements and best-of-N for orchestrator
+        "UAS_BEST_OF_N", "UAS_STEP_ENVIRONMENT",
     ]:
         val = os.environ.get(var)
         if val:

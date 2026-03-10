@@ -313,8 +313,8 @@ class TestReflectAndRewrite:
         assert result == "original task"
 
     @patch("architect.planner.get_llm_client")
-    def test_stdout_stderr_passed_to_prompt(self, mock_get_client):
-        """Long stdout and stderr are included in the prompt untruncated."""
+    def test_stdout_stderr_trimmed_in_prompt(self, mock_get_client):
+        """Long stdout and stderr are trimmed to avoid flooding the prompt."""
         client = MagicMock()
         client.generate.return_value = "rewritten"
         mock_get_client.return_value = client
@@ -324,9 +324,11 @@ class TestReflectAndRewrite:
         long_stderr = "y" * 5000
         reflect_and_rewrite(step, long_stdout, long_stderr)
         prompt = client.generate.call_args[0][0]
-        # Full stdout and stderr are passed through (no default truncation)
-        assert "x" * 5000 in prompt
-        assert "y" * 5000 in prompt
+        # Outputs are trimmed to the default limit (tail preserved)
+        assert "x" * 3000 in prompt
+        assert "y" * 3000 in prompt
+        assert "x" * 5000 not in prompt
+        assert "y" * 5000 not in prompt
 
     @patch("architect.planner.get_llm_client")
     def test_previous_attempts_included(self, mock_get_client):

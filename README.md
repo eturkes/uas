@@ -596,7 +596,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_BEST_OF_N` | Max parallel code samples per retry attempt (1 = disabled) | `1` |
 | `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | *(unlimited)* |
 | `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | *(unlimited)* |
-| `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | *(unlimited)* |
+| `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | `3000` |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_HOST_UID` | Host user UID for file ownership in containers | *(auto-set by wrapper)* |
 | `UAS_HOST_GID` | Host user GID for file ownership in containers | *(auto-set by wrapper)* |

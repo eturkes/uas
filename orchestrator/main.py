@@ -447,6 +447,17 @@ def main():
     previous_code = None
     workspace_files = os.environ.get("UAS_WORKSPACE_FILES")
 
+    # Read step's package requirements from the architect
+    environment = None
+    env_str = os.environ.get("UAS_STEP_ENVIRONMENT")
+    if env_str:
+        try:
+            environment = json.loads(env_str)
+            if not isinstance(environment, list):
+                environment = None
+        except (json.JSONDecodeError, ValueError):
+            pass
+
     # Section 5b: If workspace files aren't provided by the architect,
     # scan the workspace directly so the LLM knows what already exists.
     if not workspace_files:
@@ -458,6 +469,7 @@ def main():
         logger.info("\n--- Attempt %d/%d ---", attempt, MAX_RETRIES)
 
         prompt = build_prompt(task, attempt, previous_error, previous_code,
+                              environment=environment,
                               workspace_files=workspace_files)
 
         # Section 7c: Determine N for this attempt (budget-aware gating).

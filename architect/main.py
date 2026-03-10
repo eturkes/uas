@@ -1013,6 +1013,10 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             "UAS_STEP_ID": str(step["id"]),
             "UAS_SPEC_ATTEMPT": str(spec_attempt),
         }
+        # Pass step's environment/package requirements to the orchestrator
+        # so build_prompt() can include explicit pip install instructions.
+        if step.get("environment"):
+            extra_env["UAS_STEP_ENVIRONMENT"] = json.dumps(step["environment"])
         # Scan workspace files for orchestrator prompt context (Section 1a)
         ws_files = scan_workspace_files(WORKSPACE)
         if ws_files:

@@ -284,6 +284,243 @@ class TestReplanRemainingSteps:
         assert result is not None
         assert result[0]["depends_on"] == [1]
 
+    @patch("architect.planner.get_llm_client")
+    def test_accepts_inter_new_step_deps_continuation_ids(self, mock_get_client):
+        """LLM uses continuation IDs (after max completed) for inter-dependencies."""
+        client = MagicMock()
+        # LLM produces steps with IDs 3,4 (continuing after completed 1,2)
+        # Step 4 depends on new step 3
+        client.generate.return_value = json.dumps([
+            {"id": 3, "title": "Fetch data", "description": "Download data",
+             "depends_on": [1], "verify": "", "environment": []},
+            {"id": 4, "title": "Process data", "description": "Process it",
+             "depends_on": [3], "verify": "", "environment": []},
+        ])
+        mock_get_client.return_value = client
+
+        state = {
+            "goal": "Build pipeline",
+            "steps": [
+                {"id": 1, "title": "Setup", "status": "completed",
+                 "files_written": ["config.json"], "summary": "Done",
+                 "depends_on": []},
+                {"id": 2, "title": "Cleanup", "status": "completed",
+                 "files_written": [], "summary": "Cleaned",
+                 "depends_on": []},
+                {"id": 3, "title": "Old fetch", "status": "pending",
+                 "description": "old", "depends_on": [1],
+                 "verify": "", "environment": []},
+                {"id": 4, "title": "Old process", "status": "pending",
+                 "description": "old", "depends_on": [3],
+                 "verify": "", "environment": []},
+            ],
+        }
+        result = replan_remaining_steps(
+            "Build pipeline", state, state["steps"][0],
+            "Step 3 references wrong files",
+        )
+        assert result is not None
+        assert len(result) == 2
+        # Step with dep on 3 (another new step) should be accepted
+        assert result[1]["depends_on"] == [3]
+
+    @patch("architect.planner.get_llm_client")
+    def test_accepts_inter_new_step_deps_positional_ids(self, mock_get_client):
+        """LLM uses positional 1-based IDs for inter-dependencies."""
+        client = MagicMock()
+        # LLM uses positional numbering: step 1 of new list depends on
+        # completed step 1, step 2 of new list depends on step 1 of new list
+        client.generate.return_value = json.dumps([
+            {"title": "Fetch data", "description": "Download data",
+             "depends_on": [1], "verify": "", "environment": []},
+            {"title": "Process data", "description": "Process it",
+             "depends_on": [1], "verify": "", "environment": []},
+        ])
+        mock_get_client.return_value = client
+
+        state = {
+            "goal": "Build pipeline",
+            "steps": [
+                {"id": 1, "title": "Setup", "status": "completed",
+                 "files_written": [], "summary": "Done",
+                 "depends_on": []},
+                {"id": 2, "title": "Old step", "status": "pending",
+                 "description": "old", "depends_on": [1],
+                 "verify": "", "environment": []},
+            ],
+        }
+        result = replan_remaining_steps(
+            "Build pipeline", state, state["steps"][0], "mismatch",
+        )
+        assert result is not None
+        assert len(result) == 2
+
+    @patch("architect.planner.get_llm_client")
+    def test_rejects_self_referencing_new_step(self, mock_get_client):
+        """New step that depends on itself should be rejected."""
+        client = MagicMock()
+        client.generate.return_value = json.dumps([
+            {"id": 3, "title": "Bad step", "description": "Self-ref",
+             "depends_on": [3], "verify": "", "environment": []},
+        ])
+        mock_get_client.return_value = client
+
+        state = {
+            "goal": "test",
+            "steps": [
+                {"id": 1, "title": "A", "status": "completed",
+                 "files_written": [], "summary": "", "depends_on": []},
+                {"id": 2, "title": "B", "status": "completed",
+                 "files_written": [], "summary": "", "depends_on": []},
+            ],
+        }
+        result = replan_remaining_steps(
+            "test", state, state["steps"][0], "detail",
+        )
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 6d: ID remapping after re-planning
+# ---------------------------------------------------------------------------
+
+class TestReplanIdRemapping:
+    """Test that depends_on is correctly remapped after ID reassignment."""
+
+    def test_continuation_ids_remapped(self):
+        """When LLM uses continuation IDs, deps between new steps are remapped."""
+        # Simulate state with 2 completed steps
+        state = {
+            "goal": "Complex task",
+            "steps": [
+                {"id": 1, "title": "Step A", "status": "completed",
+                 "depends_on": [], "files_written": ["a.txt"],
+                 "summary": "Done A", "uas_result": None, "output": "",
+                 "stderr_output": "", "error": "", "spec_file": "",
+                 "rewrites": 0, "reflections": []},
+                {"id": 2, "title": "Step B", "status": "completed",
+                 "depends_on": [], "files_written": ["b.txt"],
+                 "summary": "Done B", "uas_result": None, "output": "",
+                 "stderr_output": "", "error": "", "spec_file": "",
+                 "rewrites": 0, "reflections": []},
+                {"id": 3, "title": "Old C", "status": "pending",
+                 "depends_on": [1], "description": "Read a.csv",
+                 "files_written": [], "summary": "", "uas_result": None,
+                 "output": "", "stderr_output": "", "error": "",
+                 "spec_file": "", "rewrites": 0, "reflections": []},
+            ],
+        }
+
+        # Simulate re-planned steps with continuation IDs
+        new_remaining = [
+            {"id": 3, "title": "New C", "description": "Fetch data",
+             "depends_on": [1], "verify": "", "environment": []},
+            {"id": 4, "title": "New D", "description": "Process data",
+             "depends_on": [3], "verify": "", "environment": []},
+        ]
+
+        completed_steps = [s for s in state["steps"] if s["status"] == "completed"]
+        completed_ids_set = {s["id"] for s in completed_steps}
+        max_completed_id = max(completed_ids_set, default=0)
+
+        # Apply the same logic as _post_step_replan_and_enrich
+        dep_remap = {}
+        for i, new_step in enumerate(new_remaining):
+            final_id = max_completed_id + i + 1
+            dep_remap.setdefault(i + 1, final_id)
+            dep_remap.setdefault(max_completed_id + i + 1, final_id)
+            if "id" in new_step and new_step["id"] not in dep_remap:
+                dep_remap[new_step["id"]] = final_id
+
+        for i, new_step in enumerate(new_remaining):
+            new_step["id"] = max_completed_id + i + 1
+
+        for new_step in new_remaining:
+            new_step["depends_on"] = [
+                d if d in completed_ids_set
+                else dep_remap.get(d, d)
+                for d in new_step.get("depends_on", [])
+            ]
+
+        # Step C: depends on completed step 1, should stay as [1]
+        assert new_remaining[0]["id"] == 3
+        assert new_remaining[0]["depends_on"] == [1]
+        # Step D: depends on new step C (was id=3), should be [3]
+        assert new_remaining[1]["id"] == 4
+        assert new_remaining[1]["depends_on"] == [3]
+
+    def test_positional_ids_remapped(self):
+        """When LLM uses positional 1-based IDs, deps are remapped to final IDs."""
+        # 3 completed steps, LLM uses positional {1, 2} for new steps
+        completed_ids_set = {1, 2, 3}
+        max_completed_id = 3
+
+        new_remaining = [
+            {"title": "New A", "description": "Do A",
+             "depends_on": [2], "verify": "", "environment": []},
+            {"title": "New B", "description": "Do B",
+             "depends_on": [1], "verify": "", "environment": []},
+        ]
+
+        dep_remap = {}
+        for i, new_step in enumerate(new_remaining):
+            final_id = max_completed_id + i + 1
+            dep_remap.setdefault(i + 1, final_id)
+            dep_remap.setdefault(max_completed_id + i + 1, final_id)
+            if "id" in new_step and new_step["id"] not in dep_remap:
+                dep_remap[new_step["id"]] = final_id
+
+        for i, new_step in enumerate(new_remaining):
+            new_step["id"] = max_completed_id + i + 1
+
+        for new_step in new_remaining:
+            new_step["depends_on"] = [
+                d if d in completed_ids_set
+                else dep_remap.get(d, d)
+                for d in new_step.get("depends_on", [])
+            ]
+
+        # New A: depends on completed step 2, should stay [2]
+        assert new_remaining[0]["id"] == 4
+        assert new_remaining[0]["depends_on"] == [2]
+        # New B: depends_on [1] — ambiguous (completed step 1 or positional 1).
+        # Since 1 is in completed_ids_set, it stays as [1] (completed step 1).
+        assert new_remaining[1]["id"] == 5
+        assert new_remaining[1]["depends_on"] == [1]
+
+    def test_mixed_deps_completed_and_new(self):
+        """Step depends on both a completed step and another new step."""
+        completed_ids_set = {1, 2}
+        max_completed_id = 2
+
+        new_remaining = [
+            {"id": 3, "title": "New C", "description": "Do C",
+             "depends_on": [1], "verify": "", "environment": []},
+            {"id": 4, "title": "New D", "description": "Do D",
+             "depends_on": [2, 3], "verify": "", "environment": []},
+        ]
+
+        dep_remap = {}
+        for i, new_step in enumerate(new_remaining):
+            final_id = max_completed_id + i + 1
+            dep_remap.setdefault(i + 1, final_id)
+            dep_remap.setdefault(max_completed_id + i + 1, final_id)
+            if "id" in new_step and new_step["id"] not in dep_remap:
+                dep_remap[new_step["id"]] = final_id
+
+        for i, new_step in enumerate(new_remaining):
+            new_step["id"] = max_completed_id + i + 1
+
+        for new_step in new_remaining:
+            new_step["depends_on"] = [
+                d if d in completed_ids_set
+                else dep_remap.get(d, d)
+                for d in new_step.get("depends_on", [])
+            ]
+
+        assert new_remaining[0]["depends_on"] == [1]      # completed
+        assert new_remaining[1]["depends_on"] == [2, 3]    # completed + new
+
 
 # ---------------------------------------------------------------------------
 # 6c: Step description enrichment

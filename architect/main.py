@@ -1682,11 +1682,27 @@ def main():
         completed_steps = [
             s for s in state["steps"] if s["status"] == "completed"
         ]
-        max_completed_id = max(
-            (s["id"] for s in completed_steps), default=0,
-        )
+        completed_ids_set = {s["id"] for s in completed_steps}
+        max_completed_id = max(completed_ids_set, default=0)
 
-        # Assign IDs to new steps starting after max completed ID
+        # Build mapping from any ID the LLM might have used for new
+        # steps to the final ID we assign.  The LLM may use positional
+        # 1-based indices, continuation IDs (max_completed + pos), or
+        # explicit "id" fields.  We map all of these to the canonical
+        # final IDs to fix depends_on references between new steps.
+        n_new = len(new_remaining)
+        dep_remap = {}
+        for i, new_step in enumerate(new_remaining):
+            final_id = max_completed_id + i + 1
+            # Map positional (1-based) index
+            dep_remap.setdefault(i + 1, final_id)
+            # Map continuation ID
+            dep_remap.setdefault(max_completed_id + i + 1, final_id)
+            # Map LLM-assigned ID if present
+            if "id" in new_step and new_step["id"] not in dep_remap:
+                dep_remap[new_step["id"]] = final_id
+
+        # Assign final IDs to new steps
         for i, new_step in enumerate(new_remaining):
             new_step["id"] = max_completed_id + i + 1
             new_step.setdefault("status", "pending")
@@ -1699,6 +1715,15 @@ def main():
             new_step.setdefault("files_written", [])
             new_step.setdefault("uas_result", None)
             new_step.setdefault("summary", "")
+
+        # Remap depends_on references that point to other new steps.
+        # Deps referencing completed steps stay unchanged.
+        for new_step in new_remaining:
+            new_step["depends_on"] = [
+                d if d in completed_ids_set
+                else dep_remap.get(d, d)
+                for d in new_step.get("depends_on", [])
+            ]
 
         state["steps"] = completed_steps + new_remaining
         step_by_id = {s["id"]: s for s in state["steps"]}

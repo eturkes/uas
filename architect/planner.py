@@ -1138,27 +1138,39 @@ def replan_remaining_steps(goal: str, state: dict,
         # self-contained 1-indexed list).  Instead, validate that deps
         # reference either completed steps or other new steps, and that
         # there are no cycles among the new steps themselves.
+        #
+        # The LLM may use different numbering schemes for new steps:
+        #   - Positional 1-based indices (1, 2, 3, ...)
+        #   - Continuation IDs after max completed (e.g. 4, 5, 6, ...)
+        #   - Explicit "id" fields in the JSON
+        # Accept all of these as valid references.
         completed_ids = {
             s["id"] for s in state.get("steps", [])
             if s["status"] == "completed"
         }
+        max_completed = max(completed_ids) if completed_ids else 0
         n = len(new_steps)
-        new_step_nums = set(range(1, n + 1))
+        # Build the set of all valid new-step IDs the LLM might use
+        positional_ids = set(range(1, n + 1))
+        continuation_ids = {max_completed + i + 1 for i in range(n)}
+        llm_ids = {s["id"] for s in new_steps if "id" in s}
+        valid_new_ids = positional_ids | continuation_ids | llm_ids
+        all_valid = completed_ids | valid_new_ids
         for i, step in enumerate(new_steps):
             for dep in step.get("depends_on", []):
                 if not isinstance(dep, int):
                     raise ValueError(
                         f"New step {i + 1} has non-integer dep: {dep}"
                     )
-                # dep is valid if it references a completed step or
-                # another step within the new list
-                if dep not in completed_ids and dep not in new_step_nums:
+                if dep not in all_valid:
                     raise ValueError(
                         f"New step {i + 1} references unknown step {dep}"
                     )
-                # Self-reference check: only for deps within the new list
-                # (not for deps referencing completed steps)
-                if dep == i + 1 and dep not in completed_ids:
+                # Self-reference check using all possible IDs for this step
+                self_ids = {i + 1, max_completed + i + 1}
+                if "id" in step:
+                    self_ids.add(step["id"])
+                if dep in self_ids and dep not in completed_ids:
                     raise ValueError(
                         f"New step {i + 1} depends on itself."
                     )

@@ -687,7 +687,12 @@ Use unknown only if the error truly does not fit any other category.",
 "root_cause": "brief description of what caused the failure",
 "strategy_tried": "what approach was used in this attempt",
 "lesson": "what was learned from this failure",
-"what_to_try_next": "concrete suggestion for the next attempt"}}
+"what_to_try_next": "concrete suggestion for the next attempt",
+"recommended_strategy": "MUST be exactly one of: reflect_and_fix, alternative_approach, decompose_into_phases, defensive_rewrite. \
+Use reflect_and_fix when the error is a small, localised bug that can be corrected with a targeted change. \
+Use alternative_approach when the fundamental approach is flawed and a completely different technique should be tried. \
+Use decompose_into_phases when the task is too complex for a single script and should be broken into sequential sub-phases. \
+Use defensive_rewrite when multiple prior attempts have failed and the safest, most conservative implementation is needed."}}
 </instructions>
 """
 
@@ -770,6 +775,7 @@ def generate_reflection(step: dict, stdout: str, stderr: str,
                 "strategy_tried": data.get("strategy_tried", "unknown"),
                 "lesson": data.get("lesson", ""),
                 "what_to_try_next": data.get("what_to_try_next", ""),
+                "recommended_strategy": data.get("recommended_strategy", ""),
             }
             return reflection
     except json.JSONDecodeError:

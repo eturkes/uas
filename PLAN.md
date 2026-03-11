@@ -382,7 +382,7 @@ issues (e.g., building SQL from user input, logging secrets indirectly, using
 ---
 
 ## Section 10: Rewrite Escalation — Dynamic Strategy Selection
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `main.py:1262-1268` uses a hardcoded escalation sequence

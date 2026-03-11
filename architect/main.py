@@ -136,6 +136,50 @@ def should_continue_retrying(step, spec_attempt, error_type, reflections):
     return False, f"exceeded retry budget ({attempts_so_far}/{error_budget})"
 
 
+_VALID_STRATEGIES = {
+    "reflect_and_fix",
+    "alternative_approach",
+    "decompose_into_phases",
+    "defensive_rewrite",
+}
+
+# Hardcoded fallback: maps spec_attempt to strategy (original behaviour).
+_FALLBACK_STRATEGY = {
+    0: "reflect_and_fix",
+    1: "alternative_approach",
+    2: "decompose_into_phases",
+    3: "defensive_rewrite",
+}
+
+
+def _select_rewrite_strategy(
+    step: dict,
+    spec_attempt: int,
+    reflection: dict | None,
+) -> str:
+    """Pick a rewrite strategy from the reflection's recommendation.
+
+    Uses the LLM-generated ``recommended_strategy`` field when it contains a
+    valid value; otherwise falls back to the original hardcoded escalation
+    sequence keyed on *spec_attempt*.
+    """
+    if reflection:
+        rec = reflection.get("recommended_strategy", "").strip().lower()
+        if rec in _VALID_STRATEGIES:
+            return rec
+
+        # Keyword scan on what_to_try_next as a secondary signal
+        hint = reflection.get("what_to_try_next", "").lower()
+        if "decompose" in hint or "sub-phase" in hint or "break" in hint:
+            return "decompose_into_phases"
+        if "different approach" in hint or "alternative" in hint:
+            return "alternative_approach"
+        if "defensive" in hint or "simplif" in hint or "conservative" in hint:
+            return "defensive_rewrite"
+
+    return _FALLBACK_STRATEGY.get(spec_attempt, "reflect_and_fix")
+
+
 logger = logging.getLogger(__name__)
 
 _state_lock = threading.Lock()
@@ -1778,29 +1822,43 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 spec_attempt + 1,
                 MAX_SPEC_REWRITES,
             )
+            # Section 10: Dynamic strategy selection from reflection
+            _strategy = _select_rewrite_strategy(
+                step, spec_attempt, reflection
+            )
+            _STRATEGY_LABELS = {
+                "reflect_and_fix": "Reflecting on failure...",
+                "alternative_approach": "Trying alternative strategy...",
+                "decompose_into_phases": "Decomposing into sub-phases...",
+                "defensive_rewrite": "Final defensive rewrite...",
+            }
             if dashboard:
-                rewrite_label = {
-                    0: "Reflecting on failure...",
-                    1: "Trying alternative strategy...",
-                    2: "Decomposing into sub-phases...",
-                    3: "Final defensive rewrite...",
-                }.get(spec_attempt, "Rewriting...")
+                rewrite_label = _STRATEGY_LABELS.get(
+                    _strategy, "Rewriting..."
+                )
                 dashboard.set_step_activity(step["id"], rewrite_label)
                 dashboard.log(
                     f"Step {step['id']} failed (attempt {spec_attempt + 1}), "
-                    f"rewriting ({spec_attempt + 1}/{MAX_SPEC_REWRITES})"
+                    f"strategy: {_strategy}"
                 )
-            if spec_attempt == 2:
-                # 3rd failure: decompose into sub-phases
-                logger.info("  Escalation: decomposing step into sub-phases...")
+            if _strategy == "decompose_into_phases":
+                logger.info(
+                    "  Strategy: decomposing step into sub-phases..."
+                )
                 step["description"] = decompose_failing_step(
                     step, result["stdout"], result["stderr"]
                 )
             else:
-                # 1st, 2nd, 4th failure: reflection-based rewrite
+                escalation = {
+                    "reflect_and_fix": 0,
+                    "alternative_approach": 1,
+                    "defensive_rewrite": 3,
+                }.get(_strategy, spec_attempt)
+                logger.info("  Strategy: %s (escalation=%d)",
+                            _strategy, escalation)
                 step["description"] = reflect_and_rewrite(
                     step, result["stdout"], result["stderr"],
-                    escalation_level=spec_attempt,
+                    escalation_level=escalation,
                     previous_attempts=attempt_history,
                     reflections=step.get("reflections", []),
                 )

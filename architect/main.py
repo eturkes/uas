@@ -414,9 +414,36 @@ def _distill_dependency_output(dep_id: int, dep_step: dict,
     return "\n".join(parts)
 
 
-def should_replan(step: dict, remaining_steps: list[dict],
-                  state: dict) -> tuple[bool, str]:
-    """Check if remaining steps need re-planning after a step completes.
+REPLAN_CHECK_PROMPT = """\
+A step in a multi-step plan just completed. Evaluate whether the remaining \
+steps need adjustment based on the actual output.
+
+## Completed Step
+- ID: {step_id}
+- Title: {step_title}
+- Files produced: {files_written}
+- Summary: {step_summary}
+- UAS_RESULT: {uas_result}
+
+## Dependent Steps (that consume this step's output)
+{dependent_steps_block}
+
+## Question
+Based on the completed step's actual output, do any of the dependent steps \
+need adjustment? Consider:
+- Do referenced file names match what was actually produced?
+- Is the data format/structure compatible with what downstream steps expect?
+- Were expected outputs actually created?
+- Is the output semantically sufficient for downstream steps?
+
+Return ONLY valid JSON (no markdown fences):
+{{"needs_replan": true/false, "reason": "brief explanation"}}
+"""
+
+
+def should_replan_heuristic(step: dict, remaining_steps: list[dict],
+                            state: dict) -> tuple[bool, str]:
+    """Check if remaining steps need re-planning (regex heuristic fallback).
 
     Compares the step's actual output (files_written, summary) against what
     downstream steps reference in their descriptions. If there's a mismatch,
@@ -424,7 +451,7 @@ def should_replan(step: dict, remaining_steps: list[dict],
 
     Returns (needs_replan, detail) where detail describes the mismatch.
 
-    Section 6a of PLAN.md.
+    Section 6a of PLAN.md (heuristic fallback).
     """
     if not remaining_steps:
         return False, ""
@@ -501,6 +528,76 @@ def should_replan(step: dict, remaining_steps: list[dict],
         return True, detail
 
     return False, ""
+
+
+def should_replan_llm(step: dict, remaining_steps: list[dict],
+                      state: dict) -> tuple[bool, str]:
+    """Check if remaining steps need re-planning using LLM evaluation.
+
+    Presents the completed step's actual output and dependent step
+    descriptions to the LLM for semantic mismatch detection.
+
+    Falls back to should_replan_heuristic() on LLM or parse failure.
+
+    Returns (needs_replan, detail) where detail describes the mismatch.
+
+    Section 6a of PLAN.md (LLM-steered).
+    """
+    if not remaining_steps:
+        return False, ""
+
+    step_id = step["id"]
+    # Only consider dependent steps
+    dependents = [
+        rs for rs in remaining_steps
+        if step_id in rs.get("depends_on", [])
+    ]
+    if not dependents:
+        return False, ""
+
+    try:
+        from orchestrator.llm_client import get_llm_client
+        client = get_llm_client(role="planner")
+
+        files_written = step.get("files_written", [])
+        uas_result = step.get("uas_result") or {}
+        summary = step.get("summary", "")
+
+        dep_lines = []
+        for rs in dependents:
+            dep_lines.append(
+                f"- Step {rs['id']} ({rs.get('title', 'untitled')}): "
+                f"{rs.get('description', 'no description')}"
+            )
+        dependent_steps_block = "\n".join(dep_lines) if dep_lines else "(none)"
+
+        prompt = REPLAN_CHECK_PROMPT.format(
+            step_id=step_id,
+            step_title=step.get("title", "untitled"),
+            files_written=", ".join(files_written) if files_written else "(none)",
+            step_summary=summary or "(no summary)",
+            uas_result=json.dumps(uas_result) if uas_result else "(none)",
+            dependent_steps_block=dependent_steps_block,
+        )
+
+        response = client.generate(prompt)
+
+        # Parse JSON from response (handle possible markdown fences)
+        text = response.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            # Drop first and last fence lines
+            lines = [l for l in lines if not l.startswith("```")]
+            text = "\n".join(lines).strip()
+
+        result = json.loads(text)
+        needs = bool(result.get("needs_replan", False))
+        reason = result.get("reason", "")
+        return needs, reason
+
+    except Exception:
+        # Fallback to regex heuristic
+        return should_replan_heuristic(step, remaining_steps, state)
 
 
 def build_context(step: dict, completed_outputs: dict,
@@ -1762,7 +1859,7 @@ def main():
                        step_id=completed_step["id"],
                        data={"level": level_idx})
 
-        needs_replan, detail = should_replan(
+        needs_replan, detail = should_replan_llm(
             completed_step, remaining, state,
         )
 

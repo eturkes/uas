@@ -11,7 +11,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from architect.main import should_replan
+from architect.main import should_replan_heuristic, should_replan_llm
 from architect.planner import (
     replan_remaining_steps,
     enrich_step_descriptions,
@@ -27,7 +27,7 @@ from architect.events import EventType
 class TestShouldReplan:
     def test_no_remaining_steps(self):
         step = {"id": 1, "files_written": ["data.csv"]}
-        needs, detail = should_replan(step, [], {"steps": []})
+        needs, detail = should_replan_heuristic(step, [], {"steps": []})
         assert needs is False
         assert detail == ""
 
@@ -42,7 +42,7 @@ class TestShouldReplan:
             "depends_on": [1],
             "description": "Read data.csv and compute statistics.",
         }]
-        needs, detail = should_replan(step, remaining, {"steps": []})
+        needs, detail = should_replan_heuristic(step, remaining, {"steps": []})
         assert needs is False
 
     def test_mismatch_when_wrong_file_produced(self):
@@ -56,7 +56,7 @@ class TestShouldReplan:
             "depends_on": [1],
             "description": "Read data.csv from the workspace and process it.",
         }]
-        needs, detail = should_replan(step, remaining, {"steps": []})
+        needs, detail = should_replan_heuristic(step, remaining, {"steps": []})
         assert needs is True
         assert "data.csv" in detail
 
@@ -71,7 +71,7 @@ class TestShouldReplan:
             "depends_on": [1],
             "description": "Read the output file from step 1.",
         }]
-        needs, detail = should_replan(step, remaining, {"steps": []})
+        needs, detail = should_replan_heuristic(step, remaining, {"steps": []})
         assert needs is True
         assert "no files were produced" in detail
 
@@ -86,7 +86,7 @@ class TestShouldReplan:
             "depends_on": [2],  # Depends on step 2, not step 1
             "description": "Read data.csv from the workspace.",
         }]
-        needs, detail = should_replan(step, remaining, {"steps": []})
+        needs, detail = should_replan_heuristic(step, remaining, {"steps": []})
         assert needs is False
 
     def test_detects_similar_file_mismatch(self):
@@ -100,7 +100,7 @@ class TestShouldReplan:
             "depends_on": [1],
             "description": "Load output.csv and generate a report.",
         }]
-        needs, detail = should_replan(step, remaining, {"steps": []})
+        needs, detail = should_replan_heuristic(step, remaining, {"steps": []})
         assert needs is True
         assert "output.csv" in detail
         assert "results.csv" in detail
@@ -123,10 +123,177 @@ class TestShouldReplan:
                 "description": "Parse results.json from step 1.",
             },
         ]
-        needs, detail = should_replan(step, remaining, {"steps": []})
+        needs, detail = should_replan_heuristic(step, remaining, {"steps": []})
         assert needs is True
         # Both mismatches should be detected
         assert "data.csv" in detail or "results.json" in detail
+
+
+# ---------------------------------------------------------------------------
+# 6a-llm: LLM-based re-plan trigger (should_replan_llm)
+# ---------------------------------------------------------------------------
+
+class TestShouldReplanLlm:
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_returns_llm_decision_needs_replan(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = json.dumps({
+            "needs_replan": True,
+            "reason": "Step 2 expects data.csv but step 1 produced output.json",
+        })
+        mock_get_client.return_value = client
+
+        step = {
+            "id": 1, "title": "Download",
+            "files_written": ["output.json"],
+            "uas_result": {"status": "ok"},
+            "summary": "Downloaded data as JSON",
+        }
+        remaining = [{
+            "id": 2, "title": "Process",
+            "depends_on": [1],
+            "description": "Read data.csv and compute statistics.",
+        }]
+        needs, detail = should_replan_llm(step, remaining, {"steps": []})
+        assert needs is True
+        assert "data.csv" in detail
+
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_returns_llm_decision_no_replan(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = json.dumps({
+            "needs_replan": False,
+            "reason": "Output matches expectations",
+        })
+        mock_get_client.return_value = client
+
+        step = {
+            "id": 1, "title": "Download",
+            "files_written": ["data.csv"],
+            "uas_result": {"status": "ok"},
+            "summary": "Downloaded CSV data",
+        }
+        remaining = [{
+            "id": 2, "title": "Process",
+            "depends_on": [1],
+            "description": "Read data.csv and compute statistics.",
+        }]
+        needs, detail = should_replan_llm(step, remaining, {"steps": []})
+        assert needs is False
+
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_falls_back_to_heuristic_on_llm_error(self, mock_get_client):
+        client = MagicMock()
+        client.generate.side_effect = RuntimeError("API error")
+        mock_get_client.return_value = client
+
+        step = {
+            "id": 1, "title": "Download",
+            "files_written": ["output.json"],
+            "uas_result": {"status": "ok"},
+            "summary": "",
+        }
+        remaining = [{
+            "id": 2, "title": "Process",
+            "depends_on": [1],
+            "description": "Read data.csv from the workspace and process it.",
+        }]
+        needs, detail = should_replan_llm(step, remaining, {"steps": []})
+        # Heuristic fallback should detect the mismatch
+        assert needs is True
+        assert "data.csv" in detail
+
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_falls_back_to_heuristic_on_bad_json(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "I'm not sure about this."
+        mock_get_client.return_value = client
+
+        step = {
+            "id": 1, "title": "Download",
+            "files_written": [],
+            "uas_result": {"status": "ok"},
+            "summary": "",
+        }
+        remaining = [{
+            "id": 2, "title": "Process",
+            "depends_on": [1],
+            "description": "Read the output file from step 1.",
+        }]
+        needs, detail = should_replan_llm(step, remaining, {"steps": []})
+        # Heuristic fallback: no files produced, downstream expects to read
+        assert needs is True
+        assert "no files were produced" in detail
+
+    def test_no_remaining_steps(self):
+        step = {"id": 1, "files_written": ["data.csv"]}
+        needs, detail = should_replan_llm(step, [], {"steps": []})
+        assert needs is False
+        assert detail == ""
+
+    def test_no_dependent_steps(self):
+        step = {"id": 1, "files_written": ["data.csv"]}
+        remaining = [{
+            "id": 3,
+            "depends_on": [2],  # Depends on step 2, not 1
+            "description": "Read data.csv from the workspace.",
+        }]
+        needs, detail = should_replan_llm(step, remaining, {"steps": []})
+        assert needs is False
+        assert detail == ""
+
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_prompt_contains_step_context(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = json.dumps({
+            "needs_replan": False,
+            "reason": "All good",
+        })
+        mock_get_client.return_value = client
+
+        step = {
+            "id": 1, "title": "Scrape data",
+            "files_written": ["products.json"],
+            "uas_result": {"status": "ok", "summary": "Scraped 50 items"},
+            "summary": "Scraped product data",
+        }
+        remaining = [{
+            "id": 2, "title": "Analyze",
+            "depends_on": [1],
+            "description": "Parse products.json and generate report.",
+        }]
+        should_replan_llm(step, remaining, {"steps": []})
+        prompt = client.generate.call_args[0][0]
+        assert "Scrape data" in prompt
+        assert "products.json" in prompt
+        assert "Scraped product data" in prompt
+        assert "Parse products.json" in prompt
+        assert "Step 2" in prompt
+
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_handles_markdown_fenced_json(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = (
+            "```json\n"
+            '{"needs_replan": true, "reason": "format mismatch"}\n'
+            "```"
+        )
+        mock_get_client.return_value = client
+
+        step = {
+            "id": 1, "title": "Generate",
+            "files_written": ["out.txt"],
+            "uas_result": {},
+            "summary": "Generated output",
+        }
+        remaining = [{
+            "id": 2, "title": "Consume",
+            "depends_on": [1],
+            "description": "Read out.csv and process.",
+        }]
+        needs, detail = should_replan_llm(step, remaining, {"steps": []})
+        assert needs is True
+        assert "format mismatch" in detail
 
 
 # ---------------------------------------------------------------------------
@@ -660,7 +827,7 @@ class TestReplanIntegration:
         state["steps"][0]["summary"] = "Downloaded 100 rows"
 
         remaining = [s for s in state["steps"] if s["status"] != "completed"]
-        needs, detail = should_replan(state["steps"][0], remaining, state)
+        needs, detail = should_replan_heuristic(state["steps"][0], remaining, state)
         assert needs is False
 
     def test_full_workflow_replan_needed(self, tmp_workspace):
@@ -679,7 +846,7 @@ class TestReplanIntegration:
         state["steps"][0]["files_written"] = ["output.json"]
 
         remaining = [s for s in state["steps"] if s["status"] != "completed"]
-        needs, detail = should_replan(state["steps"][0], remaining, state)
+        needs, detail = should_replan_heuristic(state["steps"][0], remaining, state)
         assert needs is True
         assert "data.csv" in detail
 

@@ -220,7 +220,7 @@ It doesn't know which parts of the context are most relevant to the current step
 ---
 
 ## Section 6: Re-plan Trigger — Semantic Mismatch Detection via LLM
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `main.py:should_replan()` uses regex to find file references in step descriptions and

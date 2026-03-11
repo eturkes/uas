@@ -30,7 +30,7 @@ if [ -z "$ENGINE" ]; then
 fi
 
 # --- Ensure image exists ---
-if ! "$ENGINE" image exists "$IMAGE_TAG" 2>/dev/null; then
+if ! "$ENGINE" image inspect "$IMAGE_TAG" &>/dev/null; then
     echo "Container image '${IMAGE_TAG}' not found. Run install.sh first:" >&2
     echo "  bash ${SCRIPT_DIR}/install.sh" >&2
     exit 1

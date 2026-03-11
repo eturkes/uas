@@ -334,7 +334,7 @@ truncation limits. It doesn't know what the downstream step actually needs.
 ---
 
 ## Section 9: Guardrail Checks — Supplement Regex with LLM Review
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `main.py:check_guardrails()` uses regex patterns that can't catch semantic security

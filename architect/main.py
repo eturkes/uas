@@ -1000,6 +1000,97 @@ def check_guardrails(code: str) -> list[dict]:
     return violations
 
 
+GUARDRAIL_REVIEW_PROMPT = """\
+Review this Python script for security and best-practice violations:
+```python
+{code}
+```
+
+Check for:
+- Hardcoded secrets, API keys, tokens
+- SQL injection, command injection
+- Unsafe deserialization (pickle, yaml.load without SafeLoader)
+- Use of eval/exec on untrusted data
+- Plain HTTP URLs (should be HTTPS, except localhost/127.0.0.1)
+- Missing input validation on external data
+- Bare except clauses
+- subprocess with shell=True
+
+Return ONLY valid JSON (no markdown fences):
+{{"violations": [{{"line": N, "description": "...", "severity": "error or warning"}}], "clean": true_or_false}}
+
+Use severity "error" only for hardcoded secrets/keys. Use "warning" for all \
+other issues. If no issues are found, return {{"violations": [], "clean": true}}.
+"""
+
+
+def check_guardrails_llm(code: str) -> list[dict]:
+    """Review code for security violations using LLM judgment.
+
+    Calls the LLM with a security review prompt and parses the structured
+    response. Falls back to regex-based check_guardrails() on failure.
+
+    Gated behind UAS_LLM_GUARDRAILS=1 env var (caller is responsible for
+    checking the gate before calling this function).
+
+    Section 9 of PLAN.md (LLM-steered).
+    """
+    try:
+        from orchestrator.llm_client import get_llm_client
+
+        client = get_llm_client(role="planner")
+        # Truncate very large files to avoid overwhelming the LLM
+        code_preview = code[:15000] if len(code) > 15000 else code
+        prompt = GUARDRAIL_REVIEW_PROMPT.format(code=code_preview)
+
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START,
+                       data={"purpose": "guardrail_review"})
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "guardrail_review"})
+
+        # Parse JSON from response (handle possible markdown fences)
+        text = response.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [ln for ln in lines if not ln.startswith("```")]
+            text = "\n".join(lines).strip()
+
+        # Try to extract JSON object
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end != -1:
+            text = text[brace_start:brace_end + 1]
+
+        result = json.loads(text)
+        raw_violations = result.get("violations", [])
+        if not isinstance(raw_violations, list):
+            logger.warning("LLM guardrail review returned non-list violations, "
+                           "falling back to regex.")
+            return check_guardrails(code)
+
+        violations = []
+        for v in raw_violations:
+            if not isinstance(v, dict):
+                continue
+            severity = v.get("severity", "warning")
+            if severity not in ("error", "warning"):
+                severity = "warning"
+            violations.append({
+                "line": int(v.get("line", 0)),
+                "match": "",
+                "description": str(v.get("description", ""))[:200],
+                "severity": severity,
+            })
+        return violations
+
+    except Exception as exc:
+        logger.warning("LLM guardrail review failed (%s), falling back to regex.",
+                       exc)
+        return check_guardrails(code)
+
+
 def check_project_guardrails(workspace: str) -> list[str]:
     """Check workspace-level best practices after step execution.
 
@@ -1376,6 +1467,9 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             # Guardrail scan on workspace Python files
             if failure_reason is None:
                 guardrail_warnings = []
+                _use_llm_guardrails = os.environ.get(
+                    "UAS_LLM_GUARDRAILS", ""
+                ) == "1"
                 try:
                     for entry in os.listdir(WORKSPACE):
                         if entry.endswith(".py") and not entry.startswith("."):
@@ -1383,7 +1477,12 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                             if os.path.isfile(fpath):
                                 with open(fpath, "r", errors="replace") as gf:
                                     code_content = gf.read()
-                                violations = check_guardrails(code_content)
+                                if _use_llm_guardrails:
+                                    violations = check_guardrails_llm(
+                                        code_content
+                                    )
+                                else:
+                                    violations = check_guardrails(code_content)
                                 for v in violations:
                                     if v["severity"] == "error":
                                         failure_reason = (

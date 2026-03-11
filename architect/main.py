@@ -28,7 +28,6 @@ from .planner import (
     topological_sort,
     critique_and_refine_plan,
     merge_trivial_steps,
-    merge_steps_with_llm,
     replan_remaining_steps,
     enrich_step_descriptions,
 )
@@ -1574,7 +1573,7 @@ def main():
         # Merge trivial steps to reduce LLM calls
         if len(steps) > 1:
             pre_merge = len(steps)
-            steps = merge_steps_with_llm(goal, steps)
+            steps = merge_trivial_steps(steps)
             if len(steps) < pre_merge:
                 event_log.emit(
                     EventType.STEP_MERGE,

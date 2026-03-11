@@ -209,6 +209,136 @@ class TestErrorRetryBudgets:
 
 
 # ---------------------------------------------------------------------------
+# Section 4: Adaptive retry budgets using reflection quality
+# ---------------------------------------------------------------------------
+
+class TestShouldContinueRetrying:
+    def test_within_budget_no_reflections(self):
+        from architect.main import should_continue_retrying
+        step = {"id": 1}
+        ok, reason = should_continue_retrying(step, 0, "logic_error", [])
+        assert ok is True
+        assert "within retry budget" in reason
+
+    def test_hard_ceiling_at_max_rewrites(self):
+        from architect.main import should_continue_retrying, MAX_SPEC_REWRITES
+        step = {"id": 1}
+        ok, reason = should_continue_retrying(
+            step, MAX_SPEC_REWRITES, "logic_error", []
+        )
+        assert ok is False
+        assert "max spec rewrites" in reason
+
+    def test_stagnation_stops_retrying(self):
+        from architect.main import should_continue_retrying
+        step = {"id": 1}
+        reflections = [
+            {"error_type": "logic_error", "root_cause": "variable x is undefined",
+             "what_to_try_next": "define x"},
+            {"error_type": "logic_error", "root_cause": "variable x is undefined",
+             "what_to_try_next": "define x before use"},
+        ]
+        ok, reason = should_continue_retrying(step, 1, "logic_error", reflections)
+        assert ok is False
+        assert "stagnation" in reason
+
+    def test_different_root_cause_continues(self):
+        from architect.main import should_continue_retrying
+        step = {"id": 1}
+        reflections = [
+            {"error_type": "logic_error", "root_cause": "variable x is undefined",
+             "what_to_try_next": "define x"},
+            {"error_type": "logic_error",
+             "root_cause": "wrong return type from function parse_data",
+             "what_to_try_next": "cast return value to int"},
+        ]
+        ok, reason = should_continue_retrying(step, 1, "logic_error", reflections)
+        assert ok is True
+        assert "within retry budget" in reason
+
+    def test_over_budget_with_novel_approach_extends(self):
+        from architect.main import should_continue_retrying
+        step = {"id": 1}
+        reflections = [
+            {"error_type": "dependency_error",
+             "root_cause": "pandas not installed",
+             "what_to_try_next": "pip install pandas"},
+            {"error_type": "dependency_error",
+             "root_cause": "pandas version incompatible with numpy",
+             "what_to_try_next": "use csv module instead of pandas"},
+        ]
+        # dependency_error budget is 1, so attempt 1 (0-indexed) is over budget
+        ok, reason = should_continue_retrying(
+            step, 1, "dependency_error", reflections
+        )
+        assert ok is True
+        assert "novel approach" in reason
+
+    def test_over_budget_with_repeated_suggestion_stops(self):
+        from architect.main import should_continue_retrying
+        step = {"id": 1}
+        reflections = [
+            {"error_type": "dependency_error",
+             "root_cause": "pandas not installed",
+             "what_to_try_next": "pip install pandas"},
+            {"error_type": "dependency_error",
+             "root_cause": "still no pandas module",
+             "what_to_try_next": "pip install pandas package"},
+        ]
+        ok, reason = should_continue_retrying(
+            step, 1, "dependency_error", reflections
+        )
+        assert ok is False
+        assert "exceeded retry budget" in reason
+
+    def test_timeout_first_attempt_stops(self):
+        """Timeout budget is 0, first attempt should stop (outer code decomposes)."""
+        from architect.main import should_continue_retrying
+        step = {"id": 1}
+        reflections = [
+            {"error_type": "timeout", "root_cause": "timed out",
+             "what_to_try_next": "optimize"},
+        ]
+        ok, reason = should_continue_retrying(step, 0, "timeout", reflections)
+        assert ok is False
+        assert "exceeded retry budget" in reason
+
+    def test_single_reflection_over_budget_stops(self):
+        """With only 1 reflection and over budget, no extension is possible."""
+        from architect.main import should_continue_retrying
+        step = {"id": 1}
+        reflections = [
+            {"error_type": "environment_error",
+             "root_cause": "disk full",
+             "what_to_try_next": "clean up temp files"},
+        ]
+        ok, reason = should_continue_retrying(
+            step, 1, "environment_error", reflections
+        )
+        assert ok is False
+
+    def test_unknown_error_type_uses_max_budget(self):
+        from architect.main import should_continue_retrying, MAX_SPEC_REWRITES
+        step = {"id": 1}
+        ok, reason = should_continue_retrying(step, 0, "brand_new_error", [])
+        assert ok is True
+        assert f"/{MAX_SPEC_REWRITES}" in reason
+
+    def test_empty_root_cause_no_stagnation(self):
+        """Empty root_cause should not trigger stagnation (similarity is 0)."""
+        from architect.main import should_continue_retrying
+        step = {"id": 1}
+        reflections = [
+            {"error_type": "logic_error", "root_cause": "",
+             "what_to_try_next": "try A"},
+            {"error_type": "logic_error", "root_cause": "",
+             "what_to_try_next": "try B"},
+        ]
+        ok, reason = should_continue_retrying(step, 1, "logic_error", reflections)
+        assert ok is True
+
+
+# ---------------------------------------------------------------------------
 # 3c: Counterfactual root cause tracing
 # ---------------------------------------------------------------------------
 

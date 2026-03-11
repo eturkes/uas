@@ -158,7 +158,7 @@ accurate.
 ---
 
 ## Section 4: Error Retry Budgets — Make Adaptive via Reflection
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `main.py:_ERROR_RETRY_BUDGETS` is a static dict that maps error types to max retries.

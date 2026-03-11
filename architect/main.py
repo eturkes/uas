@@ -71,6 +71,71 @@ _ERROR_RETRY_BUDGETS = {
     "unknown": MAX_SPEC_REWRITES,
 }
 
+
+
+def _text_similarity(a: str, b: str) -> float:
+    """Compute text similarity ratio between two strings (0.0 to 1.0)."""
+    from difflib import SequenceMatcher
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+
+def should_continue_retrying(step, spec_attempt, error_type, reflections):
+    """Decide whether to continue retrying based on reflection quality.
+
+    Uses _ERROR_RETRY_BUDGETS as the upper bound but allows early termination
+    if reflections show stagnation, or extension beyond budget if reflections
+    show genuine progress. MAX_SPEC_REWRITES remains the hard ceiling.
+
+    Returns (should_continue: bool, reason: str).
+    """
+    attempts_so_far = spec_attempt + 1
+    error_budget = _ERROR_RETRY_BUDGETS.get(error_type, MAX_SPEC_REWRITES)
+
+    # Hard ceiling: never exceed MAX_SPEC_REWRITES
+    if spec_attempt >= MAX_SPEC_REWRITES:
+        return False, f"reached max spec rewrites ({MAX_SPEC_REWRITES})"
+
+    # Stagnation detection: if last 2 reflections have same error_type AND
+    # similar root_cause, we're not making progress — stop early
+    if len(reflections) >= 2:
+        last = reflections[-1]
+        prev = reflections[-2]
+        same_type = last.get("error_type") == prev.get("error_type")
+        similar_cause = _text_similarity(
+            last.get("root_cause", ""), prev.get("root_cause", "")
+        ) > 0.6
+        if same_type and similar_cause:
+            return False, (
+                f"stagnation detected: same error_type '{last.get('error_type')}' "
+                f"and similar root_cause across last 2 attempts"
+            )
+
+    # Within budget and not stagnating: continue
+    if attempts_so_far <= error_budget:
+        return True, f"within retry budget ({attempts_so_far}/{error_budget})"
+
+    # Over budget: allow extension only if reflections show a novel approach
+    if len(reflections) >= 2:
+        last_suggestion = reflections[-1].get("what_to_try_next", "").strip()
+        if last_suggestion:
+            prev_suggestions = [
+                r.get("what_to_try_next", "") for r in reflections[:-1]
+            ]
+            all_different = not any(
+                _text_similarity(last_suggestion, s) > 0.6
+                for s in prev_suggestions
+            )
+            if all_different:
+                return True, (
+                    f"exceeded budget ({attempts_so_far}/{error_budget}) but "
+                    f"reflection suggests novel approach"
+                )
+
+    return False, f"exceeded retry budget ({attempts_so_far}/{error_budget})"
+
+
 logger = logging.getLogger(__name__)
 
 _state_lock = threading.Lock()
@@ -1275,15 +1340,12 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             "strategy": strategy,
         })
 
-        # Section 3b: Check error-type-adaptive retry budget
-        error_budget = _ERROR_RETRY_BUDGETS.get(error_type, MAX_SPEC_REWRITES)
-        attempts_so_far = spec_attempt + 1  # 1-indexed count of attempts done
-        if attempts_so_far > error_budget and spec_attempt < MAX_SPEC_REWRITES:
-            logger.info(
-                "  Error type '%s' exceeded retry budget (%d/%d). "
-                "Escalating early.",
-                error_type, attempts_so_far, error_budget,
-            )
+        # Section 4: Adaptive retry check using reflection quality
+        should_retry, retry_reason = should_continue_retrying(
+            step, spec_attempt, error_type, step.get("reflections", [])
+        )
+        if not should_retry and spec_attempt < MAX_SPEC_REWRITES:
+            logger.info("  Stopping retries: %s", retry_reason)
             # For timeout errors, try decomposing once before giving up
             if error_type == "timeout" and spec_attempt == 0:
                 logger.info("  Timeout: decomposing step into sub-phases...")

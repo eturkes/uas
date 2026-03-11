@@ -237,8 +237,8 @@ class TestDecomposeGoalWithVoting:
         mock_get_client.return_value = client
 
         result = decompose_goal_with_voting("build a scraper", n_samples=3)
-        # Should have called generate 3 times (3 plan variants)
-        assert client.generate.call_count == 3
+        # Should have called generate 4 times (3 plan variants + 1 plan selection)
+        assert client.generate.call_count == 4
         assert len(result) == 3
 
     @patch("architect.planner.get_llm_client")
@@ -252,7 +252,8 @@ class TestDecomposeGoalWithVoting:
         mock_get_client.return_value = client
 
         result = decompose_goal_with_voting("full web app", n_samples=3)
-        assert client.generate.call_count == 3
+        # 3 plan variants + 1 plan selection
+        assert client.generate.call_count == 4
         assert len(result) == 5
 
     @patch("architect.planner.get_llm_client")

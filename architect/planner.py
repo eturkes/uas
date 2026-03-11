@@ -334,6 +334,92 @@ def estimate_complexity(goal: str) -> str:
     return "medium"
 
 
+PLAN_SELECTION_PROMPT = """\
+<goal>{goal}</goal>
+
+<candidate_plans>
+{plans_text}
+</candidate_plans>
+
+<instructions>
+You are selecting the best execution plan for the goal above. Each candidate plan
+is a list of steps that will be executed as Python scripts in isolated workspaces.
+
+Evaluate each plan on these criteria:
+1. **Correctness**: Does the plan actually accomplish the goal? Are the steps logically sound?
+2. **Completeness**: Does the plan cover all aspects of the goal without missing steps?
+3. **Dependencies**: Are step dependencies correct? Will each step have what it needs?
+4. **Parallelism**: Does the plan exploit parallelism where safe to do so?
+5. **Risk**: Does the plan minimize failure risk (e.g., not combining unrelated work)?
+
+Reason through each plan briefly, then select the best one.
+
+Return ONLY a JSON object:
+{{"selected_plan": <0-based index of the best plan>, "reasoning": "<brief explanation>"}}
+</instructions>
+"""
+
+
+def select_best_plan(goal: str, plans: list[list[dict]]) -> tuple[list[dict], int]:
+    """Use the LLM to select the best plan from candidates.
+
+    Returns (best_plan, best_index). Falls back to score_plan() on failure.
+    """
+    # Format plans for the prompt
+    plan_sections = []
+    for i, plan in enumerate(plans):
+        steps_desc = []
+        for j, step in enumerate(plan):
+            deps = step.get("depends_on", [])
+            deps_str = f" (depends on: {deps})" if deps else ""
+            steps_desc.append(
+                f"  Step {j + 1}: {step.get('title', 'Untitled')}{deps_str}\n"
+                f"    {step.get('description', '')}"
+            )
+        plan_sections.append(f"Plan {i}:\n" + "\n".join(steps_desc))
+
+    plans_text = "\n\n".join(plan_sections)
+    prompt = PLAN_SELECTION_PROMPT.format(goal=goal, plans_text=plans_text)
+
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START, data={"purpose": "select_best_plan"})
+    try:
+        client = get_llm_client(role="planner")
+        response = client.generate(prompt)
+        event_log.emit(
+            EventType.LLM_CALL_COMPLETE, data={"purpose": "select_best_plan"}
+        )
+
+        # Parse JSON from response (may be wrapped in code fences)
+        text = response.strip()
+        fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1)
+        else:
+            # Try to find a JSON object directly
+            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+            if brace_match:
+                text = brace_match.group(0)
+
+        result = json.loads(text)
+        selected = int(result["selected_plan"])
+        if 0 <= selected < len(plans):
+            reasoning = result.get("reasoning", "")
+            logger.info("  LLM selected plan %d: %s", selected, reasoning)
+            return plans[selected], selected
+        logger.warning(
+            "  LLM selected invalid plan index %d, falling back to score_plan().",
+            selected,
+        )
+    except Exception as e:
+        logger.warning("  LLM plan selection failed (%s), falling back to score_plan().", e)
+
+    # Fallback: use heuristic scoring
+    scored = [(score_plan(p), i, p) for i, p in enumerate(plans)]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[0][2], scored[0][1]
+
+
 def score_plan(steps: list[dict]) -> float:
     """Score a decomposition plan for selection during voting.
 
@@ -445,27 +531,18 @@ def decompose_goal_with_voting(goal: str, n_samples: int = 3) -> list[dict]:
         })
         return plans[0]
 
-    # 2b: Score and select
-    scored = [(score_plan(p), i, p) for i, p in enumerate(plans)]
-    scored.sort(key=lambda x: x[0], reverse=True)
+    # 2b: LLM-based plan selection (falls back to score_plan heuristic)
+    for i, plan in enumerate(plans):
+        logger.info("  Plan %d: %d steps", i + 1, len(plan))
 
-    for score, idx, plan in scored:
-        logger.info(
-            "  Plan %d: %d steps, score=%.3f",
-            idx + 1, len(plan), score,
-        )
-
-    best_score, best_idx, best_plan = scored[0]
-    logger.info("  Selected plan %d (score=%.3f, %d steps).",
-                best_idx + 1, best_score, len(best_plan))
+    best_plan, best_idx = select_best_plan(goal, plans)
+    logger.info("  Selected plan %d (%d steps).", best_idx + 1, len(best_plan))
 
     event_log.emit(EventType.VOTING_COMPLETE, data={
         "plans_generated": n_samples,
         "plans_valid": len(plans),
-        "scores": [{"plan": i, "score": round(s, 4), "steps": len(p)}
-                   for s, i, p in scored],
         "winning_plan": best_idx,
-        "winning_score": round(best_score, 4),
+        "winning_score": score_plan(best_plan),
     })
 
     return best_plan

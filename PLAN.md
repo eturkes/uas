@@ -45,7 +45,7 @@ calls—would produce more adaptive, context-sensitive behavior. The key areas:
 ---
 
 ## Section 1: Plan Voting — Replace `score_plan()` with LLM-Based Selection
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `planner.py:score_plan()` uses a rigid formula (`parallelism*0.4 + specificity*0.3 +

@@ -217,15 +217,28 @@ def _extract_json_keys(preview: str) -> str:
         return preview[:100]
 
 
-def summarize_context(context: str, goal: str, max_length: int) -> str:
+def summarize_context(context: str, goal: str, max_length: int,
+                      current_step_description: str = "") -> str:
     """Compress context using LLM when it exceeds the limit.
 
     Preserves: original goal, file paths, error messages, plan state.
     Falls back to simple truncation if LLM compression fails.
+
+    If current_step_description is provided, the LLM prioritizes preserving
+    information relevant to that step.
     """
     try:
         from orchestrator.llm_client import get_llm_client
         client = get_llm_client(role="planner")
+
+        step_guidance = ""
+        if current_step_description:
+            step_guidance = (
+                f"\nThe next step that will consume this context is: "
+                f"{current_step_description}\n"
+                "Prioritize preserving information relevant to that step.\n"
+            )
+
         prompt = (
             f"Compress the following context to under {max_length} characters "
             "while preserving all essential information.\n\n"
@@ -236,7 +249,8 @@ def summarize_context(context: str, goal: str, max_length: int) -> str:
             "- Key results and data summaries\n\n"
             "Remove: verbose stdout/stderr output, redundant information, "
             "raw data that can be referenced by file path.\n\n"
-            f"Goal: {goal}\n\n"
+            f"Goal: {goal}\n"
+            f"{step_guidance}\n"
             f"Context to compress:\n{context}"
         )
         summary = client.generate(prompt)
@@ -248,15 +262,42 @@ def summarize_context(context: str, goal: str, max_length: int) -> str:
     return context[:max_length] + f"\n... [compressed, {len(context)} chars total]"
 
 
+def _compress_context_regex(context: str, max_length: int) -> str:
+    """Deterministic compression: remove previews, truncate stdout.
+
+    Used as fallback when LLM summarization is unavailable.
+    """
+    import re
+    compressed = context
+    # Remove preview lines (indented lines starting with "preview:")
+    compressed = re.sub(r'\n    preview: [^\n]*', '', compressed)
+    # Remove JSON key lines
+    compressed = re.sub(r'\n    keys: [^\n]*', '', compressed)
+    # Truncate stdout within dependency blocks to last 500 chars
+    def _truncate_stdout(m):
+        text = m.group(1)
+        if len(text) > 500:
+            return f"stdout: ...{text[-500:]}"
+        return m.group(0)
+    compressed = re.sub(
+        r'stdout: (.*?)(?=\n(?:stderr:|files:|</)|$)',
+        _truncate_stdout,
+        compressed,
+        flags=re.DOTALL,
+    )
+    return compressed
+
+
 def compress_context(context: str, max_length: int,
                      goal: str = "",
-                     progress_content: str = "") -> str:
-    """Tiered context compression (Section 4c).
+                     progress_content: str = "",
+                     current_step_description: str = "") -> str:
+    """Tiered context compression (Section 4c / Section 5).
 
     Tier 1 (< 60% of limit): No compression, include everything.
-    Tier 2 (60-80%): Remove file previews, truncate stdout per step.
-    Tier 3 (80-100%): Summarize dep outputs via LLM; keep progress file.
-    Tier 4 (> 100%): Emergency truncation — progress file + last dep only.
+    Tier 2+3 (>= 60%, < 100%): LLM-guided summarization with step-aware
+        relevance filtering. Falls back to regex stripping on LLM failure.
+    Tier 4 (>= 100%): Emergency truncation — progress file + tail of context.
     """
     if max_length <= 0:
         return context
@@ -267,37 +308,47 @@ def compress_context(context: str, max_length: int,
     if ratio < 0.6:
         return context
 
-    # Tier 2: Deterministic compression — remove previews, truncate stdout
-    if ratio < 0.8:
-        import re
-        compressed = context
-        # Remove preview lines (indented lines starting with "preview:")
-        compressed = re.sub(r'\n    preview: [^\n]*', '', compressed)
-        # Remove JSON key lines
-        compressed = re.sub(r'\n    keys: [^\n]*', '', compressed)
-        # Truncate stdout within dependency blocks to last 500 chars
-        def _truncate_stdout(m):
-            text = m.group(1)
-            if len(text) > 500:
-                return f"stdout: ...{text[-500:]}"
-            return m.group(0)
-        compressed = re.sub(
-            r'stdout: (.*?)(?=\n(?:stderr:|files:|</)|$)',
-            _truncate_stdout,
-            compressed,
-            flags=re.DOTALL,
-        )
-        if len(compressed) <= max_length:
-            return compressed
-        # If still too long, fall through to Tier 3
-
-    # Tier 3: LLM summarization of dependency outputs, keep progress file
-    if ratio < 1.0 or (ratio >= 0.8 and ratio < 1.0):
+    # Tier 2+3 (merged): LLM summarization with step-aware context,
+    # falling back to deterministic regex stripping
+    if ratio < 1.0:
+        # Try LLM-guided summarization first
         try:
-            return summarize_context(context, goal, max_length)
+            from orchestrator.llm_client import get_llm_client
+            client = get_llm_client(role="planner")
+
+            step_guidance = ""
+            if current_step_description:
+                step_guidance = (
+                    f"\nThe next step that will consume this context is: "
+                    f"{current_step_description}\n"
+                    "Prioritize preserving information relevant to that step.\n"
+                )
+
+            prompt = (
+                f"Compress the following context to under {max_length} "
+                "characters while preserving all essential information.\n\n"
+                "MUST preserve:\n"
+                "- Original goal and current plan state\n"
+                "- All file paths touched\n"
+                "- All error messages encountered\n"
+                "- Key results and data summaries\n\n"
+                "Remove: verbose stdout/stderr output, redundant information, "
+                "raw data that can be referenced by file path.\n\n"
+                f"Goal: {goal}\n"
+                f"{step_guidance}\n"
+                f"Context to compress:\n{context}"
+            )
+            summary = client.generate(prompt)
+            if len(summary) <= max_length:
+                return summary
         except Exception:
             pass
-        # Fall through to Tier 4
+
+        # Fallback: deterministic regex compression
+        compressed = _compress_context_regex(context, max_length)
+        if len(compressed) <= max_length:
+            return compressed
+        # If still too long, fall through to Tier 4
 
     # Tier 4: Emergency truncation — progress file + tail of context
     if progress_content:
@@ -546,11 +597,12 @@ def build_context(step: dict, completed_outputs: dict,
 
     context = "\n\n".join(parts)
 
-    # Section 4c: Tiered context compression
+    # Section 4c / Section 5: Tiered context compression with step awareness
     if MAX_CONTEXT_LENGTH and len(context) > MAX_CONTEXT_LENGTH:
         context = compress_context(
             context, MAX_CONTEXT_LENGTH,
             goal=goal, progress_content=progress,
+            current_step_description=step.get("description", ""),
         )
 
     return context

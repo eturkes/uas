@@ -414,6 +414,74 @@ def _distill_dependency_output(dep_id: int, dep_step: dict,
     return "\n".join(parts)
 
 
+DISTILL_PROMPT = """\
+The following step just completed:
+Step {dep_id} ({dep_title}): {dep_summary}
+Files: {files}
+Output: {output_preview}
+
+The next step that will use this output:
+Step {next_id} ({next_title}): {next_description}
+
+Summarize ONLY the information from the completed step that is relevant \
+to the next step. Be concise. Include file paths and key data."""
+
+
+def distill_dependency_for_step(dep_id: int, dep_step: dict,
+                                output: str | dict,
+                                next_step: dict) -> str:
+    """Distill a dependency's output with awareness of the consuming step.
+
+    Uses an LLM to produce a targeted summary of what the next step needs
+    from this dependency. Falls back to _distill_dependency_output() on failure.
+
+    Gated behind UAS_SMART_DISTILL=1 env var.
+    """
+    if not os.environ.get("UAS_SMART_DISTILL"):
+        return _distill_dependency_output(dep_id, dep_step, output)
+
+    try:
+        from orchestrator.llm_client import get_llm_client
+        client = get_llm_client(role="planner")
+
+        title = dep_step.get("title", f"Step {dep_id}")
+        summary = dep_step.get("summary", "")
+        files_written = dep_step.get("files_written", [])
+
+        # Build output preview
+        if isinstance(output, dict):
+            stdout = output.get("stdout", "")
+            output_preview = stdout[:500] if stdout else ""
+        elif isinstance(output, str):
+            output_preview = output[:500]
+        else:
+            output_preview = ""
+
+        prompt = DISTILL_PROMPT.format(
+            dep_id=dep_id,
+            dep_title=title,
+            dep_summary=summary or "(no summary)",
+            files=", ".join(files_written) if files_written else "(none)",
+            output_preview=output_preview or "(no output)",
+            next_id=next_step.get("id", "?"),
+            next_title=next_step.get("title", "untitled"),
+            next_description=next_step.get("description", "no description"),
+        )
+
+        response = client.generate(prompt)
+        if response and response.strip():
+            return (
+                f'<dependency step="{dep_id}" title="{title}">\n'
+                f"  {response.strip()}\n"
+                f"</dependency>"
+            )
+    except Exception:
+        pass
+
+    # Fallback to heuristic distillation
+    return _distill_dependency_output(dep_id, dep_step, output)
+
+
 REPLAN_CHECK_PROMPT = """\
 A step in a multi-step plan just completed. Evaluate whether the remaining \
 steps need adjustment based on the actual output.
@@ -632,9 +700,13 @@ def build_context(step: dict, completed_outputs: dict,
 
         # Use distilled output if we have step metadata
         if dep_step:
-            distilled = _distill_dependency_output(dep_id, dep_step, output)
+            distilled = distill_dependency_for_step(
+                dep_id, dep_step, output, step,
+            )
             # Only include if there's actual content
-            if "<key_outputs>" in distilled or "<files_produced>" in distilled:
+            if ("<key_outputs>" in distilled
+                    or "<files_produced>" in distilled
+                    or "dependency" in distilled):
                 parts.append(distilled)
                 continue
 

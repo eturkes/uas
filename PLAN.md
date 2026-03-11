@@ -291,7 +291,7 @@ evaluate code quality, approach correctness, or how well the output matches the 
 ---
 
 ## Section 8: Dependency Distillation — Step-Aware Summarization
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `main.py:_distill_dependency_output()` builds a fixed XML template with arbitrary

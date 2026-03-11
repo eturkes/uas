@@ -83,7 +83,7 @@ scores better than 5 correct sequential ones.
 ---
 
 ## Section 2: Step Merging — Replace Heuristic with LLM Judgment
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `planner.py:merge_trivial_steps()` merges steps purely based on description length

@@ -984,6 +984,193 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
     return result if result else step["description"]
 
 
+MERGE_EVALUATION_PROMPT = """\
+<goal>{goal}</goal>
+
+<steps>
+{steps_text}
+</steps>
+
+<instructions>
+You are evaluating which steps in an execution plan can be safely merged together.
+Steps in the same execution level have no dependencies between them and could run
+concurrently, but merging related steps reduces overhead.
+
+For each execution level that has multiple steps, decide which pairs of steps
+(if any) should be merged. Steps should only be merged if:
+1. They are semantically related (working toward the same sub-goal)
+2. The combined task remains simple enough for a single script to handle well
+3. Merging them does not create an overly complex or unrelated multi-task step
+
+Only propose merges within the same execution level (steps shown together below).
+Each step can appear in at most one merge pair.
+
+Return ONLY a JSON object:
+{{"merges": [[step_a_id, step_b_id], ...], "reasoning": "<brief explanation>"}}
+
+If no merges are appropriate, return:
+{{"merges": [], "reasoning": "<brief explanation>"}}
+</instructions>
+"""
+
+
+def merge_steps_with_llm(goal: str, steps: list[dict]) -> list[dict]:
+    """Use the LLM to decide which steps to merge based on semantic relatedness.
+
+    Falls back to merge_trivial_steps() on parse failure.
+    """
+    if len(steps) < 2:
+        return steps
+
+    # Assign temporary IDs for topological sort
+    indexed = []
+    for i, s in enumerate(steps):
+        indexed.append({**s, "id": i + 1})
+
+    try:
+        levels = topological_sort(indexed)
+    except ValueError:
+        return steps
+
+    # Only proceed if there are levels with 2+ steps
+    multi_levels = [level for level in levels if len(level) >= 2]
+    if not multi_levels:
+        return steps
+
+    # Format steps grouped by level for the prompt
+    level_sections = []
+    for level_idx, level in enumerate(levels):
+        step_descs = []
+        for sid in level:
+            s = steps[sid - 1]
+            deps = s.get("depends_on", [])
+            deps_str = f" (depends on: {deps})" if deps else ""
+            step_descs.append(
+                f"  Step {sid}: {s.get('title', 'Untitled')}{deps_str}\n"
+                f"    {s.get('description', '')}"
+            )
+        level_sections.append(
+            f"Level {level_idx + 1}:\n" + "\n".join(step_descs)
+        )
+
+    steps_text = "\n\n".join(level_sections)
+    prompt = MERGE_EVALUATION_PROMPT.format(goal=goal, steps_text=steps_text)
+
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START, data={"purpose": "merge_steps"})
+    try:
+        client = get_llm_client(role="planner")
+        response = client.generate(prompt)
+        event_log.emit(
+            EventType.LLM_CALL_COMPLETE, data={"purpose": "merge_steps"}
+        )
+
+        # Parse JSON from response (may be wrapped in code fences)
+        text = response.strip()
+        fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if fence_match:
+            text = fence_match.group(1)
+        else:
+            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+            if brace_match:
+                text = brace_match.group(0)
+
+        result = json.loads(text)
+        merge_pairs = result.get("merges", [])
+        reasoning = result.get("reasoning", "")
+
+        if not merge_pairs:
+            logger.info("  LLM merge evaluation: no merges suggested. %s", reasoning)
+            return steps
+
+        # Validate merge pairs: each must be a pair of valid step IDs in the same level
+        level_of = {}
+        for level in levels:
+            for sid in level:
+                level_of[sid] = tuple(level)
+
+        valid_pairs = []
+        used_ids = set()
+        for pair in merge_pairs:
+            if (
+                isinstance(pair, list)
+                and len(pair) == 2
+                and all(isinstance(x, int) for x in pair)
+            ):
+                a, b = pair
+                if (
+                    1 <= a <= len(steps)
+                    and 1 <= b <= len(steps)
+                    and a != b
+                    and a not in used_ids
+                    and b not in used_ids
+                    and level_of.get(a) == level_of.get(b)
+                ):
+                    valid_pairs.append((a, b))
+                    used_ids.add(a)
+                    used_ids.add(b)
+
+        if not valid_pairs:
+            logger.warning(
+                "  LLM merge returned no valid pairs, falling back to merge_trivial_steps()."
+            )
+            return merge_trivial_steps(steps)
+
+        # Perform the merges
+        merged = []
+        merged_ids = set()
+        for a_id, b_id in valid_pairs:
+            a = steps[a_id - 1]
+            b = steps[b_id - 1]
+            combined_title = f"{a['title']} + {b['title']}"
+            combined_desc = (
+                f"Phase 1: {a['description']}\n"
+                f"Phase 2: {b['description']}"
+            )
+            combined_deps = sorted(
+                set(a.get("depends_on", []) + b.get("depends_on", []))
+            )
+            combined_env = sorted(
+                set(a.get("environment", []) + b.get("environment", []))
+            )
+            combined_verify = "; ".join(
+                v for v in [a.get("verify", ""), b.get("verify", "")] if v
+            )
+            merged.append({
+                "title": combined_title,
+                "description": combined_desc,
+                "depends_on": combined_deps,
+                "verify": combined_verify,
+                "environment": combined_env,
+            })
+            merged_ids.add(a_id - 1)
+            merged_ids.add(b_id - 1)
+
+        # Add unmerged steps
+        for i, s in enumerate(steps):
+            if i not in merged_ids:
+                merged.append(s)
+
+        # Set defaults
+        for s in merged:
+            s.setdefault("depends_on", [])
+            s.setdefault("verify", "")
+            s.setdefault("environment", [])
+
+        logger.info(
+            "  LLM step merging: %d -> %d steps. %s",
+            len(steps), len(merged), reasoning,
+        )
+        return merged
+
+    except Exception as e:
+        logger.warning(
+            "  LLM merge evaluation failed (%s), falling back to merge_trivial_steps().",
+            e,
+        )
+        return merge_trivial_steps(steps)
+
+
 def merge_trivial_steps(steps: list[dict]) -> list[dict]:
     """Merge trivially combinable steps within the same execution level.
 

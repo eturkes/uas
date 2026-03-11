@@ -254,7 +254,7 @@ incomplete data, unexpected structure) and has high false-positive/negative rate
 ---
 
 ## Section 7: Best-of-N Scoring — LLM-Based Code Evaluation
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `orchestrator/main.py:score_result()` uses a hardcoded point system that doesn't

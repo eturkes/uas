@@ -313,6 +313,110 @@ def score_result(result: dict) -> int:
     return score
 
 
+CODE_EVALUATION_PROMPT = """\
+You are evaluating multiple code solutions for the same programming task.
+Each candidate was executed in a sandbox. Select the best one.
+
+<task>
+{task}
+</task>
+
+{candidates_section}
+
+Rank ALL candidates from best to worst. Consider:
+1. Correctness: Did the code complete the task? (exit code 0 is critical)
+2. Output quality: Does it produce a valid UAS_RESULT with status, files, and summary?
+3. Robustness: Does the code handle errors and follow best practices?
+4. Approach: Is the solution well-structured?
+
+Return ONLY a JSON object (no other text):
+{{"ranking": [<candidate indices from best to worst>], "reasoning": "brief explanation"}}"""
+
+
+def evaluate_candidates(
+    client, task: str, candidates: list[tuple[str, dict, int]],
+) -> list[tuple[str, dict, int]]:
+    """Use LLM to evaluate and rank code generation candidates.
+
+    Args:
+        client: LLM client for making API calls.
+        task: The original task description.
+        candidates: List of (code, result, idx) tuples.
+
+    Returns:
+        List of (code, result, idx) sorted best-first.
+        Falls back to score_result() ranking on failure.
+    """
+    if len(candidates) < 2:
+        return list(candidates)
+
+    # Build candidates section with truncated previews
+    sections = []
+    for code, result, idx in candidates:
+        exit_code = result.get("exit_code", -1)
+        stdout = (result.get("stdout", "") or "")[:2000]
+        stderr = (result.get("stderr", "") or "")[:1000]
+        code_preview = (code or "")[:3000]
+
+        sections.append(
+            f"<candidate index=\"{idx}\">\n"
+            f"Exit code: {exit_code}\n"
+            f"Code:\n```python\n{code_preview}\n```\n"
+            f"Stdout:\n```\n{stdout}\n```\n"
+            f"Stderr:\n```\n{stderr}\n```\n"
+            f"</candidate>"
+        )
+
+    candidates_section = "\n\n".join(sections)
+    prompt = CODE_EVALUATION_PROMPT.format(
+        task=task,
+        candidates_section=candidates_section,
+    )
+
+    try:
+        response = client.generate(prompt)
+
+        # Parse JSON from response (may be wrapped in code fences)
+        text = response.strip()
+        fence_match = re.search(
+            r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL,
+        )
+        if fence_match:
+            text = fence_match.group(1)
+        else:
+            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+            if brace_match:
+                text = brace_match.group(0)
+
+        data = json.loads(text)
+        ranking = data.get("ranking", [])
+        if ranking and isinstance(ranking, list):
+            idx_map = {idx: (code, result, idx)
+                       for code, result, idx in candidates}
+            ranked: list[tuple[str, dict, int]] = []
+            for r_idx in ranking:
+                r_idx_int = int(r_idx)
+                if r_idx_int in idx_map:
+                    ranked.append(idx_map.pop(r_idx_int))
+            # Append any candidates not mentioned in ranking
+            ranked.extend(idx_map.values())
+            if ranked:
+                logger.info(
+                    "LLM evaluation selected candidate %d. Reason: %s",
+                    ranked[0][2],
+                    data.get("reasoning", "N/A")[:200],
+                )
+                return ranked
+    except Exception as exc:
+        logger.warning(
+            "LLM candidate evaluation failed, falling back to score_result: %s",
+            exc,
+        )
+
+    # Fallback: use score_result heuristic
+    return sorted(candidates, key=lambda x: score_result(x[1]), reverse=True)
+
+
 def _generate_one(client, prompt: str, hint: str):
     """Generate code from a single prompt variant and execute it.
 
@@ -327,10 +431,13 @@ def _generate_one(client, prompt: str, hint: str):
     return code, result
 
 
-def generate_and_vote(client, prompt: str, n: int) -> tuple[str | None, dict | None]:
+def generate_and_vote(client, prompt: str, n: int,
+                      task: str | None = None) -> tuple[str | None, dict | None]:
     """Generate N code samples in parallel, execute each, and pick the best.
 
     Section 7a/7b: Parallel code generation with execution-based selection.
+    When *task* is provided and there are 2+ valid candidates, uses LLM-based
+    evaluation instead of the heuristic ``score_result()`` scorer.
 
     Returns (best_code, best_result). If all extractions fail, returns
     (None, None).
@@ -362,16 +469,20 @@ def generate_and_vote(client, prompt: str, n: int) -> tuple[str | None, dict | N
         logger.warning("Best-of-N: all %d samples failed code extraction.", n)
         return None, None
 
-    # Score and select
-    scored = [(code, result, idx, score_result(result))
-              for code, result, idx in valid]
-    scored.sort(key=lambda x: x[3], reverse=True)
+    # Select best candidate: LLM evaluation when task is available, else heuristic
+    if task and len(valid) >= 2:
+        ranked = evaluate_candidates(client, task, valid)
+        best_code, best_result, best_idx = ranked[0]
+    else:
+        scored = [(code, result, idx, score_result(result))
+                  for code, result, idx in valid]
+        scored.sort(key=lambda x: x[3], reverse=True)
+        best_code, best_result, best_idx = scored[0][0], scored[0][1], scored[0][2]
 
-    best_code, best_result, best_idx, best_score = scored[0]
-    successes = sum(1 for _, r, _, _ in scored if r["exit_code"] == 0)
+    successes = sum(1 for _, r, _ in valid if r["exit_code"] == 0)
     logger.info(
-        "Best-of-N: %d/%d succeeded, selected sample %d (score=%d).",
-        successes, len(valid), best_idx, best_score,
+        "Best-of-N: %d/%d succeeded, selected sample %d.",
+        successes, len(valid), best_idx,
     )
     return best_code, best_result
 
@@ -477,7 +588,7 @@ def main():
 
         if n > 1:
             # Section 7a/7b: Parallel best-of-N generation + execution voting.
-            code, result = generate_and_vote(client, prompt, n)
+            code, result = generate_and_vote(client, prompt, n, task=task)
             if code is None:
                 previous_error = "Failed to extract code block from LLM response."
                 previous_code = None

@@ -64,6 +64,13 @@ echo ""
     --entrypoint claude \
     "$IMAGE_TAG"
 
+# --- Fix ownership (container runs as root, so files are owned by root) ---
+if command -v sudo &>/dev/null; then
+    sudo chown -R "$(id -u):$(id -g)" "$AUTH_DIR"
+else
+    chown -R "$(id -u):$(id -g)" "$AUTH_DIR" 2>/dev/null || true
+fi
+
 # --- Verify credentials were written ---
 if [ -f "$AUTH_DIR/.credentials.json" ] && [ -s "$AUTH_DIR/.credentials.json" ]; then
     echo ""

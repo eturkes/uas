@@ -676,7 +676,14 @@ REFLECTION_GEN_PROMPT = """\
 <instructions>
 Generate a structured reflection on this failure. Respond with ONLY a JSON object \
 (no markdown, no code fences, no explanation) with exactly these fields:
-{{"error_type": "one of: dependency_error, logic_error, environment_error, network_error, timeout, format_error, unknown",
+{{"error_type": "MUST be exactly one of these canonical types: dependency_error, logic_error, environment_error, network_error, timeout, format_error, unknown. \
+Use dependency_error for missing packages/modules/imports. \
+Use logic_error for TypeError, ValueError, AttributeError, KeyError, and other programming mistakes. \
+Use environment_error for file system, permissions, disk, or memory issues. \
+Use network_error for connection failures, DNS, SSL, or HTTP errors. \
+Use timeout for operations that exceeded time limits. \
+Use format_error for parsing failures, JSON errors, syntax errors, or unexpected output format. \
+Use unknown only if the error truly does not fit any other category.",
 "root_cause": "brief description of what caused the failure",
 "strategy_tried": "what approach was used in this attempt",
 "lesson": "what was learned from this failure",

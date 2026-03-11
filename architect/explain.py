@@ -41,7 +41,7 @@ _FAILURE_PATTERNS = {
 }
 
 
-def classify_failure(error_text: str) -> str:
+def classify_failure_heuristic(error_text: str) -> str:
     """Classify a failure by type using keyword matching on error messages."""
     if not error_text:
         return "unknown"
@@ -53,6 +53,28 @@ def classify_failure(error_text: str) -> str:
     if not scores:
         return "unknown"
     return max(scores, key=scores.get)
+
+
+_CANONICAL_ERROR_TYPES = {
+    "dependency_error", "logic_error", "environment_error",
+    "network_error", "timeout", "format_error", "unknown",
+}
+
+
+def classify_failure(error_text: str, step_context: Optional[dict] = None) -> str:
+    """Classify a failure, preferring LLM-generated error_type from reflections.
+
+    If step_context is provided and has reflections with a valid error_type,
+    uses the most recent reflection's classification. Otherwise falls back
+    to keyword-based heuristic.
+    """
+    if step_context is not None:
+        reflections = step_context.get("reflections")
+        if reflections:
+            error_type = reflections[-1].get("error_type", "")
+            if error_type in _CANONICAL_ERROR_TYPES:
+                return error_type
+    return classify_failure_heuristic(error_text)
 
 
 def compute_critical_path(steps: list[dict]) -> list[int]:

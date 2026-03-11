@@ -49,7 +49,7 @@ from .code_tracker import get_code_tracker, reset_code_tracker
 from .dashboard import Dashboard
 from .report import generate_report
 from .trace_export import TraceExporter
-from .explain import RunExplainer, classify_failure
+from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
@@ -1219,11 +1219,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             event=f"Step {step['id']} ({step['title']}) failed (attempt {spec_attempt + 1})",
         )
 
-        # Section 3b: Classify error for adaptive retry budgets
-        error_type = classify_failure(error_info)
-        logger.info("  Error type: %s", error_type)
-
-        # Section 3a: Generate structured reflection
+        # Section 3a: Generate structured reflection (before classification
+        # so the reflection's LLM-generated error_type is available)
         try:
             reflection = generate_reflection(
                 step,
@@ -1235,7 +1232,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             logger.warning("  Reflection generation failed: %s", e)
             reflection = {
                 "attempt": spec_attempt + 1,
-                "error_type": error_type,
+                "error_type": classify_failure_heuristic(error_info),
                 "root_cause": error_info[:200],
                 "strategy_tried": f"attempt {spec_attempt + 1}",
                 "lesson": "",
@@ -1245,6 +1242,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         # Store reflection in step state
         step.setdefault("reflections", []).append(reflection)
         _save_state_threadsafe(state)
+
+        # Section 3b: Classify error using reflection's LLM-generated
+        # error_type when available, falling back to keyword heuristic
+        error_type = classify_failure(error_info, step_context=step)
+        logger.info("  Error type: %s", error_type)
 
         event_log.emit(EventType.REFLECTION_GENERATED,
                        step_id=step["id"],

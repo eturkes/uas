@@ -115,7 +115,7 @@ semantically related or whether merging them makes the combined task harder.
 ---
 
 ## Section 3: Failure Classification — Fold into Reflection Prompt
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `explain.py:classify_failure()` uses keyword matching against a static dictionary.

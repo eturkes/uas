@@ -6,6 +6,7 @@ import os
 from architect.explain import (
     RunExplainer,
     classify_failure,
+    classify_failure_heuristic,
     compute_critical_path,
     load_run_data,
     _time_breakdown,
@@ -197,6 +198,49 @@ class TestClassifyFailure:
         # Contains both dependency and logic keywords
         result = classify_failure("ImportError: No module named foo TypeError")
         assert result in ("dependency_error", "logic_error")
+
+    def test_with_step_context_uses_reflection(self):
+        step = {
+            "reflections": [
+                {"error_type": "network_error", "root_cause": "DNS failure"},
+            ],
+        }
+        # Even though the text matches dependency_error, the reflection wins
+        result = classify_failure("ImportError: No module named foo", step_context=step)
+        assert result == "network_error"
+
+    def test_with_step_context_uses_latest_reflection(self):
+        step = {
+            "reflections": [
+                {"error_type": "dependency_error", "root_cause": "old"},
+                {"error_type": "logic_error", "root_cause": "latest"},
+            ],
+        }
+        result = classify_failure("some error", step_context=step)
+        assert result == "logic_error"
+
+    def test_with_step_context_invalid_error_type_falls_back(self):
+        step = {
+            "reflections": [
+                {"error_type": "not_a_real_type", "root_cause": "something"},
+            ],
+        }
+        result = classify_failure("ImportError: No module named foo", step_context=step)
+        assert result == "dependency_error"  # Falls back to heuristic
+
+    def test_with_step_context_no_reflections_falls_back(self):
+        step = {}
+        result = classify_failure("ConnectionError: Connection refused", step_context=step)
+        assert result == "network_error"  # Falls back to heuristic
+
+    def test_with_step_context_empty_reflections_falls_back(self):
+        step = {"reflections": []}
+        result = classify_failure("PermissionError: denied", step_context=step)
+        assert result == "environment_error"  # Falls back to heuristic
+
+    def test_heuristic_directly(self):
+        assert classify_failure_heuristic("ImportError: No module named foo") == "dependency_error"
+        assert classify_failure_heuristic("") == "unknown"
 
 
 class TestComputeCriticalPath:

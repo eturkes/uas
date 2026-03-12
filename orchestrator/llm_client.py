@@ -119,6 +119,9 @@ class ClaudeCodeClient:
         response extraction (Section 5a), falling back to text mode on
         JSON parse failure.
         """
+        # Prepend "ultrathink" to every prompt for maximum reasoning depth.
+        prompt = f"ultrathink\n\n{prompt}"
+
         # Resolve the absolute path to the claude binary so subprocess
         # never fails due to a missing or overwritten PATH.
         claude_path = shutil.which("claude")
@@ -147,6 +150,7 @@ class ClaudeCodeClient:
         env.pop("CLAUDE_CODE_SESSION", None)
         env["IS_SANDBOX"] = "1"
         env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000")
+        env["CLAUDE_CODE_EFFORT_LEVEL"] = "high"
 
         last_error: RuntimeError | None = None
         for attempt in range(1 + MAX_RETRIES):

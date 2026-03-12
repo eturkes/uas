@@ -420,7 +420,7 @@ issues (e.g., building SQL from user input, logging secrets indirectly, using
 ---
 
 ## Section 11: Step Enrichment — LLM-Guided Context Injection
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `planner.py:enrich_step_descriptions()` blindly appends file lists and summaries to

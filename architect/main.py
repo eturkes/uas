@@ -781,6 +781,18 @@ def build_context(step: dict, completed_outputs: dict,
                 f"</previous_step_output>"
             )
 
+    # Section 11: Enrichment context from completed upstream steps.
+    # Stored in state["enrichment_context"] rather than baked into
+    # descriptions, so compression logic can filter it.
+    if state:
+        enrichment_context = state.get("enrichment_context", {})
+        step_enrichment = enrichment_context.get(step.get("id"), "")
+        if step_enrichment:
+            parts.append(
+                f"<enrichment_context>\n{step_enrichment}\n"
+                f"</enrichment_context>"
+            )
+
     # Section 4b: Recursive workspace files section
     if workspace_path:
         try:
@@ -2059,7 +2071,9 @@ def main():
         """
         nonlocal levels, step_by_id
 
-        # Section 6c: Enrich dependent step descriptions
+        # Section 6c / Section 11: Build enrichment context for dependent steps.
+        # Enrichment is stored in state rather than mutated into descriptions,
+        # so it can be filtered/compressed by build_context().
         remaining = [
             s for s in state["steps"]
             if s["status"] not in ("completed",)
@@ -2069,10 +2083,19 @@ def main():
             if completed_step["id"] in s.get("depends_on", [])
         ]
         if dependents:
-            enriched = enrich_step_descriptions(completed_step, dependents)
+            enriched, enrichments = enrich_step_descriptions(
+                completed_step, dependents,
+                existing_enrichments=state.get("enrichment_context"),
+            )
             if enriched:
+                ec = state.setdefault("enrichment_context", {})
+                for step_id, text in enrichments.items():
+                    if step_id in ec:
+                        ec[step_id] += "\n" + text
+                    else:
+                        ec[step_id] = text
                 logger.info(
-                    "  Enriched descriptions for steps %s from step %d output.",
+                    "  Enriched context for steps %s from step %d output.",
                     enriched, completed_step["id"],
                 )
                 event_log.emit(EventType.STEP_ENRICHED,

@@ -235,3 +235,75 @@ class TestSummarizeContext:
         result = summarize_context(context, "test goal", 500)
         assert len(result) < len(context)
         assert "compressed" in result
+
+
+class TestEnrichmentContext:
+    """Section 11: Enrichment context injected via build_context."""
+
+    def test_enrichment_included_in_context(self):
+        step = {"id": 2, "depends_on": [1]}
+        outputs = {1: "result from step 1"}
+        state = {
+            "goal": "test goal",
+            "steps": [
+                {"id": 1, "depends_on": []},
+                {"id": 2, "depends_on": [1]},
+            ],
+            "enrichment_context": {
+                2: "[Context from step 1 (Download): files produced: data.csv]",
+            },
+        }
+        result = build_context(step, outputs, state=state)
+        assert "<enrichment_context>" in result
+        assert "data.csv" in result
+        assert "</enrichment_context>" in result
+
+    def test_no_enrichment_when_absent(self):
+        step = {"id": 2, "depends_on": [1]}
+        outputs = {1: "result from step 1"}
+        state = {
+            "goal": "test goal",
+            "steps": [
+                {"id": 1, "depends_on": []},
+                {"id": 2, "depends_on": [1]},
+            ],
+        }
+        result = build_context(step, outputs, state=state)
+        assert "enrichment_context" not in result
+
+    def test_enrichment_only_for_matching_step(self):
+        step = {"id": 3, "depends_on": [1]}
+        outputs = {1: "result"}
+        state = {
+            "goal": "test goal",
+            "steps": [
+                {"id": 1, "depends_on": []},
+                {"id": 3, "depends_on": [1]},
+            ],
+            "enrichment_context": {
+                2: "[Context for step 2 only]",
+            },
+        }
+        result = build_context(step, outputs, state=state)
+        assert "enrichment_context" not in result
+
+    def test_multiple_enrichments_concatenated(self):
+        step = {"id": 3, "depends_on": [1, 2]}
+        outputs = {1: "out1", 2: "out2"}
+        state = {
+            "goal": "test goal",
+            "steps": [
+                {"id": 1, "depends_on": []},
+                {"id": 2, "depends_on": []},
+                {"id": 3, "depends_on": [1, 2]},
+            ],
+            "enrichment_context": {
+                3: (
+                    "[Context from step 1 (A): files produced: a.txt]\n"
+                    "[Context from step 2 (B): files produced: b.txt]"
+                ),
+            },
+        }
+        result = build_context(step, outputs, state=state)
+        assert "a.txt" in result
+        assert "b.txt" in result

@@ -1457,25 +1457,32 @@ def replan_remaining_steps(goal: str, state: dict,
         return None
 
 
-def enrich_step_descriptions(completed_step: dict,
-                             dependent_steps: list[dict]) -> list[int]:
-    """Enrich dependent step descriptions with info from a completed step.
+def enrich_step_descriptions(
+    completed_step: dict,
+    dependent_steps: list[dict],
+    existing_enrichments: dict | None = None,
+) -> tuple[list[int], dict[int, str]]:
+    """Build enrichment context for dependent steps from a completed step.
 
-    Appends concrete details about files produced, data formats, and
-    summaries so downstream steps have better context. This is a
-    lightweight operation with no LLM call.
+    Instead of mutating step descriptions directly, returns enrichment
+    data to be stored in state and injected via build_context(). This
+    allows the enrichment to be filtered/compressed by the existing
+    compression logic rather than being permanently baked into descriptions.
 
-    Returns list of step IDs that were enriched.
+    Returns (enriched_ids, enrichments) where enrichments maps step_id
+    to enrichment text.
 
-    Section 6c of PLAN.md.
+    Section 6c / Section 11 of PLAN.md.
     """
     enriched_ids = []
+    enrichments = {}
+    existing = existing_enrichments or {}
     files_written = completed_step.get("files_written", [])
     summary = completed_step.get("summary", "")
     uas_result = completed_step.get("uas_result", {})
 
     if not files_written and not summary:
-        return enriched_ids
+        return enriched_ids, enrichments
 
     # Build enrichment text
     parts = []
@@ -1489,22 +1496,24 @@ def enrich_step_descriptions(completed_step: dict,
             parts.append(f"result: {result_summary}")
 
     if not parts:
-        return enriched_ids
+        return enriched_ids, enrichments
 
     enrichment = (
-        f"\n[Context from step {completed_step['id']} "
+        f"[Context from step {completed_step['id']} "
         f"({completed_step['title']}): {'; '.join(parts)}]"
     )
 
     for dep_step in dependent_steps:
-        # Avoid duplicate enrichment
+        step_id = dep_step["id"]
+        # Avoid duplicate enrichment from the same source step
         marker = f"[Context from step {completed_step['id']} "
-        if marker in dep_step.get("description", ""):
+        existing_text = existing.get(step_id, "")
+        if marker in existing_text:
             continue
-        dep_step["description"] = dep_step["description"] + enrichment
-        enriched_ids.append(dep_step["id"])
+        enrichments[step_id] = enrichment
+        enriched_ids.append(step_id)
 
-    return enriched_ids
+    return enriched_ids, enrichments
 
 
 def decompose_failing_step(step: dict, orchestrator_stdout: str,

@@ -708,10 +708,12 @@ class TestEnrichStepDescriptions:
                 "description": "Process the downloaded data.",
             },
         ]
-        enriched = enrich_step_descriptions(completed, dependents)
+        enriched, enrichments = enrich_step_descriptions(completed, dependents)
         assert enriched == [2]
-        assert "data.csv" in dependents[0]["description"]
-        assert "1000 rows" in dependents[0]["description"]
+        assert "data.csv" in enrichments[2]
+        assert "1000 rows" in enrichments[2]
+        # Description should NOT be mutated
+        assert "data.csv" not in dependents[0]["description"]
 
     def test_no_enrichment_without_files_or_summary(self):
         completed = {
@@ -727,9 +729,9 @@ class TestEnrichStepDescriptions:
                 "description": "Continue work.",
             },
         ]
-        enriched = enrich_step_descriptions(completed, dependents)
+        enriched, enrichments = enrich_step_descriptions(completed, dependents)
         assert enriched == []
-        assert "Context from step" not in dependents[0]["description"]
+        assert enrichments == {}
 
     def test_avoids_duplicate_enrichment(self):
         completed = {
@@ -742,14 +744,18 @@ class TestEnrichStepDescriptions:
             {
                 "id": 2,
                 "depends_on": [1],
-                "description": (
-                    "Process data. "
-                    "[Context from step 1 (Download): files produced: data.csv]"
-                ),
+                "description": "Process data.",
             },
         ]
-        enriched = enrich_step_descriptions(completed, dependents)
+        # Simulate existing enrichment already stored in state
+        existing = {
+            2: "[Context from step 1 (Download): files produced: data.csv]",
+        }
+        enriched, enrichments = enrich_step_descriptions(
+            completed, dependents, existing_enrichments=existing,
+        )
         assert enriched == []
+        assert enrichments == {}
 
     def test_enriches_multiple_dependents(self):
         completed = {
@@ -762,10 +768,10 @@ class TestEnrichStepDescriptions:
             {"id": 2, "depends_on": [1], "description": "Analyze data."},
             {"id": 3, "depends_on": [1], "description": "Generate report."},
         ]
-        enriched = enrich_step_descriptions(completed, dependents)
+        enriched, enrichments = enrich_step_descriptions(completed, dependents)
         assert enriched == [2, 3]
-        for dep in dependents:
-            assert "products.json" in dep["description"]
+        for step_id in [2, 3]:
+            assert "products.json" in enrichments[step_id]
 
     def test_includes_uas_result_summary(self):
         completed = {
@@ -778,9 +784,9 @@ class TestEnrichStepDescriptions:
         dependents = [
             {"id": 2, "depends_on": [1], "description": "Use result."},
         ]
-        enriched = enrich_step_descriptions(completed, dependents)
+        enriched, enrichments = enrich_step_descriptions(completed, dependents)
         assert enriched == [2]
-        assert "Detailed UAS result" in dependents[0]["description"]
+        assert "Detailed UAS result" in enrichments[2]
 
     def test_empty_dependents_list(self):
         completed = {
@@ -789,8 +795,9 @@ class TestEnrichStepDescriptions:
             "files_written": ["f.txt"],
             "summary": "Done",
         }
-        enriched = enrich_step_descriptions(completed, [])
+        enriched, enrichments = enrich_step_descriptions(completed, [])
         assert enriched == []
+        assert enrichments == {}
 
 
 # ---------------------------------------------------------------------------
@@ -851,7 +858,7 @@ class TestReplanIntegration:
         assert "data.csv" in detail
 
     def test_enrichment_after_completion(self, tmp_workspace):
-        """Step descriptions are enriched with completed step output."""
+        """Enrichment context is built from completed step output."""
         state = init_state("Analyze data")
         steps = [
             {"title": "Download", "description": "Get data",
@@ -867,11 +874,17 @@ class TestReplanIntegration:
 
         dependents = [s for s in state["steps"]
                       if state["steps"][0]["id"] in s.get("depends_on", [])]
-        enriched = enrich_step_descriptions(state["steps"][0], dependents)
+        enriched, enrichments = enrich_step_descriptions(
+            state["steps"][0], dependents,
+        )
 
         assert len(enriched) == 1
-        assert "data.csv" in state["steps"][1]["description"]
-        assert "name, price" in state["steps"][1]["description"]
+        # Enrichment is returned, not baked into description
+        step_2_id = state["steps"][1]["id"]
+        assert "data.csv" in enrichments[step_2_id]
+        assert "name, price" in enrichments[step_2_id]
+        # Description stays clean
+        assert state["steps"][1]["description"] == "Process the data"
 
     def test_replan_limit_per_level(self):
         """replanned_levels set prevents multiple replans at same level."""

@@ -661,6 +661,12 @@ catch specific exceptions, use git init -b main for repos, and never hardcode se
 
 4. After the tags, provide ONLY the improved task description. Be more specific and \
 explicit about what the Python code should do. Do not include any explanation.
+
+5. Self-check: before responding, verify your output:
+- Is it a valid, actionable task description (not an error analysis)?
+- Is it similar in scope to the original task (not vastly longer or shorter)?
+- Does it avoid repeating the error output verbatim?
+If your output fails these checks, revise it before responding.
 </process>
 """
 
@@ -692,7 +698,11 @@ Use unknown only if the error truly does not fit any other category.",
 Use reflect_and_fix when the error is a small, localised bug that can be corrected with a targeted change. \
 Use alternative_approach when the fundamental approach is flawed and a completely different technique should be tried. \
 Use decompose_into_phases when the task is too complex for a single script and should be broken into sequential sub-phases. \
-Use defensive_rewrite when multiple prior attempts have failed and the safest, most conservative implementation is needed."}}
+Use defensive_rewrite when multiple prior attempts have failed and the safest, most conservative implementation is needed.",
+"confidence": "MUST be exactly one of: high, medium, low. \
+Use high when you are confident in your diagnosis and the suggested fix addresses a clear, identifiable issue. \
+Use medium when the root cause is likely but not certain, or the fix is a reasonable guess. \
+Use low when the error is ambiguous, the root cause is unclear, or you are unsure the suggested approach will work."}}
 </instructions>
 """
 
@@ -776,6 +786,7 @@ def generate_reflection(step: dict, stdout: str, stderr: str,
                 "lesson": data.get("lesson", ""),
                 "what_to_try_next": data.get("what_to_try_next", ""),
                 "recommended_strategy": data.get("recommended_strategy", ""),
+                "confidence": data.get("confidence", "medium"),
             }
             return reflection
     except json.JSONDecodeError:
@@ -985,8 +996,14 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
     result = re.sub(r"<strategies>.*?</strategies>", "", result, flags=re.DOTALL)
     result = result.strip()
 
-    # Red-flagging: check for signs of confusion and resample once
-    if _is_confused_output(result, step["description"], stderr_trimmed):
+    # Red-flagging: check for signs of confusion and resample once.
+    # Also resample if the most recent reflection has low confidence.
+    low_confidence = (
+        reflections and reflections[-1].get("confidence") == "low"
+    )
+    if low_confidence:
+        logger.warning("  Low-confidence reflection, resampling rewrite...")
+    if _is_confused_output(result, step["description"], stderr_trimmed) or low_confidence:
         logger.warning("  Red-flag detected in rewrite output, resampling...")
         response = client.generate(prompt)
         result = re.sub(r"<diagnosis>.*?</diagnosis>", "", response, flags=re.DOTALL)

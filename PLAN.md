@@ -451,7 +451,7 @@ to each downstream step.
 ---
 
 ## Section 12: Confused Output Detection — Enhance Reflection Prompt
-**Status: Pending**
+**Status: Complete**
 
 ### Problem
 `planner.py:_is_confused_output()` uses length and substring heuristics that can't

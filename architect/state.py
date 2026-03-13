@@ -2,6 +2,7 @@
 
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
@@ -17,6 +18,7 @@ def init_state(goal: str) -> dict:
     state = {
         "goal": goal,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "run_id": uuid.uuid4().hex[:12],
         "status": "planning",
         "steps": [],
     }
@@ -45,18 +47,28 @@ def load_state() -> dict | None:
         return None
 
 
-def append_scratchpad(entry: str):
-    """Append a timestamped entry to the scratchpad file."""
+def append_scratchpad(entry: str, run_id: str = ""):
+    """Append a timestamped entry to the scratchpad file.
+
+    When *run_id* is provided the entry is tagged so that
+    ``read_scratchpad`` can filter to a single run.
+    """
     os.makedirs(STATE_DIR, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    header = f"## [{timestamp}]"
+    if run_id:
+        header += f" [run:{run_id}]"
     with open(SCRATCHPAD_FILE, "a") as f:
-        f.write(f"\n## [{timestamp}]\n{entry}\n")
+        f.write(f"\n{header}\n{entry}\n")
 
 
-def read_scratchpad(max_chars: int = 2000) -> str:
-    """Read the most recent scratchpad entries up to max_chars.
+def read_scratchpad(max_chars: int = 2000, run_id: str = "") -> str:
+    """Read scratchpad entries up to *max_chars*.
 
-    Uses tail-based reading to prioritize the most recent entries.
+    When *run_id* is given, only entries tagged with that run are
+    returned.  Untagged (legacy) entries are always excluded when
+    filtering by run.  Uses tail-based reading to prioritise the
+    most recent entries.
     """
     if not os.path.exists(SCRATCHPAD_FILE):
         return ""
@@ -67,10 +79,39 @@ def read_scratchpad(max_chars: int = 2000) -> str:
         return ""
     if not content:
         return ""
+
+    if run_id:
+        content = _filter_scratchpad_by_run(content, run_id)
+        if not content:
+            return ""
+
     if len(content) <= max_chars:
         return content
     # Return the tail (most recent entries)
     return "...[earlier entries omitted]\n" + content[-max_chars:]
+
+
+def _filter_scratchpad_by_run(content: str, run_id: str) -> str:
+    """Return only scratchpad sections belonging to *run_id*."""
+    marker = f"[run:{run_id}]"
+    blocks: list[str] = []
+    current: list[str] = []
+    keep = False
+
+    for line in content.split("\n"):
+        if line.startswith("## ["):
+            # Flush previous block
+            if keep and current:
+                blocks.append("\n".join(current))
+            current = [line]
+            keep = marker in line
+        else:
+            current.append(line)
+
+    if keep and current:
+        blocks.append("\n".join(current))
+
+    return "\n".join(blocks)
 
 
 def update_progress_file(state: dict, event: str | None = None):

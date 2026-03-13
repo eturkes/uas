@@ -815,8 +815,10 @@ def build_context(step: dict, completed_outputs: dict,
     if progress:
         parts.append(f"<progress>\n{progress}\n</progress>")
     else:
-        # Fallback to scratchpad if no progress file yet
-        scratchpad = read_scratchpad()
+        # Fallback to scratchpad if no progress file yet.
+        # Filter by run_id so prior runs' entries don't leak.
+        current_run_id = state.get("run_id", "") if state else ""
+        scratchpad = read_scratchpad(run_id=current_run_id)
         if scratchpad:
             parts.append(f"<scratchpad>\n{scratchpad}\n</scratchpad>")
 
@@ -952,7 +954,7 @@ def create_blocker(state: dict, step: dict):
 _env_probed = False
 
 
-def _probe_environment():
+def _probe_environment(run_id: str = ""):
     """Run a lightweight environment probe and write results to scratchpad."""
     global _env_probed
     if _env_probed:
@@ -988,7 +990,7 @@ def _probe_environment():
             lines.append(f"- Disk: {df_lines[1]}")
     except Exception:
         pass
-    append_scratchpad("\n".join(lines))
+    append_scratchpad("\n".join(lines), run_id=run_id)
 
 
 def validate_uas_result(step: dict, workspace: str) -> str | None:
@@ -1398,7 +1400,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             Used to limit backtracking depth to 1 and avoid re-backtracking.
     """
     total = len(state["steps"])
-    _probe_environment()
+    run_id = state.get("run_id", "")
+    _probe_environment(run_id=run_id)
     context = build_context(step, completed_outputs, state=state,
                             workspace_path=WORKSPACE)
     counts = progress_counts or {"completed": 0, "failed": 0}
@@ -1645,7 +1648,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 append_scratchpad(
                     f"Step {step['id']} ({step['title']}) SUCCEEDED "
                     f"in {step['elapsed']:.1f}s.{files_info}\n"
-                    f"Summary: {summary}"
+                    f"Summary: {summary}",
+                    run_id=run_id,
                 )
                 # Section 4a: Update structured progress file
                 update_progress_file(
@@ -1679,7 +1683,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         append_scratchpad(
             f"Step {step['id']} ({step['title']}) FAILED "
             f"(attempt {spec_attempt + 1}).\n"
-            f"Error: {error_info[:500]}"
+            f"Error: {error_info[:500]}",
+            run_id=run_id,
         )
         # Section 4a: Update structured progress file
         update_progress_file(
@@ -1727,7 +1732,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             f"Reflection for step {step['id']} (attempt {spec_attempt + 1}): "
             f"error_type={reflection['error_type']}, "
             f"root_cause={reflection['root_cause'][:150]}, "
-            f"lesson={reflection.get('lesson', '')[:150]}"
+            f"lesson={reflection.get('lesson', '')[:150]}",
+            run_id=run_id,
         )
 
         # Track attempt history for reflection (Section 1c)

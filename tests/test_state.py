@@ -17,6 +17,13 @@ class TestInitState:
         assert state["status"] == "planning"
         assert state["steps"] == []
         assert "created_at" in state
+        assert "run_id" in state
+        assert len(state["run_id"]) == 12
+
+    def test_run_id_is_unique(self, tmp_workspace):
+        s1 = init_state("goal 1")
+        s2 = init_state("goal 2")
+        assert s1["run_id"] != s2["run_id"]
 
     def test_persists_to_disk(self, tmp_workspace):
         init_state("persist test")
@@ -107,3 +114,37 @@ class TestScratchpad:
         content = read_scratchpad(max_chars=500)
         # Recent entry should be present, old may be truncated
         assert "recent entry" in content
+
+    def test_run_id_tag_in_header(self, tmp_workspace):
+        append_scratchpad("tagged", run_id="abc123")
+        content = read_scratchpad()
+        assert "[run:abc123]" in content
+        assert "tagged" in content
+
+    def test_filter_by_run_id(self, tmp_workspace):
+        append_scratchpad("run1 entry", run_id="run1")
+        append_scratchpad("run2 entry", run_id="run2")
+        content = read_scratchpad(run_id="run1")
+        assert "run1 entry" in content
+        assert "run2 entry" not in content
+
+    def test_filter_excludes_untagged(self, tmp_workspace):
+        append_scratchpad("legacy entry")
+        append_scratchpad("tagged entry", run_id="current")
+        content = read_scratchpad(run_id="current")
+        assert "tagged entry" in content
+        assert "legacy entry" not in content
+
+    def test_no_filter_returns_all(self, tmp_workspace):
+        append_scratchpad("run1 entry", run_id="run1")
+        append_scratchpad("run2 entry", run_id="run2")
+        append_scratchpad("untagged entry")
+        content = read_scratchpad()
+        assert "run1 entry" in content
+        assert "run2 entry" in content
+        assert "untagged entry" in content
+
+    def test_filter_empty_run_id_returns_all(self, tmp_workspace):
+        append_scratchpad("entry", run_id="abc")
+        content = read_scratchpad(run_id="")
+        assert "entry" in content

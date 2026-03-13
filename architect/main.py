@@ -2113,6 +2113,7 @@ def main():
             enriched, enrichments = enrich_step_descriptions(
                 completed_step, dependents,
                 existing_enrichments=state.get("enrichment_context"),
+                workspace=WORKSPACE,
             )
             if enriched:
                 ec = state.setdefault("enrichment_context", {})

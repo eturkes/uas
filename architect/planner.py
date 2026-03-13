@@ -69,6 +69,13 @@ Common decomposition mistakes to avoid:
 - Implicit ordering: steps that must run sequentially need explicit depends_on, even if the order seems obvious
 - Overly vague descriptions: "process the data" tells the code-generating LLM nothing — be specific about format, method, and expected output
 - Forgetting error boundaries: each step should handle its own errors rather than assuming upstream perfection
+- Broken data contracts: when one step produces data (CSV, JSON, database) and another \
+consumes it, the descriptions MUST agree on the exact column names, key names, data types, \
+and file formats. Never let the consumer step "assume" or "guess" column names — always \
+specify that it must read from the actual file or use names established by the producer step. \
+For example, if a data source has column "SEX" (numeric 1/2), don't tell a downstream \
+visualization step to look for "Sex" (string "Male"/"Female") — the consumer must either \
+use the exact source column name or a data-loading step must explicitly perform the mapping.
 </anti_patterns>
 
 <instructions>
@@ -111,6 +118,13 @@ using `git init -b main` (use "main" as the default branch), add an appropriate 
 11. Never hardcode secrets or API keys in step descriptions — instruct the code \
 to read them from environment variables.
 12. Always prefer HTTPS URLs. Pin dependency versions. Use context managers for I/O.
+13. When a step produces structured data (CSV, JSON, database) that other steps consume, \
+the step description MUST explicitly state the column names, key names, or schema. \
+Consumer steps MUST reference the exact names from the producer step — never invent \
+aliases. If a data-loading/preprocessing step sits between a producer and consumers, \
+its description must specify the exact mapping (e.g., "rename column SEX to Sex"). \
+Instruct consumer steps to read the actual file headers at runtime rather than \
+hardcoding assumed column names.
 </rules>
 
 <output_format>
@@ -1494,10 +1508,44 @@ def replan_remaining_steps(goal: str, state: dict,
         return None
 
 
+def _extract_file_schema(filepath: str) -> str | None:
+    """Extract schema info (column names, JSON keys) from a data file.
+
+    Returns a short string like 'columns: [A, B, C] (3 columns)' or None.
+    Used to enrich dependent steps with the actual data contract.
+    """
+    if not os.path.isfile(filepath):
+        return None
+    try:
+        if filepath.endswith((".csv", ".tsv")):
+            sep = "\t" if filepath.endswith(".tsv") else ","
+            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                header = f.readline().strip()
+            if not header:
+                return None
+            cols = [c.strip().strip('"').strip("'") for c in header.split(sep)]
+            col_str = str(cols)
+            if len(col_str) > 1500:
+                col_str = col_str[:1500] + f"...] ({len(cols)} columns total)"
+            return f"columns: {col_str}"
+        if filepath.endswith(".json"):
+            import json as _json
+            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                data = _json.loads(f.read(8000))
+            if isinstance(data, dict):
+                return f"keys: {list(data.keys())}"
+            if isinstance(data, list) and data and isinstance(data[0], dict):
+                return f"list of {len(data)} items, keys: {list(data[0].keys())}"
+    except Exception:
+        pass
+    return None
+
+
 def enrich_step_descriptions(
     completed_step: dict,
     dependent_steps: list[dict],
     existing_enrichments: dict | None = None,
+    workspace: str | None = None,
 ) -> tuple[list[int], dict[int, str]]:
     """Build enrichment context for dependent steps from a completed step.
 
@@ -1531,6 +1579,26 @@ def enrich_step_descriptions(
         result_summary = uas_result.get("summary", "")
         if result_summary and result_summary != summary:
             parts.append(f"result: {result_summary}")
+
+    # Extract schemas from data files so downstream steps know the exact
+    # column names / keys to code against (prevents data contract mismatch).
+    if workspace and files_written:
+        for fpath in files_written[:5]:
+            if not fpath.endswith((".csv", ".tsv", ".json")):
+                continue
+            full = os.path.join(workspace, fpath) if not os.path.isabs(fpath) else fpath
+            if not os.path.isfile(full):
+                # Try within workspace subdirectories
+                base = os.path.basename(fpath)
+                for root, _dirs, _files in os.walk(workspace):
+                    if base in _files:
+                        full = os.path.join(root, base)
+                        break
+                    _dirs[:] = [d for d in _dirs if d not in
+                                (".state", ".git", "__pycache__")]
+            schema = _extract_file_schema(full)
+            if schema:
+                parts.append(f"{os.path.basename(fpath)} {schema}")
 
     if not parts:
         return enriched_ids, enrichments

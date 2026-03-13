@@ -536,7 +536,15 @@ def scan_workspace_files(workspace_path: str, recursive: bool = True,
                 "type": _guess_file_type(entry),
                 "preview": "",
             }
-            if file_info["type"] == "text" and stat.st_size < 50000:
+            if entry.endswith((".csv", ".tsv")):
+                # Always read at least the header row for CSV/TSV regardless
+                # of file size — column names are the critical data contract.
+                try:
+                    with open(full_path, "r", errors="replace") as f:
+                        file_info["preview"] = f.readline() + f.readline()
+                except OSError:
+                    pass
+            elif file_info["type"] == "text" and stat.st_size < 50000:
                 try:
                     with open(full_path, "r", errors="replace") as f:
                         file_info["preview"] = f.read(200)
@@ -548,6 +556,28 @@ def scan_workspace_files(workspace_path: str, recursive: bool = True,
 
     _scan_dir(workspace_path, 0)
     return results
+
+
+def _extract_csv_columns(rel_path: str, ws_files: dict) -> str:
+    """Extract column headers from a CSV file's preview.
+
+    Parses the first line of the preview to get column names, giving
+    downstream steps the exact schema to code against.
+    """
+    info = ws_files.get(rel_path, {})
+    preview = info.get("preview", "")
+    if not preview:
+        return "(no preview)"
+    first_line = preview.split("\n", 1)[0].strip()
+    if not first_line:
+        return "(empty header)"
+    sep = "\t" if rel_path.endswith(".tsv") else ","
+    cols = [c.strip().strip('"').strip("'") for c in first_line.split(sep)]
+    result = str(cols)
+    # Cap output length but always include the count
+    if len(result) > 2000:
+        result = result[:2000] + f"... ] ({len(cols)} columns total)"
+    return f"{result} ({len(cols)} columns)"
 
 
 def format_workspace_scan(ws_files: dict,
@@ -585,6 +615,8 @@ def format_workspace_scan(ws_files: dict,
             if preview:
                 if fpath.endswith(".json") and json_key_extractor:
                     line += f"\n    keys: {json_key_extractor(preview)}"
+                elif fpath.endswith((".csv", ".tsv")):
+                    line += f"\n    columns: {_extract_csv_columns(fpath, ws_files)}"
                 else:
                     line += f"\n    preview: {preview[:200]}"
             if total_len + len(line) > _MAX_SCAN_OUTPUT:

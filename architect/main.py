@@ -1007,7 +1007,34 @@ def validate_uas_result(step: dict, workspace: str) -> str | None:
 
     for f in uas_result.get("files_written", []):
         fpath = os.path.join(workspace, f) if not os.path.isabs(f) else f
-        if not os.path.exists(fpath):
+        if os.path.exists(fpath):
+            continue
+
+        # For absolute paths outside the workspace (e.g. /uas/... from sandbox),
+        # try rebasing onto the workspace.
+        if os.path.isabs(f) and not f.startswith(workspace):
+            # Try the basename within the workspace tree
+            basename = os.path.basename(f)
+            rebased = os.path.join(workspace, basename)
+            if os.path.exists(rebased):
+                continue
+
+        # Search subdirectories — scripts may report paths relative
+        # to a project subdirectory rather than the workspace root.
+        found = False
+        search_name = os.path.basename(f)
+        for root, _dirs, files in os.walk(workspace):
+            if search_name in files:
+                candidate = os.path.join(root, search_name)
+                if candidate.endswith(f.lstrip("/")):
+                    found = True
+                    break
+            # Limit depth to avoid traversing .state, .git, etc.
+            _dirs[:] = [
+                d for d in _dirs
+                if d not in (".state", ".git", "__pycache__", "node_modules")
+            ]
+        if not found:
             return f"UAS_RESULT claims file '{f}' was written but it does not exist"
 
     return None

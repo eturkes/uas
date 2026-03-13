@@ -70,9 +70,11 @@ def _is_transient(error_message: str) -> bool:
 class ClaudeCodeClient:
     """Calls the locally installed Claude Code CLI to generate responses."""
 
-    def __init__(self, timeout: int | None = DEFAULT_TIMEOUT, model: str | None = None):
+    def __init__(self, timeout: int | None = DEFAULT_TIMEOUT, model: str | None = None,
+                 role: str | None = None):
         self.timeout = timeout
         self.model = model
+        self.role = role
 
     def _run_streaming(self, cmd, env):
         """Run the CLI streaming stdout to the logger line-by-line."""
@@ -119,8 +121,11 @@ class ClaudeCodeClient:
         response extraction (Section 5a), falling back to text mode on
         JSON parse failure.
         """
-        # Prepend "ultrathink" to every prompt for maximum reasoning depth.
-        prompt = f"ultrathink\n\n{prompt}"
+        # "ultrathink" is only beneficial for planning/reasoning tasks.
+        # For code generation, it can cause the LLM to exhaust output tokens
+        # on thinking without producing the actual code block.
+        if stream:
+            prompt = f"ultrathink\n\n{prompt}"
 
         # Resolve the absolute path to the claude binary so subprocess
         # never fails due to a missing or overwritten PATH.
@@ -139,6 +144,11 @@ class ClaudeCodeClient:
         use_json = not stream
         if use_json:
             cmd.extend(["--output-format", "json"])
+            # For coder calls, disable tools to prevent Claude from entering
+            # a multi-turn tool-use conversation (Edit/Write/Bash) instead of
+            # returning the code in a fenced ```python block.
+            if self.role == "coder":
+                cmd.extend(["--tools", ""])
 
         if self.model:
             cmd.extend(["--model", self.model])
@@ -149,8 +159,12 @@ class ClaudeCodeClient:
         env.pop("CLAUDECODE", None)
         env.pop("CLAUDE_CODE_SESSION", None)
         env["IS_SANDBOX"] = "1"
-        env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000")
-        env["CLAUDE_CODE_EFFORT_LEVEL"] = "high"
+        env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
+        # Streaming calls (planner) benefit from deep thinking.
+        # Non-streaming calls (code generation) need output tokens for the
+        # actual code, so use medium effort to avoid exhausting the budget
+        # on extended thinking.
+        env["CLAUDE_CODE_EFFORT_LEVEL"] = "high" if stream else "medium"
 
         last_error: RuntimeError | None = None
         for attempt in range(1 + MAX_RETRIES):
@@ -256,4 +270,4 @@ def get_llm_client(role: str | None = None) -> ClaudeCodeClient:
         model = os.environ.get("UAS_MODEL") or None
 
     logger.info("Using Claude Code CLI (role=%s, model=%s)", role, model)
-    return ClaudeCodeClient(timeout=timeout, model=model)
+    return ClaudeCodeClient(timeout=timeout, model=model, role=role)

@@ -1181,11 +1181,30 @@ def merge_steps_with_llm(goal: str, steps: list[dict]) -> list[dict]:
             if i not in merged_ids:
                 merged.append(s)
 
-        # Set defaults
-        for s in merged:
+        # Build old (1-based) -> new (1-based) ID mapping
+        # merged list order: merged pairs first, then unmerged in original order
+        old_to_new: dict[int, int] = {}
+        new_id = 1
+        for a_id, b_id in valid_pairs:
+            old_to_new[a_id] = new_id
+            old_to_new[b_id] = new_id  # both old steps map to the merged step
+            new_id += 1
+        for i, s in enumerate(steps):
+            if i not in merged_ids:
+                old_to_new[i + 1] = new_id
+                new_id += 1
+
+        # Remap depends_on references and remove self-references
+        for new_idx, s in enumerate(merged, 1):
             s.setdefault("depends_on", [])
             s.setdefault("verify", "")
             s.setdefault("environment", [])
+            remapped = set()
+            for dep in s["depends_on"]:
+                new_dep = old_to_new.get(dep, dep)
+                if new_dep != new_idx:  # remove self-references
+                    remapped.add(new_dep)
+            s["depends_on"] = sorted(remapped)
 
         logger.info(
             "  LLM step merging: %d -> %d steps. %s",
@@ -1229,6 +1248,8 @@ def merge_trivial_steps(steps: list[dict]) -> list[dict]:
 
     merged = []
     merged_ids = set()  # original indices that got merged into another
+    # Track old 1-based ID -> new 1-based position in merged list
+    old_to_new: dict[int, int] = {}
 
     for level in levels:
         # Find candidates: short descriptions, in this level
@@ -1268,6 +1289,9 @@ def merge_trivial_steps(steps: list[dict]) -> list[dict]:
                 "verify": combined_verify,
                 "environment": combined_env,
             }
+            new_pos = len(merged) + 1  # 1-based position
+            old_to_new[idx_a + 1] = new_pos  # both originals map to merged
+            old_to_new[idx_b + 1] = new_pos
             merged.append(merged_step)
             merged_ids.add(idx_a)
             merged_ids.add(idx_b)
@@ -1275,30 +1299,26 @@ def merge_trivial_steps(steps: list[dict]) -> list[dict]:
 
         # Remaining unpaired candidate
         if i < len(candidates):
+            idx_c, _ = candidates[i]
+            old_to_new[idx_c + 1] = len(merged) + 1
             merged.append(candidates[i][1])
 
         # Non-candidates pass through
-        for _, s in non_candidates:
+        for idx_nc, s in non_candidates:
+            old_to_new[idx_nc + 1] = len(merged) + 1
             merged.append(s)
 
-    # Renumber depends_on references for the merged list
-    # Build mapping: old 1-based index -> new 1-based index
-    old_to_new = {}
-    new_idx = 1
-    remaining_old_indices = []
-    for i, s in enumerate(steps):
-        if i not in merged_ids:
-            remaining_old_indices.append(i)
-
-    # The merged list order: merged steps first (from pair merging), then singles
-    # We need to rebuild depends_on properly. Since merged steps combine deps
-    # from their constituents and the plan may change shape, strip deps that
-    # refer to now-merged steps (their work is in the combined step).
-    # For simplicity, re-validate after merge.
-    for i, s in enumerate(merged, 1):
+    # Remap depends_on references and remove self-references
+    for new_idx, s in enumerate(merged, 1):
         s.setdefault("depends_on", [])
         s.setdefault("verify", "")
         s.setdefault("environment", [])
+        remapped = set()
+        for dep in s["depends_on"]:
+            new_dep = old_to_new.get(dep, dep)
+            if new_dep != new_idx:  # remove self-references
+                remapped.add(new_dep)
+        s["depends_on"] = sorted(remapped)
 
     if len(merged) < len(steps):
         logger.info(

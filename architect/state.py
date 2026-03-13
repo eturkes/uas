@@ -1,4 +1,10 @@
-"""Plan state management — persists the DAG to JSON on disk."""
+"""Plan state management — persists the DAG to JSON on disk.
+
+Each run's artifacts are stored under ``.state/runs/{run_id}/`` so that
+multiple runs can coexist without overwriting each other.  A shared
+scratchpad at ``.state/scratchpad.md`` provides cross-run learning with
+per-run filtering via ``[run:{run_id}]`` tags.
+"""
 
 import json
 import os
@@ -7,45 +13,133 @@ from datetime import datetime, timezone
 
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 STATE_DIR = os.path.join(WORKSPACE, ".state")
-STATE_FILE = os.path.join(STATE_DIR, "state.json")
-SPECS_DIR = os.path.join(STATE_DIR, "specs")
 SCRATCHPAD_FILE = os.path.join(STATE_DIR, "scratchpad.md")
-PROGRESS_FILE = os.path.join(STATE_DIR, "progress.md")
+
+# Legacy flat paths — kept only for migration / fallback
+_LEGACY_STATE_FILE = os.path.join(STATE_DIR, "state.json")
 
 
-def init_state(goal: str) -> dict:
-    os.makedirs(SPECS_DIR, exist_ok=True)
+# ---------------------------------------------------------------------------
+# Run directory helpers
+# ---------------------------------------------------------------------------
+
+def get_run_dir(run_id: str) -> str:
+    """Return the directory for a specific run: .state/runs/{run_id}."""
+    return os.path.join(STATE_DIR, "runs", run_id)
+
+
+def get_specs_dir(run_id: str) -> str:
+    """Return the specs directory for a specific run.
+
+    Falls back to the legacy ``.state/specs`` path when *run_id* is empty.
+    """
+    if not run_id:
+        return os.path.join(STATE_DIR, "specs")
+    return os.path.join(get_run_dir(run_id), "specs")
+
+
+def _write_latest_run(run_id: str):
+    """Record the latest run_id so resume can find it."""
+    os.makedirs(STATE_DIR, exist_ok=True)
+    path = os.path.join(STATE_DIR, "latest_run")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(run_id)
+
+
+def get_latest_run_id() -> str | None:
+    """Read the latest run_id from disk."""
+    path = os.path.join(STATE_DIR, "latest_run")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def list_runs() -> list[str]:
+    """Return a list of all run IDs, sorted by directory mtime (oldest first)."""
+    runs_dir = os.path.join(STATE_DIR, "runs")
+    if not os.path.isdir(runs_dir):
+        return []
+    entries = []
+    for name in os.listdir(runs_dir):
+        run_dir = os.path.join(runs_dir, name)
+        if os.path.isdir(run_dir):
+            try:
+                mtime = os.path.getmtime(run_dir)
+            except OSError:
+                mtime = 0.0
+            entries.append((mtime, name))
+    entries.sort()
+    return [name for _, name in entries]
+
+
+# ---------------------------------------------------------------------------
+# State init / save / load
+# ---------------------------------------------------------------------------
+
+def init_state(goal: str, run_id: str | None = None) -> dict:
+    if run_id is None:
+        run_id = uuid.uuid4().hex[:12]
+    run_dir = get_run_dir(run_id)
+    os.makedirs(os.path.join(run_dir, "specs"), exist_ok=True)
     state = {
         "goal": goal,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "run_id": uuid.uuid4().hex[:12],
+        "run_id": run_id,
         "status": "planning",
         "steps": [],
     }
     save_state(state)
+    _write_latest_run(run_id)
     return state
 
 
 def save_state(state: dict):
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    run_id = state.get("run_id", "")
+    if run_id:
+        run_dir = get_run_dir(run_id)
+        os.makedirs(run_dir, exist_ok=True)
+        path = os.path.join(run_dir, "state.json")
+    else:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        path = _LEGACY_STATE_FILE
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 
 
-def load_state() -> dict | None:
-    """Load state from disk. Returns None if missing or corrupted."""
-    if not os.path.exists(STATE_FILE):
+def load_state(run_id: str | None = None) -> dict | None:
+    """Load state from disk.
+
+    If *run_id* is given, load from that run's directory.
+    Otherwise try the latest run, then fall back to the legacy flat path.
+    Returns None if missing or corrupted.
+    """
+    if run_id is None:
+        run_id = get_latest_run_id()
+
+    if run_id:
+        path = os.path.join(get_run_dir(run_id), "state.json")
+    else:
+        path = _LEGACY_STATE_FILE
+
+    if not os.path.exists(path):
         return None
     try:
-        with open(STATE_FILE) as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        # Validate minimum required structure
         if not isinstance(data, dict) or "goal" not in data or "steps" not in data:
             return None
         return data
     except (json.JSONDecodeError, OSError):
         return None
 
+
+# ---------------------------------------------------------------------------
+# Scratchpad (shared across runs, filtered by run_id tags)
+# ---------------------------------------------------------------------------
 
 def append_scratchpad(entry: str, run_id: str = ""):
     """Append a timestamped entry to the scratchpad file.
@@ -58,7 +152,7 @@ def append_scratchpad(entry: str, run_id: str = ""):
     header = f"## [{timestamp}]"
     if run_id:
         header += f" [run:{run_id}]"
-    with open(SCRATCHPAD_FILE, "a") as f:
+    with open(SCRATCHPAD_FILE, "a", encoding="utf-8") as f:
         f.write(f"\n{header}\n{entry}\n")
 
 
@@ -73,7 +167,7 @@ def read_scratchpad(max_chars: int = 2000, run_id: str = "") -> str:
     if not os.path.exists(SCRATCHPAD_FILE):
         return ""
     try:
-        with open(SCRATCHPAD_FILE) as f:
+        with open(SCRATCHPAD_FILE, encoding="utf-8") as f:
             content = f.read()
     except OSError:
         return ""
@@ -114,6 +208,10 @@ def _filter_scratchpad_by_run(content: str, run_id: str) -> str:
     return "\n".join(blocks)
 
 
+# ---------------------------------------------------------------------------
+# Progress file (per-run)
+# ---------------------------------------------------------------------------
+
 def update_progress_file(state: dict, event: str | None = None):
     """Write a structured progress file summarizing execution state.
 
@@ -121,7 +219,15 @@ def update_progress_file(state: dict, event: str | None = None):
     The progress file has sections: Current State, Key Decisions,
     Completed Steps, and Lessons Learned.
     """
-    os.makedirs(STATE_DIR, exist_ok=True)
+    run_id = state.get("run_id", "")
+    if run_id:
+        run_dir = get_run_dir(run_id)
+        os.makedirs(run_dir, exist_ok=True)
+        progress_path = os.path.join(run_dir, "progress.md")
+    else:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        progress_path = os.path.join(STATE_DIR, "progress.md")
+
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     steps = state.get("steps", [])
@@ -199,23 +305,31 @@ def update_progress_file(state: dict, event: str | None = None):
         lines.append("")
 
     content = "\n".join(lines)
-    with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
+    with open(progress_path, "w", encoding="utf-8") as f:
         f.write(content)
 
 
-def read_progress_file() -> str:
+def read_progress_file(run_id: str = "") -> str:
     """Read the structured progress file.
 
     Returns empty string if the file doesn't exist.
     """
-    if not os.path.exists(PROGRESS_FILE):
+    if run_id:
+        path = os.path.join(get_run_dir(run_id), "progress.md")
+    else:
+        path = os.path.join(STATE_DIR, "progress.md")
+    if not os.path.exists(path):
         return ""
     try:
-        with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return f.read()
     except OSError:
         return ""
 
+
+# ---------------------------------------------------------------------------
+# Step management
+# ---------------------------------------------------------------------------
 
 def add_steps(state: dict, steps: list[dict]) -> dict:
     for i, step in enumerate(steps, 1):

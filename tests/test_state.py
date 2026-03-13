@@ -3,7 +3,12 @@
 import json
 import os
 
-from architect.state import init_state, save_state, load_state, add_steps, append_scratchpad, read_scratchpad
+from architect.state import (
+    init_state, save_state, load_state, add_steps,
+    append_scratchpad, read_scratchpad,
+    get_run_dir, get_specs_dir, get_latest_run_id, list_runs,
+    _write_latest_run,
+)
 
 
 class TestInitState:
@@ -25,26 +30,87 @@ class TestInitState:
         s2 = init_state("goal 2")
         assert s1["run_id"] != s2["run_id"]
 
-    def test_persists_to_disk(self, tmp_workspace):
-        init_state("persist test")
-        state_file = os.path.join(
-            tmp_workspace, ".state", "state.json"
-        )
+    def test_persists_to_run_dir(self, tmp_workspace):
+        state = init_state("persist test")
+        run_dir = get_run_dir(state["run_id"])
+        state_file = os.path.join(run_dir, "state.json")
         assert os.path.exists(state_file)
         with open(state_file) as f:
             data = json.load(f)
         assert data["goal"] == "persist test"
 
+    def test_creates_specs_dir(self, tmp_workspace):
+        state = init_state("specs test")
+        specs_dir = get_specs_dir(state["run_id"])
+        assert os.path.isdir(specs_dir)
+
+    def test_writes_latest_run(self, tmp_workspace):
+        state = init_state("latest test")
+        assert get_latest_run_id() == state["run_id"]
+
+    def test_accepts_explicit_run_id(self, tmp_workspace):
+        state = init_state("explicit", run_id="custom12char")
+        assert state["run_id"] == "custom12char"
+
+    def test_multiple_runs_isolated(self, tmp_workspace):
+        s1 = init_state("goal 1")
+        s2 = init_state("goal 2")
+        # Each run has its own directory
+        assert os.path.isdir(get_run_dir(s1["run_id"]))
+        assert os.path.isdir(get_run_dir(s2["run_id"]))
+        # Loading state for each run returns the correct goal
+        loaded1 = load_state(run_id=s1["run_id"])
+        loaded2 = load_state(run_id=s2["run_id"])
+        assert loaded1["goal"] == "goal 1"
+        assert loaded2["goal"] == "goal 2"
+
 
 class TestSaveLoadState:
     def test_round_trip(self, tmp_workspace):
-        original = {"goal": "test", "status": "running", "steps": []}
-        save_state(original)
-        loaded = load_state()
-        assert loaded == original
+        state = init_state("test")
+        state["status"] = "running"
+        save_state(state)
+        loaded = load_state(run_id=state["run_id"])
+        assert loaded["goal"] == "test"
+        assert loaded["status"] == "running"
 
     def test_load_missing_returns_none(self, tmp_workspace):
         assert load_state() is None
+
+    def test_load_latest_run(self, tmp_workspace):
+        s1 = init_state("goal 1")
+        s2 = init_state("goal 2")
+        loaded = load_state()  # No run_id — should load latest
+        assert loaded["goal"] == "goal 2"
+        assert loaded["run_id"] == s2["run_id"]
+
+    def test_load_specific_run(self, tmp_workspace):
+        s1 = init_state("goal 1")
+        s2 = init_state("goal 2")
+        loaded = load_state(run_id=s1["run_id"])
+        assert loaded["goal"] == "goal 1"
+
+
+class TestRunHelpers:
+    def test_list_runs_empty(self, tmp_workspace):
+        assert list_runs() == []
+
+    def test_list_runs_returns_all(self, tmp_workspace):
+        s1 = init_state("goal 1")
+        s2 = init_state("goal 2")
+        runs = list_runs()
+        assert len(runs) == 2
+        assert s1["run_id"] in runs
+        assert s2["run_id"] in runs
+
+    def test_get_latest_run_id_none(self, tmp_workspace):
+        assert get_latest_run_id() is None
+
+    def test_get_latest_run_id(self, tmp_workspace):
+        s1 = init_state("goal 1")
+        assert get_latest_run_id() == s1["run_id"]
+        s2 = init_state("goal 2")
+        assert get_latest_run_id() == s2["run_id"]
 
 
 class TestAddSteps:
@@ -73,7 +139,7 @@ class TestAddSteps:
     def test_persists_after_add(self, tmp_workspace):
         state = init_state("goal")
         add_steps(state, [{"title": "S", "description": "D"}])
-        loaded = load_state()
+        loaded = load_state(run_id=state["run_id"])
         assert len(loaded["steps"]) == 1
 
 

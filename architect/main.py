@@ -12,11 +12,13 @@ import os
 import sys
 import threading
 import time
+import uuid
 
 from .state import (
     init_state, save_state, load_state, add_steps,
     append_scratchpad, read_scratchpad,
     update_progress_file, read_progress_file,
+    get_run_dir, get_specs_dir, _write_latest_run,
 )
 from .planner import (
     decompose_goal,
@@ -217,19 +219,19 @@ def parse_args():
     )
     parser.add_argument(
         "-o", "--output", type=str, default=None, nargs="?", const="auto",
-        help="Write a JSON results summary (default: .state/output.json)",
+        help="Write a JSON results summary (default: .state/runs/<run_id>/output.json)",
     )
     parser.add_argument(
         "--events", type=str, default=None, nargs="?", const="auto",
-        help="Write event log to this path (default: .state/events.jsonl)",
+        help="Write event log to this path (default: .state/runs/<run_id>/events.jsonl)",
     )
     parser.add_argument(
         "--report", type=str, default=None, nargs="?", const="auto",
-        help="Generate HTML report at this path (default: .state/report.html)",
+        help="Generate HTML report at this path (default: .state/runs/<run_id>/report.html)",
     )
     parser.add_argument(
         "--trace", type=str, default=None, nargs="?", const="auto",
-        help="Export Perfetto trace to this path (default: .state/trace.json)",
+        help="Export Perfetto trace to this path (default: .state/runs/<run_id>/trace.json)",
     )
     parser.add_argument(
         "--explain", action="store_true", default=False,
@@ -811,7 +813,8 @@ def build_context(step: dict, completed_outputs: dict,
                 )
 
     # Section 4a: Structured progress file (replaces raw scratchpad)
-    progress = read_progress_file()
+    current_run_id = state.get("run_id", "") if state else ""
+    progress = read_progress_file(run_id=current_run_id)
     if progress:
         parts.append(f"<progress>\n{progress}\n</progress>")
     else:
@@ -1368,10 +1371,13 @@ def validate_workspace(state: dict, workspace: str) -> dict:
     return validation_data
 
 
-def _finalize_code_tracking():
+def _finalize_code_tracking(run_id: str = ""):
     """Load code versions from disk and record provenance links."""
     tracker = get_code_tracker()
-    cv_dir = os.path.join(WORKSPACE, ".state", "code_versions")
+    if run_id:
+        cv_dir = os.path.join(get_run_dir(run_id), "code_versions")
+    else:
+        cv_dir = os.path.join(WORKSPACE, ".state", "code_versions")
     if os.path.isdir(cv_dir):
         tracker.load_from_dir(cv_dir)
     prov = get_provenance_graph()
@@ -1455,7 +1461,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         # Generate UAS spec
         if dashboard:
             dashboard.set_step_activity(step["id"], "Generating spec...")
-        spec_file = generate_spec(step, total, context)
+        specs_dir = get_specs_dir(run_id) if run_id else ""
+        spec_file = generate_spec(step, total, context, specs_dir=specs_dir)
         logger.info("  Spec written: %s", spec_file)
 
         # Build task for Orchestrator
@@ -1476,6 +1483,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         extra_env = {
             "UAS_STEP_ID": str(step["id"]),
             "UAS_SPEC_ATTEMPT": str(spec_attempt),
+            "UAS_RUN_ID": run_id,
         }
         # Pass step's environment/package requirements to the orchestrator
         # so build_prompt() can include explicit pip install instructions.
@@ -1953,58 +1961,65 @@ def main():
         "1", "true", "yes",
     )
 
+    # Collect flags
     output_flag = args.output or os.environ.get("UAS_OUTPUT") or None
+    report_flag = args.report or os.environ.get("UAS_REPORT") or None
+    trace_flag = args.trace or os.environ.get("UAS_TRACE") or None
+    explain_flag = args.explain or os.environ.get("UAS_EXPLAIN", "").lower() in (
+        "1", "true", "yes",
+    )
+    events_flag = args.events or os.environ.get("UAS_EVENTS") or None
+
+    resume = (args.resume or os.environ.get("UAS_RESUME", "").lower() in (
+        "1", "true", "yes",
+    )) and not args.fresh
+
+    # Determine run context: resume existing run or start fresh.
+    # We need the run_id early so that event log, provenance, and
+    # other per-run artifacts are written to the correct directory.
+    state = None
+    run_id = None
+    if resume:
+        state = try_resume()
+        if state is not None:
+            run_id = state.get("run_id", "")
+
+    if not run_id:
+        run_id = uuid.uuid4().hex[:12]
+
+    # Per-run directory for all artifacts
+    run_dir = get_run_dir(run_id)
+
     if output_flag:
-        state_dir = os.path.join(WORKSPACE, ".state")
         output_path = (
-            os.path.join(state_dir, "output.json")
+            os.path.join(run_dir, "output.json")
             if output_flag == "auto"
             else output_flag
         )
     else:
         output_path = None
 
-    # Report flag
-    report_flag = args.report or os.environ.get("UAS_REPORT") or None
-
-    # Trace flag
-    trace_flag = args.trace or os.environ.get("UAS_TRACE") or None
-
-    # Explain flag
-    explain_flag = args.explain or os.environ.get("UAS_EXPLAIN", "").lower() in (
-        "1", "true", "yes",
-    )
-
-    # Initialize event log and provenance graph
-    events_flag = args.events or os.environ.get("UAS_EVENTS") or None
     if events_flag:
-        state_dir = os.path.join(WORKSPACE, ".state")
         events_path = (
-            os.path.join(state_dir, "events.jsonl")
+            os.path.join(run_dir, "events.jsonl")
             if events_flag == "auto"
             else events_flag
         )
-        provenance_path = os.path.join(state_dir, "provenance.json")
+        provenance_path = os.path.join(run_dir, "provenance.json")
     else:
         events_path = None
         provenance_path = None
+
+    # Initialize singletons (with per-run paths)
     reset_event_log()
     reset_provenance_graph()
     reset_code_tracker()
     event_log = get_event_log(events_path=events_path)
     prov = get_provenance_graph(output_path=provenance_path)
 
-    resume = (args.resume or os.environ.get("UAS_RESUME", "").lower() in (
-        "1", "true", "yes",
-    )) and not args.fresh
-
-    # Try to resume from saved state
-    state = None
-    if resume:
-        state = try_resume()
-
     if state is not None:
         logger.info("Resuming goal: %s\n", state["goal"])
+        _write_latest_run(run_id)
     else:
         # Fresh start
         goal = get_goal(args)
@@ -2021,7 +2036,7 @@ def main():
         logger.info("Phase 1: Decomposing goal into atomic steps...")
         event_log.emit(EventType.DECOMPOSITION_START)
         decompose_start = time.monotonic()
-        state = init_state(goal)
+        state = init_state(goal, run_id=run_id)
         try:
             steps = decompose_goal_with_voting(goal)
         except Exception as e:
@@ -2302,7 +2317,7 @@ def main():
                     "status": "blocked",
                     "total_elapsed": state["total_elapsed"],
                 })
-                _finalize_code_tracking()
+                _finalize_code_tracking(run_id=state.get("run_id", ""))
                 prov.save()
                 dashboard.finish(state)
                 logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
@@ -2374,7 +2389,7 @@ def main():
                     "status": "blocked",
                     "total_elapsed": state["total_elapsed"],
                 })
-                _finalize_code_tracking()
+                _finalize_code_tracking(run_id=state.get("run_id", ""))
                 prov.save()
                 dashboard.finish(state)
                 logger.error("HALTED: Step %s failed irrecoverably.",
@@ -2416,7 +2431,7 @@ def main():
         "status": state["status"],
         "total_elapsed": state.get("total_elapsed", 0.0),
     })
-    _finalize_code_tracking()
+    _finalize_code_tracking(run_id=state.get("run_id", ""))
     prov.save()
 
     # Build shared data for report and explanation
@@ -2443,9 +2458,8 @@ def main():
 
     # Generate HTML report if requested
     if report_flag:
-        state_dir = os.path.join(WORKSPACE, ".state")
         report_path = (
-            os.path.join(state_dir, "report.html")
+            os.path.join(run_dir, "report.html")
             if report_flag == "auto"
             else report_flag
         )
@@ -2459,9 +2473,8 @@ def main():
 
     # Export Perfetto trace if requested
     if trace_flag:
-        state_dir = os.path.join(WORKSPACE, ".state")
         trace_path = (
-            os.path.join(state_dir, "trace.json")
+            os.path.join(run_dir, "trace.json")
             if trace_flag == "auto"
             else trace_flag
         )
@@ -2477,13 +2490,15 @@ def main():
     logger.info("  ALL STEPS COMPLETED SUCCESSFULLY")
     logger.info("%s", "=" * 60)
     dashboard.finish(state)
+    run_rel = os.path.join(".state", "runs", run_id)
+    logger.info("Run ID: %s", run_id)
     logger.info(
         "State saved to: %s",
-        os.path.join(".state", "state.json"),
+        os.path.join(run_rel, "state.json"),
     )
     logger.info(
         "Specs saved to: %s/",
-        os.path.join(".state", "specs"),
+        os.path.join(run_rel, "specs"),
     )
     if events_path:
         logger.info("Events written to: %s", events_path)

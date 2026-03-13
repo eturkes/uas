@@ -126,7 +126,7 @@ descriptions, and dependency structure, then exits without executing anything.
 Write a machine-readable JSON summary of the run:
 
 ```bash
-# Via CLI flag (writes to .state/output.json by default):
+# Via CLI flag (writes to .state/runs/<run_id>/output.json by default):
 uas -o "your goal"
 
 # Specify a custom path:
@@ -145,7 +145,7 @@ The JSON file contains the goal, overall status (`completed`, `failed`, or
 Record a structured event log and provenance graph for the run:
 
 ```bash
-# Via CLI flag (writes to .state/events.jsonl by default):
+# Via CLI flag (writes to .state/runs/<run_id>/events.jsonl by default):
 uas --events "your goal"
 
 # Specify a custom path:
@@ -156,7 +156,7 @@ UAS_EVENTS=events.jsonl uas "your goal"
 ```
 
 The event log records every phase boundary as a JSONL file. The
-provenance graph (`.state/provenance.json`) tracks data lineage
+provenance graph (`.state/runs/<run_id>/provenance.json`) tracks data lineage
 from goal through decomposition, code generation, and execution.
 
 ### HTML Run Report
@@ -165,7 +165,7 @@ Generate a self-contained HTML report with interactive DAG
 visualization, execution timeline, per-step details, and provenance:
 
 ```bash
-# Via CLI flag (writes to .state/report.html by default):
+# Via CLI flag (writes to .state/runs/<run_id>/report.html by default):
 uas --report "your goal"
 
 # Specify a custom path:
@@ -186,7 +186,7 @@ Export a Chrome Trace Event JSON file viewable in
 [Perfetto](https://ui.perfetto.dev) for detailed timeline analysis:
 
 ```bash
-# Via CLI flag (writes to .state/trace.json by default):
+# Via CLI flag (writes to .state/runs/<run_id>/trace.json by default):
 uas --trace "your goal"
 
 # Specify a custom path:
@@ -305,7 +305,7 @@ User (any directory)
          └─ Stage 2: Architect Agent (code in /uas, output in /workspace)
               ├─ Planner        -> Claude Code decomposes goal
               ├─ Spec Generator  -> writes UAS markdown specs
-              ├─ State Manager   -> tracks .state/state.json
+              ├─ State Manager   -> tracks .state/runs/<run_id>/
               └─ Executor        -> invokes Orchestrator loop
                    └─ uas-sandbox (python:3.12-slim)
                        └─ Orchestrator
@@ -351,7 +351,7 @@ each completed dependency is summarized into a `<dependency>` element
 with `<files_produced>`, `<key_outputs>`, and `<relevant_data>` tags,
 using the step's `UAS_RESULT` summary as the primary source and raw
 stdout only as a fallback. A **structured progress file**
-(`.state/progress.md`) replaces the flat scratchpad for context
+(`.state/runs/<run_id>/progress.md`) replaces the flat scratchpad for context
 building, with sections for current state, key decisions, completed
 steps, and lessons learned — updated after every step completion or
 failure. **Recursive workspace scanning** (up to 3 levels deep, skipping
@@ -447,8 +447,12 @@ run concurrently, optionally capped by `UAS_MAX_PARALLEL`. Per-step
 timing tracks LLM call time vs sandbox execution time for performance
 analysis.
 
-**State:** All state is persisted to `.state/state.json`
+**State:** Each run's state is persisted to `.state/runs/<run_id>/state.json`
 after every significant event (step start, completion, failure, rewrite).
+Per-run directories (`.state/runs/<run_id>/`) isolate all artifacts
+(specs, code versions, events, reports) so multiple runs never overwrite
+each other. A shared scratchpad (`.state/scratchpad.md`) enables
+cross-run learning with per-run filtering via `[run:<run_id>]` tags.
 An environment probe runs on the first step, recording Python version,
 installed packages, and disk space to the scratchpad so subsequent steps
 can avoid wrong assumptions about the execution environment.
@@ -471,18 +475,18 @@ progress reporting.
 
 **Event log & provenance:** When `--events` is passed (or `UAS_EVENTS`
 is set), every significant action is recorded as a typed event in
-`.state/events.jsonl` (one JSON object per line). A W3C PROV-inspired
-provenance graph (`.state/provenance.json`) tracks the full
-transformation chain from goal to result using content-addressed
-entities, activities, and agents. Cross-attempt linking connects
-rewrite errors to subsequent code versions.
+`.state/runs/<run_id>/events.jsonl` (one JSON object per line). A W3C
+PROV-inspired provenance graph (`.state/runs/<run_id>/provenance.json`)
+tracks the full transformation chain from goal to result using
+content-addressed entities, activities, and agents. Cross-attempt
+linking connects rewrite errors to subsequent code versions.
 
 **Code evolution tracking:** Every version of generated code is
 recorded across orchestrator retries and architect-level rewrites
 (up to 12 versions per step). Versions are persisted to
-`.state/code_versions/{step_id}.json` with metadata (attempt
-indices, prompt hash, exit code, error summary). Unified diffs
-between consecutive versions are computed and displayed in the
+`.state/runs/<run_id>/code_versions/{step_id}.json` with metadata
+(attempt indices, prompt hash, exit code, error summary). Unified
+diffs between consecutive versions are computed and displayed in the
 HTML report with colorized add/remove highlighting. A retry
 effectiveness metric indicates whether code changes converged
 toward a solution. Each code version is linked in the provenance
@@ -490,7 +494,7 @@ graph via `wasDerivedFrom` edges.
 
 **Execution trace export:** When `--trace` is passed (or `UAS_TRACE`
 is set), a Chrome Trace Event JSON file is written to
-`.state/trace.json`. The trace maps Architect, Orchestrator, and
+`.state/runs/<run_id>/trace.json`. The trace maps Architect, Orchestrator, and
 Sandbox activity to separate processes with per-step threads,
 enabling microsecond-precision timeline analysis in Perfetto or
 `chrome://tracing`. Counter tracks show cumulative LLM calls and

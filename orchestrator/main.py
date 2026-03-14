@@ -26,6 +26,32 @@ STDERR_END = "===STDERR_END==="
 MAX_RETRIES = 3
 MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
+RETRY_STRATEGY_PROMPT = """\
+You are advising a code generation system that is retrying after a failed attempt.
+
+<task>
+{task}
+</task>
+
+<attempt_info>
+Attempt number: {attempt} of {max_retries}
+</attempt_info>
+
+<previous_code>
+{code_section}
+</previous_code>
+
+<error_output>
+{error_output}
+</error_output>
+
+{history_section}
+
+Based on the error and attempt history, write a focused retry instruction (2-3 sentences) \
+that tells the code generator exactly what to do differently. Be specific about the root \
+cause and the fix. Do not include any JSON, code blocks, or XML tags — just the plain text \
+instruction."""
+
 logger = logging.getLogger(__name__)
 
 _UAS_RESULT_PATTERN = re.compile(
@@ -309,6 +335,82 @@ def scan_workspace(workspace_path: str, max_chars: int = 8000) -> str:
     return "\n\n".join(lines)
 
 
+def _hardcoded_retry_guidance(attempt: int, code_section: str,
+                             previous_error: str) -> str:
+    if attempt >= MAX_RETRIES:
+        return (
+            "FINAL ATTEMPT. All previous approaches have failed.\n\n"
+            "Write the simplest possible script that accomplishes the core goal:\n"
+            "- Use only the standard library if third-party packages are causing issues.\n"
+            "- Wrap every external call in try/except with a meaningful fallback.\n"
+            "- If the task involves network resources that may be unreliable, include\n"
+            "  offline fallback behavior.\n"
+            "- Validate every input and assumption.\n\n"
+            "Write your analysis in <analysis> tags, then write the defensive script."
+        )
+    elif attempt > 2:
+        return (
+            "Your script has failed twice. The previous approach is fundamentally flawed.\n\n"
+            "Do NOT repeat the same approach. Step back and consider:\n"
+            "- Is there a completely different way to accomplish this task?\n"
+            "- Is the task description itself ambiguous? Interpret it more conservatively.\n"
+            "- Are you relying on an assumption that's incorrect (API format, file location,\n"
+            "  data schema)? Use the network to verify.\n\n"
+            "Write your new approach in <analysis> tags, then write a new script from scratch."
+        )
+    else:
+        return (
+            "Your previous script failed. Here is the full output:\n\n"
+            "Before writing the fix, diagnose the root cause:\n"
+            "- Read the error message carefully. What specific line/operation failed?\n"
+            "- Is this a missing dependency, a wrong file path, a network issue, a logic error,\n"
+            "  or a data format mismatch?\n"
+            "- What is the minimal change needed to fix it?\n\n"
+            "Write your diagnosis in <analysis> tags, then write the corrected script."
+        )
+
+
+def _llm_retry_guidance(task: str, attempt: int, code_section: str,
+                        previous_error: str,
+                        attempt_history: list[dict] | None) -> str | None:
+    try:
+        history_section = ""
+        if attempt_history:
+            lines = []
+            for entry in attempt_history:
+                a = entry.get("attempt", "?")
+                err = entry.get("error", "")
+                lines.append(f"Attempt {a}: {err[:300]}")
+            history_section = (
+                "<attempt_history>\n" + "\n".join(lines) + "\n</attempt_history>"
+            )
+
+        prompt = RETRY_STRATEGY_PROMPT.format(
+            task=task[:2000],
+            attempt=attempt,
+            max_retries=MAX_RETRIES,
+            code_section=code_section[:4000] if code_section else "(no code)",
+            error_output=previous_error[:3000],
+            history_section=history_section,
+        )
+
+        client = get_llm_client(role="planner")
+        response = client.generate(prompt)
+
+        guidance = response.strip()
+        if not guidance or len(guidance) < 10:
+            return None
+        return (
+            guidance
+            + "\n\nWrite your analysis in <analysis> tags, then write the corrected script."
+        )
+    except Exception:
+        logger.debug(
+            "LLM retry guidance failed, using hardcoded fallback", exc_info=True,
+        )
+        return None
+
+
 def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  previous_code: str | None = None,
                  environment: list[str] | None = None,
@@ -545,66 +647,25 @@ If you don't print UAS_RESULT, the system cannot tell if you succeeded.
                 f"\nThe script that failed:\n```python\n{previous_code}\n```\n"
             )
 
-        if attempt >= MAX_RETRIES:
-            # Final attempt — simplify and be defensive
-            prompt += f"""
+        guidance = None
+        if not MINIMAL_MODE:
+            guidance = _llm_retry_guidance(
+                task, attempt, code_section, previous_error, attempt_history,
+            )
+        if guidance is None:
+            guidance = _hardcoded_retry_guidance(
+                attempt, code_section, previous_error,
+            )
+
+        prompt += f"""
 
 <previous_error attempt="{attempt - 1}">
-FINAL ATTEMPT. All previous approaches have failed.
-
 {code_section}
 ```
 {previous_error}
 ```
 
-Write the simplest possible script that accomplishes the core goal:
-- Use only the standard library if third-party packages are causing issues.
-- Wrap every external call in try/except with a meaningful fallback.
-- If the task involves network resources that may be unreliable, include
-  offline fallback behavior.
-- Validate every input and assumption.
-
-Write your analysis in <analysis> tags, then write the defensive script.
-</previous_error>"""
-        elif attempt > 2:
-            # Second retry — fundamentally different approach
-            prompt += f"""
-
-<previous_error attempt="{attempt - 1}">
-Your script has failed twice. The previous approach is fundamentally flawed.
-
-{code_section}
-```
-{previous_error}
-```
-
-Do NOT repeat the same approach. Step back and consider:
-- Is there a completely different way to accomplish this task?
-- Is the task description itself ambiguous? Interpret it more conservatively.
-- Are you relying on an assumption that's incorrect (API format, file location,
-  data schema)? Use the network to verify.
-
-Write your new approach in <analysis> tags, then write a new script from scratch.
-</previous_error>"""
-        else:
-            # First retry — diagnose root cause
-            prompt += f"""
-
-<previous_error attempt="{attempt - 1}">
-Your previous script failed. Here is the full output:
-
-{code_section}
-```
-{previous_error}
-```
-
-Before writing the fix, diagnose the root cause:
-- Read the error message carefully. What specific line/operation failed?
-- Is this a missing dependency, a wrong file path, a network issue, a logic error,
-  or a data format mismatch?
-- What is the minimal change needed to fix it?
-
-Write your diagnosis in <analysis> tags, then write the corrected script.
+{guidance}
 </previous_error>"""
 
     return prompt

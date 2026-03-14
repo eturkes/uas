@@ -82,7 +82,8 @@ class TestBuildPrompt:
         prompt = build_prompt("task", attempt=2, previous_error=None)
         assert "previous_error" not in prompt
 
-    def test_final_attempt_defensive_instructions(self):
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
+    def test_final_attempt_defensive_instructions(self, _mock_llm):
         prompt = build_prompt("task", attempt=MAX_RETRIES,
                               previous_error="error",
                               previous_code="code")
@@ -91,8 +92,9 @@ class TestBuildPrompt:
         assert "try/except" in prompt
         assert "standard library" in prompt
 
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.MAX_RETRIES", 4)
-    def test_second_retry_different_strategy(self):
+    def test_second_retry_different_strategy(self, _mock_llm):
         prompt = build_prompt("task", attempt=3,
                               previous_error="error",
                               previous_code="code")
@@ -119,7 +121,8 @@ class TestBuildPrompt:
         prompt = build_prompt("do work", attempt=1)
         assert "workspace_state" not in prompt
 
-    def test_analysis_instruction_in_retry(self):
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
+    def test_analysis_instruction_in_retry(self, _mock_llm):
         prompt = build_prompt("any task", attempt=2, previous_error="some error")
         assert "<analysis>" in prompt
         assert "diagnose the root cause" in prompt
@@ -205,10 +208,11 @@ class TestMainLoop:
         # Two sandbox calls: verify + execute
         assert mock_sandbox.call_count == 2
 
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_retry_on_sandbox_failure(self, mock_client_factory, mock_sandbox, mock_args):
+    def test_retry_on_sandbox_failure(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = '```python\nprint("hello")\n```'
@@ -225,10 +229,11 @@ class TestMainLoop:
         assert exc_info.value.code == 0
         assert mock_client.generate.call_count == 2
 
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_failure_after_all_retries(self, mock_client_factory, mock_sandbox, mock_args):
+    def test_failure_after_all_retries(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = '```python\nprint("hello")\n```'
@@ -293,10 +298,11 @@ class TestMainLoop:
             main()
         assert exc_info.value.code == 0
 
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args):
+    def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         # First response has syntax error, second is valid
@@ -316,10 +322,11 @@ class TestMainLoop:
         # Sandbox: 1 verify + 1 execute (syntax error skipped sandbox)
         assert mock_sandbox.call_count == 2
 
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args):
+    def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         # First response uses input(), second is valid
@@ -379,3 +386,82 @@ class TestPreExecutionCheck:
         errors, _warnings = pre_execution_check(code)
         # Regex matches inside strings — this is a known limitation but acceptable
         assert len(errors) <= 1
+
+
+class TestRetryStrategy:
+    @patch("orchestrator.main.get_llm_client")
+    def test_llm_guidance_injected_into_prompt(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = (
+            "The error is a missing import. Add 'import os' at the top."
+        )
+        mock_get_client.return_value = client
+
+        prompt = build_prompt("create a file", attempt=2,
+                              previous_error="NameError: name 'os' is not defined",
+                              previous_code="os.path.join('a', 'b')")
+        assert "missing import" in prompt
+        assert "<previous_error" in prompt
+        assert "</previous_error>" in prompt
+        assert "<analysis>" in prompt
+        client.generate.assert_called_once()
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_llm_failure_falls_back_to_hardcoded(self, mock_get_client):
+        mock_get_client.side_effect = RuntimeError("API unavailable")
+
+        prompt = build_prompt("task", attempt=MAX_RETRIES,
+                              previous_error="error",
+                              previous_code="code")
+        assert "FINAL ATTEMPT" in prompt
+        assert "simplest possible script" in prompt
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_llm_empty_response_falls_back(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = ""
+        mock_get_client.return_value = client
+
+        prompt = build_prompt("task", attempt=2,
+                              previous_error="error",
+                              previous_code="code")
+        assert "diagnose the root cause" in prompt
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    def test_minimal_mode_skips_llm(self):
+        prompt = build_prompt("task", attempt=2,
+                              previous_error="error",
+                              previous_code="code")
+        assert "diagnose the root cause" in prompt
+        assert "<previous_error" in prompt
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_prompt_xml_structure_with_llm_guidance(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "Try a different approach using subprocess."
+        mock_get_client.return_value = client
+
+        prompt = build_prompt("run a command", attempt=2,
+                              previous_error="OSError: file not found",
+                              previous_code="open('missing.txt')")
+        assert "<previous_error" in prompt
+        assert "</previous_error>" in prompt
+        assert "<environment>" in prompt
+        assert "<task>" in prompt
+        assert "<role>" in prompt
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_attempt_history_passed_to_llm(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "Use a different library for HTTP requests."
+        mock_get_client.return_value = client
+
+        history = [
+            {"attempt": 1, "error": "ConnectionError", "code_snippet": "import requests"},
+        ]
+        build_prompt("fetch data", attempt=2,
+                     previous_error="ConnectionError",
+                     previous_code="import requests",
+                     attempt_history=history)
+        call_args = client.generate.call_args[0][0]
+        assert "ConnectionError" in call_args

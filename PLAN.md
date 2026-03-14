@@ -59,7 +59,7 @@ happen to use similar language.
 ---
 
 ## Section 2: LLM-Driven Orchestrator Retry Strategy (Replace Hardcoded Escalation)
-- [ ] **Status: Pending**
+- [x] **Status: Complete**
 
 ### Problem
 `orchestrator/main.py:541-608` contains three hardcoded retry escalation tiers in

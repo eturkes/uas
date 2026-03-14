@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -92,6 +93,117 @@ _ERROR_RETRY_BUDGETS = {
     "unknown": MAX_SPEC_REWRITES,
 }
 
+
+_GITIGNORE_CONTENT = """\
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.env
+venv/
+dist/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+
+# Node
+node_modules/
+
+# UAS internal
+.state/
+.claude/
+"""
+
+
+def ensure_git_repo(workspace: str) -> None:
+    """Initialize a git repo in the workspace if it doesn't exist yet.
+
+    Silently skips if git is unavailable, init fails, or the workspace
+    has fewer than 2 files.
+    """
+    try:
+        git_dir = os.path.join(workspace, ".git")
+        if os.path.isdir(git_dir):
+            return
+
+        # Only init if workspace has >1 file
+        entries = [
+            e for e in os.listdir(workspace)
+            if not e.startswith(".")
+        ]
+        if len(entries) <= 1:
+            return
+
+        # Write .gitignore
+        gitignore_path = os.path.join(workspace, ".gitignore")
+        if not os.path.exists(gitignore_path):
+            with open(gitignore_path, "w", encoding="utf-8") as f:
+                f.write(_GITIGNORE_CONTENT)
+
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Initial workspace state"],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+        logger.debug("Git repo initialized in %s", workspace)
+    except Exception:
+        logger.debug("Git init skipped/failed in %s", workspace, exc_info=True)
+
+
+def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
+    """Commit current workspace state as a checkpoint after a successful step.
+
+    Silently skips if the workspace is not a git repo, there are no changes,
+    or any git operation fails.
+    """
+    try:
+        git_dir = os.path.join(workspace, ".git")
+        if not os.path.isdir(git_dir):
+            return
+
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+
+        # Check if there are staged changes
+        diff = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=workspace,
+            capture_output=True,
+        )
+        if diff.returncode == 0:
+            # No changes to commit
+            return
+
+        msg = f"Step {step_id}: {step_title}"
+        subprocess.run(
+            ["git", "commit", "-m", msg],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+        logger.debug("Git checkpoint: %s", msg)
+    except Exception:
+        logger.debug(
+            "Git checkpoint skipped/failed for step %s", step_id,
+            exc_info=True,
+        )
 
 
 def _text_similarity(a: str, b: str) -> float:
@@ -1662,6 +1774,9 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                         "step_title": step["title"],
                     })
 
+                # Section 15: Git checkpoint after successful step
+                git_checkpoint(WORKSPACE, step["id"], step["title"])
+
                 return True
 
             # Validation failed — treat as step failure
@@ -2067,6 +2182,9 @@ def main():
     if dry_run:
         dashboard.print_plan(state)
         sys.exit(0)
+
+    # Initialize git repo before execution starts
+    ensure_git_repo(WORKSPACE)
 
     # Phase 2: Execute (resume-aware, parallel where possible)
     logger.info("\nPhase 2: Executing steps via Orchestrator...")

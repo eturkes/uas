@@ -837,7 +837,7 @@ the planner should be told to look things up.
 
 ---
 
-## [ ] Section 15: Implicit Git Management — Automate Version Control
+## [x] Section 15: Implicit Git Management — Automate Version Control
 
 **Goal:** Automatically manage Git in the workspace so the user doesn't have to
 ask for it. Each step's output gets committed, creating a clean history.

@@ -708,10 +708,18 @@ REFLECT_PROMPT = """\
 </failure_output>
 
 <original_task>{description}</original_task>
-{previous_attempts_section}{escalation_instruction}
+{previous_attempts_section}
 <instructions>
-You are diagnosing and fixing a failed code-generation task. Follow the structured \
-reflection process below.
+This step has failed {attempts} time(s). Based on the failure history above, \
+decide your strategy:
+- If the core approach is sound but has a fixable bug, fix the bug.
+- If the approach itself is flawed, design a completely new approach.
+- If the task is too complex for a single script, break it into sequential \
+phases within the same script (do phase 1, verify it worked, then phase 2).
+- If external resources are unreliable, add defensive fallbacks.
+
+Choose the strategy that best addresses the pattern of failures you see. \
+Follow the structured reflection process below.
 </instructions>
 
 <process>
@@ -933,22 +941,6 @@ def trace_root_cause(step: dict, error: str,
     return ("self", None)
 
 
-ESCALATION_INSTRUCTIONS = {
-    0: "",
-    1: (
-        "\n<escalation>IMPORTANT: The previous approach has already failed. "
-        "You MUST propose a fundamentally different strategy. Do NOT repeat "
-        "or slightly modify the previous approach.</escalation>"
-    ),
-    3: (
-        "\n<escalation>This is the FINAL attempt. Be maximally defensive:\n"
-        "- Include diagnostic commands at the start of the script (print Python "
-        "version, list installed packages, check network connectivity)\n"
-        "- Wrap EVERY external call in try/except with detailed error messages\n"
-        "- Validate ALL inputs before using them\n"
-        "- Use the simplest possible approach to achieve the goal</escalation>"
-    ),
-}
 
 DECOMPOSE_STEP_PROMPT = """\
 <failed_task>{description}</failed_task>
@@ -984,20 +976,23 @@ def _is_confused_output(result: str, original_desc: str, error: str) -> bool:
 
 def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
                         orchestrator_stderr: str,
-                        escalation_level: int = 0,
                         previous_attempts: list[dict] | None = None,
                         reflections: list[dict] | None = None) -> str:
-    """Reflection-based task rewrite with progressive escalation.
+    """LLM-driven task rewrite based on full failure history.
 
-    Uses structured diagnosis/strategy/rewrite phases instead of simple rewriting.
+    The LLM receives all prior attempt history and reflections and freely
+    chooses the best strategy (fix a bug, try a new approach, decompose,
+    add defensive fallbacks) instead of following a hardcoded escalation
+    sequence.
+
     Includes red-flagging: outputs showing signs of confusion are resampled once.
 
     Args:
         previous_attempts: List of prior attempt summaries for this step,
             each with keys: attempt, error, strategy. Included in the prompt
             so the LLM can see the full history and avoid repeating failed strategies.
-        reflections: List of structured reflections from prior failures
-            (Section 3a), each with keys: attempt, error_type, root_cause,
+        reflections: List of structured reflections from prior failures,
+            each with keys: attempt, error_type, root_cause,
             strategy_tried, lesson, what_to_try_next. Included as
             <reflection_history> in the prompt.
     """
@@ -1007,7 +1002,7 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
     stdout_trimmed = orchestrator_stdout[-trim_limit:] if len(orchestrator_stdout) > trim_limit else orchestrator_stdout
     stderr_trimmed = orchestrator_stderr[-trim_limit:] if len(orchestrator_stderr) > trim_limit else orchestrator_stderr
 
-    escalation = ESCALATION_INSTRUCTIONS.get(escalation_level, "")
+    attempts = len(previous_attempts) if previous_attempts else 1
 
     previous_attempts_section = ""
     if previous_attempts:
@@ -1025,7 +1020,7 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
             + "\n</previous_attempts>"
         )
 
-    # Section 3a: Include structured reflection history
+    # Include structured reflection history
     if reflections:
         ref_lines = []
         for ref in reflections:
@@ -1047,14 +1042,13 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
         description=step["description"],
         stdout=stdout_trimmed,
         stderr=stderr_trimmed,
-        escalation_instruction=escalation,
+        attempts=attempts,
         previous_attempts_section=previous_attempts_section,
     )
 
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START,
-                   data={"purpose": "reflect_and_rewrite",
-                         "escalation_level": escalation_level})
+                   data={"purpose": "reflect_and_rewrite"})
     response = client.generate(prompt)
     event_log.emit(EventType.LLM_CALL_COMPLETE,
                    data={"purpose": "reflect_and_rewrite"})

@@ -249,27 +249,42 @@ class TestReflectAndRewrite:
         assert "<strategies>" not in result
 
     @patch("architect.planner.get_llm_client")
-    def test_escalation_alternative_approach(self, mock_get_client):
+    def test_llm_driven_strategy_menu_in_prompt(self, mock_get_client):
         client = MagicMock()
         client.generate.return_value = "Use a completely different approach"
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
-        result = reflect_and_rewrite(step, "stdout", "stderr", escalation_level=1)
+        attempts = [
+            {"attempt": 1, "error": "import error", "strategy": "attempt 1"},
+        ]
+        result = reflect_and_rewrite(
+            step, "stdout", "stderr", previous_attempts=attempts
+        )
         prompt = client.generate.call_args[0][0]
-        assert "fundamentally different strategy" in prompt
+        assert "failed 1 time(s)" in prompt
+        assert "fixable bug" in prompt
+        assert "completely new approach" in prompt
+        assert "defensive fallbacks" in prompt
         assert result == "Use a completely different approach"
 
     @patch("architect.planner.get_llm_client")
-    def test_escalation_final_attempt(self, mock_get_client):
+    def test_multiple_attempts_count(self, mock_get_client):
         client = MagicMock()
         client.generate.return_value = "Final defensive approach"
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
-        result = reflect_and_rewrite(step, "stdout", "stderr", escalation_level=3)
+        attempts = [
+            {"attempt": 1, "error": "err1", "strategy": "attempt 1"},
+            {"attempt": 2, "error": "err2", "strategy": "attempt 2"},
+            {"attempt": 3, "error": "err3", "strategy": "attempt 3"},
+        ]
+        result = reflect_and_rewrite(
+            step, "stdout", "stderr", previous_attempts=attempts
+        )
         prompt = client.generate.call_args[0][0]
-        assert "FINAL attempt" in prompt
+        assert "failed 3 time(s)" in prompt
         assert result == "Final defensive approach"
 
     @patch("architect.planner.get_llm_client")

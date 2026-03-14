@@ -678,7 +678,7 @@ approaches it already tried.
 
 ---
 
-## [ ] Section 12: LLM-Driven Retry Strategy — Let the LLM Choose Its Approach
+## [x] Section 12: LLM-Driven Retry Strategy — Let the LLM Choose Its Approach
 
 **Goal:** Instead of hardcoded escalation sequences (reflect → alternative →
 decompose → defensive), let the LLM choose its own retry strategy based on

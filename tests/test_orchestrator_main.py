@@ -20,7 +20,7 @@ class TestBuildPrompt:
         prompt = build_prompt("any task", attempt=1)
         assert "<role>" in prompt
         assert "</role>" in prompt
-        assert "expert Python engineer" in prompt
+        assert "expert engineer" in prompt
 
     def test_includes_xml_environment_section(self):
         prompt = build_prompt("any task", attempt=1)
@@ -49,8 +49,8 @@ class TestBuildPrompt:
 
     def test_includes_sandbox_constraints(self):
         prompt = build_prompt("any task", attempt=1)
-        assert "unrestricted network access" in prompt
-        assert "Install any packages" in prompt
+        assert "UNRESTRICTED NETWORK" in prompt
+        assert "PACKAGE INSTALLATION" in prompt
 
     def test_includes_common_failure_guidance(self):
         prompt = build_prompt("any task", attempt=1)
@@ -113,10 +113,10 @@ class TestBuildPrompt:
         prompt = build_prompt("do work", attempt=1)
         assert "workspace_state" not in prompt
 
-    def test_analysis_instruction_in_role(self):
-        prompt = build_prompt("any task", attempt=1)
+    def test_analysis_instruction_in_retry(self):
+        prompt = build_prompt("any task", attempt=2, previous_error="some error")
         assert "<analysis>" in prompt
-        assert "analyze the task" in prompt
+        assert "analyze the root cause" in prompt
 
     def test_data_before_instructions(self):
         """Data sections (environment, task) should appear before instructions (role, constraints)."""

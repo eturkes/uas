@@ -1,5 +1,13 @@
 # CLAUDE.md - Workspace Instructions for UAS Code Generation
 
+## Autonomy
+You are in an isolated, disposable container with full autonomy:
+- Root access, unrestricted network, no firewalls, no permission boundaries
+- Install any packages, run any commands, access any URLs, clone any repos
+- If you need a tool, install it. If you need information, fetch it.
+- If you're unsure about a library version or API, check PyPI or the docs.
+Act decisively. Never hedge about permissions or capabilities.
+
 ## Role
 You are generating a self-contained Python script to accomplish a specific task.
 Your script will run inside an isolated workspace directory.
@@ -8,7 +16,8 @@ Your script will run inside an isolated workspace directory.
 - Python 3.12 (full standard library available)
 - Full network access and root permissions
 - Workspace directory: use `os.environ.get('WORKSPACE', '/workspace')` for all file paths
-- Packages are NOT pre-installed beyond the standard library -- install what you need
+- No packages are pre-installed. Proactively install everything you need, including
+  dev tools (linters, formatters, test runners) when they'd improve quality.
 
 ## Coding Standards
 - Produce a single, self-contained Python script with all imports at the top

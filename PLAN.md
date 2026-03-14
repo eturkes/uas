@@ -12,7 +12,7 @@
 
 ---
 
-## [ ] Section 1: Autonomy Awareness — Make the LLM Know What It Can Do
+## [x] Section 1: Autonomy Awareness — Make the LLM Know What It Can Do
 
 **Goal:** Agents should inherently understand they have full autonomy — network,
 root, packages, commands, web search — and be instructed to use these capabilities

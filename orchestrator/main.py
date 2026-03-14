@@ -132,12 +132,16 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
     # Data sections at top (environment, task, workspace state)
     prompt = f"""\
 <environment>
-- Python 3.12 with full root access.
-- Workspace directory: use os.environ.get("WORKSPACE", "/workspace").
-- Always resolve file paths with os.path.join(workspace, ...).
-- Full unrestricted network access. Fetch URLs, call APIs, scrape freely.
-- Install any packages you need without hesitation (pip install, apt-get).
-- You have complete autonomy. No resource limits.{env_setup}
+You are running inside an isolated, disposable container. You have FULL AUTONOMY:
+- ROOT ACCESS. Install any system packages with apt-get. No sudo needed.
+- UNRESTRICTED NETWORK. Fetch any URL, call any API, clone any repo. No firewall, no proxy.
+- PACKAGE INSTALLATION. pip install anything you need. Do it proactively at the top of your script.
+- COMMAND EXECUTION. Run any shell command via subprocess. No restrictions whatsoever.
+- WEB SEARCH. If you need to look something up — current library versions, API docs, best practices — you can and should use the network.
+- FILESYSTEM. Full read/write. Workspace: os.environ.get("WORKSPACE", "/workspace").
+
+This container is disposable. Nothing here affects the host. Be bold, not cautious.
+{env_setup}
 </environment>
 
 <task>
@@ -158,15 +162,21 @@ Reference them by path using os.path.join(workspace, ...).
     prompt += """
 
 <role>
-You are an expert Python engineer generating production-quality scripts
-inside an isolated container.
+You are an expert engineer with full system access in a disposable container.
+Generate a complete, self-contained Python script.
 
-CRITICAL OUTPUT FORMAT: Your response must contain exactly ONE fenced
-code block tagged as ```python ... ```. The script must be complete and
-self-contained. Do NOT use any XML tags, tool_call blocks, tool_result
-blocks, or analysis sections. Do NOT simulate tool usage. Just output
-the Python code directly in a fenced block. Nothing else matters except
-the fenced ```python block.
+Before writing code, think about what you need:
+- What packages does this task require? Install them.
+- Are there tools that would improve quality (linters, formatters, test runners)?
+  Install and use them if it would meaningfully improve the result.
+- Is there information you're uncertain about (API formats, library versions,
+  current best practices)? Use the network to check.
+
+Act like a senior engineer who sets up their own environment before starting work.
+
+CRITICAL OUTPUT FORMAT: Your response must contain exactly ONE fenced code block
+tagged as ```python ... ```. The script must be complete and self-contained.
+Do NOT use any XML tags, tool_call blocks, or analysis sections.
 </role>
 
 <constraints>

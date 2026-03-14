@@ -780,6 +780,72 @@ def _get_best_of_n(attempt: int) -> int:
     return min(attempt, max_n)
 
 
+BEST_OF_N_PROMPT = """\
+You are advising a code generation system on how many alternative solutions to generate for a retry.
+
+<task>
+{task}
+</task>
+
+<error>
+{error}
+</error>
+
+<attempt>{attempt}</attempt>
+
+Should the system generate 1, 2, or 3 alternative solutions for this retry?
+Consider:
+- If the error suggests a clear, obvious fix (e.g. typo, missing import, wrong variable name), N=1 suffices.
+- If the error is ambiguous and multiple approaches could work, N=2 helps.
+- If the error is complex or fundamental (e.g. wrong algorithm, architectural issue), N=3 gives the best chance.
+
+Return ONLY a JSON object (no other text):
+{{"n": 1}}
+
+n must be 1, 2, or 3."""
+
+
+def _get_best_of_n_llm(attempt: int, task: str, previous_error: str) -> int:
+    max_n = int(os.environ.get("UAS_BEST_OF_N", "1"))
+    if max_n <= 1 or attempt <= 1:
+        return 1
+
+    try:
+        from architect.events import EventType, get_event_log
+
+        prompt = BEST_OF_N_PROMPT.format(
+            task=task[:2000],
+            error=previous_error[:2000],
+            attempt=attempt,
+        )
+
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START, data={"purpose": "best_of_n_budget"})
+        client = get_llm_client(role="planner")
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "best_of_n_budget"})
+
+        text = response.strip()
+        fence_match = re.search(
+            r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL,
+        )
+        if fence_match:
+            text = fence_match.group(1)
+        else:
+            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+            if brace_match:
+                text = brace_match.group(0)
+
+        data = json.loads(text)
+        recommended = int(data.get("n", attempt))
+        recommended = max(1, min(recommended, 3))
+        return min(recommended, max_n)
+    except Exception:
+        logger.debug("LLM best-of-N budget failed, using linear formula", exc_info=True)
+
+    return _get_best_of_n(attempt)
+
+
 SCORE_GUIDANCE_PROMPT = """\
 Given this task, what are the most important success signals?
 
@@ -1182,7 +1248,10 @@ def main():
                               attempt_history=attempt_history or None)
 
         # Section 7c: Determine N for this attempt (budget-aware gating).
-        n = _get_best_of_n(attempt)
+        if not MINIMAL_MODE and previous_error:
+            n = _get_best_of_n_llm(attempt, task, previous_error)
+        else:
+            n = _get_best_of_n(attempt)
 
         if n > 1:
             # Section 7a/7b: Parallel best-of-N generation + execution voting.

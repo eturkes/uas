@@ -368,7 +368,7 @@ computation task, stdout content matters most.
 ---
 
 ## Section 10: LLM-Adaptive Best-of-N Budget
-- [ ] **Status: Pending**
+- [x] **Status: Complete**
 
 ### Problem
 `orchestrator/main.py:631-643` (`_get_best_of_n`) uses a simple linear formula:

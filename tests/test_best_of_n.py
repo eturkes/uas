@@ -10,11 +10,13 @@ import pytest
 from orchestrator.main import (
     _APPROACH_HINTS,
     _get_best_of_n,
+    _get_best_of_n_llm,
     _get_score_priorities,
     _score_guidance_cache,
     generate_and_vote,
     main,
     score_result,
+    BEST_OF_N_PROMPT,
     SCORE_GUIDANCE_PROMPT,
     MAX_RETRIES,
 )
@@ -505,3 +507,75 @@ class TestTaskAwareScoring:
         score_result({"exit_code": 0, "stdout": "", "stderr": ""}, task="build a calculator")
         prompt = mock_client.generate.call_args[0][0]
         assert "build a calculator" in prompt
+
+
+class TestGetBestOfNLlm:
+    """Section 10: LLM-adaptive best-of-N budget."""
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_llm_recommends_n1_for_obvious_fix(self, mock_get_client, monkeypatch):
+        monkeypatch.setenv("UAS_BEST_OF_N", "3")
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '{"n": 1}'
+        mock_get_client.return_value = mock_client
+
+        result = _get_best_of_n_llm(2, "build a script", "NameError: name 'x' is not defined")
+        assert result == 1
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_llm_recommends_n3_for_complex_error(self, mock_get_client, monkeypatch):
+        monkeypatch.setenv("UAS_BEST_OF_N", "3")
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '{"n": 3}'
+        mock_get_client.return_value = mock_client
+
+        result = _get_best_of_n_llm(2, "build a web app", "architectural failure in routing")
+        assert result == 3
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_llm_failure_falls_back_to_linear(self, mock_get_client, monkeypatch):
+        monkeypatch.setenv("UAS_BEST_OF_N", "3")
+        mock_client = MagicMock()
+        mock_client.generate.side_effect = RuntimeError("API down")
+        mock_get_client.return_value = mock_client
+
+        result = _get_best_of_n_llm(2, "task", "some error")
+        assert result == _get_best_of_n(2)
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_capped_by_uas_best_of_n(self, mock_get_client, monkeypatch):
+        monkeypatch.setenv("UAS_BEST_OF_N", "2")
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '{"n": 3}'
+        mock_get_client.return_value = mock_client
+
+        result = _get_best_of_n_llm(2, "task", "error")
+        assert result == 2
+
+    def test_attempt_1_always_returns_1(self, monkeypatch):
+        monkeypatch.setenv("UAS_BEST_OF_N", "3")
+        assert _get_best_of_n_llm(1, "task", "error") == 1
+
+    def test_disabled_when_max_n_is_1(self, monkeypatch):
+        monkeypatch.setenv("UAS_BEST_OF_N", "1")
+        assert _get_best_of_n_llm(2, "task", "error") == 1
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_invalid_json_falls_back(self, mock_get_client, monkeypatch):
+        monkeypatch.setenv("UAS_BEST_OF_N", "3")
+        mock_client = MagicMock()
+        mock_client.generate.return_value = "not json at all"
+        mock_get_client.return_value = mock_client
+
+        result = _get_best_of_n_llm(2, "task", "error")
+        assert result == _get_best_of_n(2)
+
+    @patch("orchestrator.main.get_llm_client")
+    def test_json_in_markdown_fences(self, mock_get_client, monkeypatch):
+        monkeypatch.setenv("UAS_BEST_OF_N", "3")
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '```json\n{"n": 2}\n```'
+        mock_get_client.return_value = mock_client
+
+        result = _get_best_of_n_llm(2, "task", "error")
+        assert result == 2

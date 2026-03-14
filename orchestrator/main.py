@@ -243,7 +243,8 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  environment: list[str] | None = None,
                  workspace_files: str | None = None,
                  system_state: str | None = None,
-                 knowledge: dict | None = None) -> str:
+                 knowledge: dict | None = None,
+                 attempt_history: list[dict] | None = None) -> str:
     """Build the structured prompt for code generation.
 
     Uses XML tags with data sections (environment, task, workspace state)
@@ -394,6 +395,28 @@ At the end of your script, include a self-verification section that:
    If verification fails, exit with code 1 and print:
    UAS_RESULT: {"status": "error", "error": "description of what failed"}
 </verification>"""
+
+    # Section 11: Include full attempt history so the LLM sees all prior
+    # attempts and avoids repeating failed approaches.
+    if attempt_history:
+        history_lines = [
+            f"You have tried {len(attempt_history)} time(s). "
+            "Here is what happened:"
+        ]
+        for entry in attempt_history:
+            a = entry.get("attempt", "?")
+            err = entry.get("error", "")
+            snippet = entry.get("code_snippet", "")
+            history_lines.append(f"\nAttempt {a}: {err}")
+            if snippet:
+                history_lines.append(f"Code approach: {snippet}")
+        history_lines.append(
+            "\nDo NOT repeat any of these approaches. Each new attempt must be "
+            "fundamentally different from all previous ones."
+        )
+        prompt += "\n\n<attempt_history>\n"
+        prompt += "\n".join(history_lines)
+        prompt += "\n</attempt_history>"
 
     if previous_error and attempt > 1:
         code_section = ""
@@ -787,6 +810,8 @@ def main():
     client = get_llm_client(role="coder")
     previous_error = None
     previous_code = None
+    # Section 11: Accumulate full attempt history across retries.
+    attempt_history: list[dict] = []
     workspace_files = os.environ.get("UAS_WORKSPACE_FILES")
 
     # Read step's package requirements from the architect
@@ -814,7 +839,8 @@ def main():
                               environment=environment,
                               workspace_files=workspace_files,
                               system_state=system_state,
-                              knowledge=knowledge)
+                              knowledge=knowledge,
+                              attempt_history=attempt_history or None)
 
         # Section 7c: Determine N for this attempt (budget-aware gating).
         n = _get_best_of_n(attempt)
@@ -892,6 +918,12 @@ def main():
         previous_error = (
             result["stderr"] or result["stdout"] or "Non-zero exit code"
         )
+        # Section 11: Accumulate attempt history for retry context.
+        attempt_history.append({
+            "attempt": attempt,
+            "error": previous_error[:500],
+            "code_snippet": code[:300] if code else "",
+        })
         logger.error("FAILED on attempt %d.", attempt)
 
     logger.error("FAILED after %d attempts.", MAX_RETRIES)

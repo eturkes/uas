@@ -627,7 +627,7 @@ reasonable defaults. Let the LLM do the expansion — it's a language task.
 
 ---
 
-## [ ] Section 11: Smarter Retry Context — Accumulate Attempt History
+## [x] Section 11: Smarter Retry Context — Accumulate Attempt History
 
 **Goal:** When the LLM retries, it should see all previous attempts and their
 errors, not just the most recent one. This prevents it from cycling back to

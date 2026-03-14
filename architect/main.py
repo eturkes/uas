@@ -1359,10 +1359,8 @@ def check_guardrails_llm(code: str) -> list[dict]:
     Calls the LLM with a security review prompt and parses the structured
     response. Falls back to regex-based check_guardrails() on failure.
 
-    Gated behind UAS_LLM_GUARDRAILS=1 env var (caller is responsible for
-    checking the gate before calling this function).
-
-    Section 9 of PLAN.md (LLM-steered).
+    Runs by default. Set UAS_NO_LLM_GUARDRAILS=1 to opt out, or enable
+    UAS_MINIMAL mode to skip LLM guardrails (regex only).
     """
     try:
         from orchestrator.llm_client import get_llm_client
@@ -1819,9 +1817,10 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             # Guardrail scan on workspace Python files
             if failure_reason is None:
                 guardrail_warnings = []
-                _use_llm_guardrails = os.environ.get(
-                    "UAS_LLM_GUARDRAILS", ""
-                ) == "1"
+                _use_llm_guardrails = (
+                    not MINIMAL_MODE
+                    and os.environ.get("UAS_NO_LLM_GUARDRAILS", "") != "1"
+                )
                 try:
                     for entry in os.listdir(WORKSPACE):
                         if entry.endswith(".py") and not entry.startswith("."):
@@ -1829,12 +1828,15 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                             if os.path.isfile(fpath):
                                 with open(fpath, "r", errors="replace") as gf:
                                     code_content = gf.read()
-                                if _use_llm_guardrails:
+                                violations = check_guardrails(code_content)
+                                has_regex_errors = any(
+                                    v["severity"] == "error"
+                                    for v in violations
+                                )
+                                if _use_llm_guardrails and not has_regex_errors:
                                     violations = check_guardrails_llm(
                                         code_content
                                     )
-                                else:
-                                    violations = check_guardrails(code_content)
                                 for v in violations:
                                     if v["severity"] == "error":
                                         failure_reason = (

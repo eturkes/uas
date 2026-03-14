@@ -187,7 +187,7 @@ It misses semantically obvious failures like:
 ---
 
 ## Section 5: Make LLM Guardrails Default (Remove Opt-In Gate)
-- [ ] **Status: Pending**
+- [x] **Status: Complete**
 
 ### Problem
 `architect/main.py:1290-1354` (`check_guardrails_llm`) is gated behind the

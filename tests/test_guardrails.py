@@ -1,10 +1,12 @@
 """Tests for best-practice guardrail checks."""
 
+import json
 import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from architect.main import check_guardrails, check_project_guardrails
+from architect.main import check_guardrails, check_guardrails_llm, check_project_guardrails
 
 
 class TestCheckGuardrails:
@@ -222,3 +224,55 @@ class TestCheckProjectGuardrails:
     def test_nonexistent_workspace(self, tmp_path):
         warnings = check_project_guardrails(str(tmp_path / "nonexistent"))
         assert warnings == []
+
+
+class TestLLMGuardrailsDefault:
+    """Tests for Section 5: LLM guardrails run by default."""
+
+    def _run_guardrail_scan(self, code, minimal=False, env_override=None):
+        """Replicate the call-site guardrail decision logic for testing."""
+        env = env_override or {}
+        use_llm = (
+            not minimal
+            and env.get("UAS_NO_LLM_GUARDRAILS", "") != "1"
+        )
+        violations = check_guardrails(code)
+        has_regex_errors = any(v["severity"] == "error" for v in violations)
+        if use_llm and not has_regex_errors:
+            violations = check_guardrails_llm(code)
+        return violations
+
+    def test_llm_guardrails_run_by_default(self):
+        code = 'import os\nprint("hello")\n'
+        llm_response = json.dumps({"violations": [], "clean": True})
+        mock_client = MagicMock()
+        mock_client.generate.return_value = llm_response
+
+        with patch("orchestrator.llm_client.get_llm_client",
+                    return_value=mock_client):
+            violations = self._run_guardrail_scan(code)
+
+        mock_client.generate.assert_called_once()
+        assert violations == []
+
+    def test_no_llm_guardrails_env_skips_llm(self):
+        code = 'import os\nprint("hello")\n'
+        with patch("orchestrator.llm_client.get_llm_client") as mock_factory:
+            violations = self._run_guardrail_scan(
+                code, env_override={"UAS_NO_LLM_GUARDRAILS": "1"}
+            )
+            mock_factory.assert_not_called()
+
+    def test_minimal_mode_skips_llm(self):
+        code = 'import os\nprint("hello")\n'
+        with patch("orchestrator.llm_client.get_llm_client") as mock_factory:
+            violations = self._run_guardrail_scan(code, minimal=True)
+            mock_factory.assert_not_called()
+
+    def test_regex_errors_short_circuit_llm(self):
+        code = 'api_key = "sk-abc123def456ghi789jkl012mno"\n'
+        with patch("orchestrator.llm_client.get_llm_client") as mock_factory:
+            violations = self._run_guardrail_scan(code)
+            mock_factory.assert_not_called()
+            assert any(v["severity"] == "error" for v in violations)
+            assert any("hardcoded secret" in v["description"] for v in violations)

@@ -601,8 +601,8 @@ debugging or minimal overhead), set:
 UAS_MINIMAL=1 uas "your goal"
 ```
 
-There are no per-feature toggles — `UAS_MINIMAL` is a single switch for
-all-or-nothing.
+Individual features can be opted out of (e.g., `UAS_NO_LLM_GUARDRAILS=1`),
+but `UAS_MINIMAL` is the simplest single switch to disable everything.
 
 ## Environment Variables
 
@@ -630,6 +630,7 @@ all-or-nothing.
 | `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | *(unlimited)* |
 | `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | `3000` |
 | `UAS_MINIMAL` | Disable all optional enhancements (`1`, `true`, or `yes`) | *(off)* |
+| `UAS_NO_LLM_GUARDRAILS` | Skip LLM-based guardrail review (`1`) | *(off)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_HOST_UID` | Host user UID for file ownership in containers | *(auto-set by wrapper)* |
 | `UAS_HOST_GID` | Host user GID for file ownership in containers | *(auto-set by wrapper)* |

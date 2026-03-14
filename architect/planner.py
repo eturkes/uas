@@ -92,6 +92,12 @@ Then, in <complexity_assessment> tags, explicitly estimate:
 - Complexity category: trivial (1 step), simple (2-3), medium (4-7), complex (8+)
 - Justification for the number of steps chosen
 
+When planning steps that produce code, consider what tools and quality
+checks would improve the result. You don't need to add separate "lint" or
+"test" steps — instead, instruct each code-producing step to install and
+run relevant quality tools as part of its workflow. The execution
+environment has full network access and can install anything.
+
 Then produce the step DAG as a JSON array.
 </instructions>
 

@@ -154,6 +154,12 @@ Before writing code, reason through these questions:
    libraries you plan to use? If uncertain, check the docs.
 4. If the task involves an external API or data source, what is its current
    format/schema? Don't assume — verify if possible.
+5. Would any development tools improve the quality of your output?
+   Consider linters, formatters, type checkers, test runners, or
+   domain-specific tools. Install and use them if they'd catch bugs
+   or improve code quality. You can search for tools with
+   `pip search` alternatives (e.g., check PyPI directly) or simply
+   install well-known tools in the relevant domain.
 
 Encode your research findings directly into your code as comments or as
 defensive checks. Don't produce a separate research document — just write

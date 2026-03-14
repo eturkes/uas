@@ -143,7 +143,7 @@ The LLM has network access — tell it to use it.
 
 ---
 
-## [ ] Section 3: Proactive Tool Discovery — Let the LLM Find Its Own Tools
+## [x] Section 3: Proactive Tool Discovery — Let the LLM Find Its Own Tools
 
 **Goal:** Instead of hardcoded keyword→tool mappings, instruct the LLM to discover,
 evaluate, and install development tools on its own based on what it judges useful

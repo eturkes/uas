@@ -440,7 +440,7 @@ decisions (e.g., knowing the date prevents using deprecated APIs).
 
 ---
 
-## [ ] Section 8: Cross-Run Knowledge Base — Persist What Works
+## [x] Section 8: Cross-Run Knowledge Base — Persist What Works
 
 **Goal:** The system should remember package versions that worked, error→solution
 pairs, and successful approaches across runs. This is infrastructure — it collects

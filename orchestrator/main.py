@@ -208,7 +208,8 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  previous_code: str | None = None,
                  environment: list[str] | None = None,
                  workspace_files: str | None = None,
-                 system_state: str | None = None) -> str:
+                 system_state: str | None = None,
+                 knowledge: dict | None = None) -> str:
     """Build the structured prompt for code generation.
 
     Uses XML tags with data sections (environment, task, workspace state)
@@ -226,6 +227,37 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
 
     system_state_block = system_state or collect_system_state()
 
+    # Section 8: Format prior knowledge for prompt injection
+    knowledge_block = ""
+    if knowledge:
+        pkg_versions = knowledge.get("package_versions", {})
+        lessons = knowledge.get("lessons", [])
+        if pkg_versions or lessons:
+            parts = []
+            if pkg_versions:
+                formatted_pkgs = "\n".join(
+                    f"  {pkg}=={ver}" for pkg, ver in sorted(pkg_versions.items())
+                )
+                parts.append(
+                    f"Package versions known to work in this environment:\n{formatted_pkgs}"
+                )
+            if lessons:
+                formatted_lessons = "\n".join(
+                    f"  - [{l.get('step_title', 'unknown')}] "
+                    f"Error: {l.get('error_snippet', '')[:100]} -> "
+                    f"Fix: {l.get('solution_snippet', '')[:100]}"
+                    for l in lessons[-10:]  # Show most recent 10
+                )
+                parts.append(
+                    f"Lessons from previous runs:\n{formatted_lessons}"
+                )
+            knowledge_content = "\n\n".join(parts)
+            knowledge_block = (
+                f"\n<prior_knowledge>\n{knowledge_content}\n\n"
+                "Use this information to avoid repeating past mistakes "
+                "and to use known-good versions.\n</prior_knowledge>\n"
+            )
+
     # Data sections at top (environment, task, workspace state)
     prompt = f"""\
 <environment>
@@ -242,7 +274,7 @@ This container is disposable. Nothing here affects the host. Be bold, not cautio
 System info:
 {system_state_block}
 </environment>
-
+{knowledge_block}
 <approach>
 Before writing code, reason through these questions:
 1. What is the best approach for this task? Are there multiple strategies?
@@ -707,6 +739,16 @@ def main():
     # Section 7: Collect system state once and cache for all attempts.
     system_state = collect_system_state()
 
+    # Section 8: Load cross-run knowledge base at startup.
+    knowledge = None
+    try:
+        from architect.state import read_knowledge_base
+        kb = read_knowledge_base()
+        if kb.get("package_versions") or kb.get("lessons"):
+            knowledge = kb
+    except Exception:
+        pass
+
     # Section 5c: Use coder-specific model for code generation
     client = get_llm_client(role="coder")
     previous_error = None
@@ -737,7 +779,8 @@ def main():
         prompt = build_prompt(task, attempt, previous_error, previous_code,
                               environment=environment,
                               workspace_files=workspace_files,
-                              system_state=system_state)
+                              system_state=system_state,
+                              knowledge=knowledge)
 
         # Section 7c: Determine N for this attempt (budget-aware gating).
         n = _get_best_of_n(attempt)

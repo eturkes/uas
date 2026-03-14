@@ -9,6 +9,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -19,6 +20,7 @@ from .state import (
     append_scratchpad, read_scratchpad,
     update_progress_file, read_progress_file,
     get_run_dir, get_specs_dir, _write_latest_run,
+    append_knowledge,
 )
 from .planner import (
     decompose_goal,
@@ -58,6 +60,22 @@ MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
 
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
+
+# Section 8: Regex to extract package versions from pip install output.
+# Matches lines like "Successfully installed requests-2.31.0 pandas-2.1.4"
+_PIP_INSTALLED_RE = re.compile(
+    r"Successfully installed\s+(.*)", re.IGNORECASE
+)
+_PKG_VERSION_RE = re.compile(r"(\S+?)-(\d[\w.]*)")
+
+
+def _extract_installed_packages(output: str) -> dict[str, str]:
+    """Extract package->version mappings from pip install stdout."""
+    packages: dict[str, str] = {}
+    for match in _PIP_INSTALLED_RE.finditer(output):
+        for pkg_match in _PKG_VERSION_RE.finditer(match.group(1)):
+            packages[pkg_match.group(1)] = pkg_match.group(2)
+    return packages
 
 # Section 3b: Error-type-adaptive retry budgets.
 # Maps error type to max retries before early escalation.
@@ -1664,6 +1682,27 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     state,
                     event=f"Step {step['id']} ({step['title']}) completed successfully",
                 )
+
+                # Section 8: Record knowledge from successful execution
+                step_output = step.get("output", "") or ""
+                step_stderr = step.get("stderr_output", "") or ""
+                combined_output = step_output + "\n" + step_stderr
+                installed_pkgs = _extract_installed_packages(combined_output)
+                if installed_pkgs:
+                    append_knowledge("package_version", installed_pkgs)
+                # Record lesson when a retry succeeded
+                if spec_attempt > 0:
+                    reflections = step.get("reflections", [])
+                    prev_error = (
+                        reflections[-1].get("root_cause", "")
+                        if reflections else ""
+                    )
+                    append_knowledge("lesson", {
+                        "error_snippet": prev_error[:200],
+                        "solution_snippet": step["description"][:200],
+                        "step_title": step["title"],
+                    })
+
                 return True
 
             # Validation failed — treat as step failure

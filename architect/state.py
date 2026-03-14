@@ -331,6 +331,40 @@ def read_progress_file(run_id: str = "") -> str:
 # Step management
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Knowledge base (cross-run persistence)
+# ---------------------------------------------------------------------------
+
+def get_knowledge_base_path() -> str:
+    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
+    return os.path.join(workspace, ".state", "knowledge.json")
+
+
+def read_knowledge_base() -> dict:
+    """Load knowledge base or return empty structure."""
+    path = get_knowledge_base_path()
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"package_versions": {}, "lessons": []}
+
+
+def append_knowledge(entry_type: str, data: dict):
+    """Append an entry to the knowledge base."""
+    kb = read_knowledge_base()
+    if entry_type == "package_version":
+        kb["package_versions"].update(data)
+    elif entry_type == "lesson":
+        kb["lessons"].append(data)
+        # Cap at 50 entries
+        if len(kb["lessons"]) > 50:
+            kb["lessons"] = kb["lessons"][-50:]
+    path = get_knowledge_base_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(kb, f, indent=2)
+
+
 def add_steps(state: dict, steps: list[dict]) -> dict:
     for i, step in enumerate(steps, 1):
         state["steps"].append({

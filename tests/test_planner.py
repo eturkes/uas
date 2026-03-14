@@ -248,6 +248,7 @@ class TestReflectAndRewrite:
         assert "<diagnosis>" not in result
         assert "<strategies>" not in result
 
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_llm_driven_strategy_menu_in_prompt(self, mock_get_client):
         client = MagicMock()
@@ -268,6 +269,7 @@ class TestReflectAndRewrite:
         assert "defensive fallbacks" in prompt
         assert result == "Use a completely different approach"
 
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_multiple_attempts_count(self, mock_get_client):
         client = MagicMock()
@@ -287,6 +289,7 @@ class TestReflectAndRewrite:
         assert "failed 3 time(s)" in prompt
         assert result == "Final defensive approach"
 
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_red_flag_excessive_length_resamples(self, mock_get_client):
         client = MagicMock()
@@ -299,6 +302,7 @@ class TestReflectAndRewrite:
         assert client.generate.call_count == 2
         assert result == "fixed task description"
 
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_red_flag_error_verbatim_resamples(self, mock_get_client):
         client = MagicMock()
@@ -327,6 +331,7 @@ class TestReflectAndRewrite:
         result = reflect_and_rewrite(step, "", "")
         assert result == "original task"
 
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_stdout_stderr_trimmed_in_prompt(self, mock_get_client):
         """Long stdout and stderr are trimmed to avoid flooding the prompt."""
@@ -345,6 +350,7 @@ class TestReflectAndRewrite:
         assert "x" * 5000 not in prompt
         assert "y" * 5000 not in prompt
 
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_previous_attempts_included(self, mock_get_client):
         client = MagicMock()
@@ -364,6 +370,7 @@ class TestReflectAndRewrite:
         assert "alternative strategy" in prompt
         assert result == "improved task"
 
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_no_previous_attempts_section_when_none(self, mock_get_client):
         client = MagicMock()

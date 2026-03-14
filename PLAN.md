@@ -101,7 +101,7 @@ orchestrator should do the same.
 ---
 
 ## Section 3: LLM-Based Rewrite Quality Assessment (Replace _is_confused_output)
-- [ ] **Status: Pending**
+- [x] **Status: Complete**
 
 ### Problem
 `architect/planner.py:976-984` (`_is_confused_output`) uses two crude heuristics

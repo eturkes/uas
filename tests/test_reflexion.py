@@ -101,6 +101,7 @@ class TestGenerateReflection:
 
 
 class TestReflectionHistoryInRewrite:
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_reflections_included_in_prompt(self, mock_get_client):
         client = MagicMock()
@@ -136,6 +137,7 @@ class TestReflectionHistoryInRewrite:
         assert "install deps first" in prompt
         assert result == "improved task"
 
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_no_reflections_no_section(self, mock_get_client):
         client = MagicMock()
@@ -147,6 +149,7 @@ class TestReflectionHistoryInRewrite:
         prompt = client.generate.call_args[0][0]
         assert "<reflection_history>" not in prompt
 
+    @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_empty_reflections_no_section(self, mock_get_client):
         client = MagicMock()

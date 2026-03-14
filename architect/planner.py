@@ -14,6 +14,8 @@ _DEFAULT_REWRITE_TRIM = 3000
 
 logger = logging.getLogger(__name__)
 
+MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
+
 
 def expand_goal(goal: str) -> str:
     """Expand a vague goal with reasonable defaults using LLM judgment."""
@@ -972,16 +974,79 @@ Provide ONLY the improved task description. No explanation.
 </instructions>
 """
 
+REWRITE_QUALITY_PROMPT = """\
+You are evaluating the quality of a rewritten task description in an automated code generation pipeline.
+
+<original_description>
+{original_description}
+</original_description>
+
+<rewritten_description>
+{rewritten_description}
+</rewritten_description>
+
+<error_that_triggered_rewrite>
+{error}
+</error_that_triggered_rewrite>
+
+Evaluate whether the rewrite is a good, actionable task description:
+- Does the rewrite address the root cause of the error?
+- Is it actionable and specific?
+- Does it avoid repeating the error verbatim?
+- Is it a coherent task description (not an essay or analysis)?
+
+Return ONLY valid JSON: {{"quality": "good", "reason": "..."}} or {{"quality": "poor", "reason": "..."}}
+"""
+
 
 def _is_confused_output(result: str, original_desc: str, error: str) -> bool:
     """Check if the LLM output shows structural signs of confusion."""
-    # Excessive length (>3x original, minimum threshold 2000)
     if len(result) > max(len(original_desc) * 3, 2000):
         return True
-    # Repeating the error verbatim (>200 chars of error text found in result)
     if error and len(error) > 200 and error[:200] in result:
         return True
     return False
+
+
+def _check_rewrite_quality(result: str, original_desc: str, error: str) -> bool:
+    """Check rewrite quality using LLM assessment with heuristic fallback.
+
+    Returns True if the output is confused/poor quality.
+    """
+    if not MINIMAL_MODE:
+        try:
+            client = get_llm_client(role="planner")
+            prompt = REWRITE_QUALITY_PROMPT.format(
+                original_description=original_desc,
+                rewritten_description=result,
+                error=error,
+            )
+
+            event_log = get_event_log()
+            event_log.emit(EventType.LLM_CALL_START,
+                           data={"purpose": "rewrite_quality_check"})
+            response = client.generate(prompt)
+            event_log.emit(EventType.LLM_CALL_COMPLETE,
+                           data={"purpose": "rewrite_quality_check"})
+
+            text = response.strip()
+            fence_match = re.search(
+                r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL,
+            )
+            if fence_match:
+                text = fence_match.group(1)
+            else:
+                brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+                if brace_match:
+                    text = brace_match.group(0)
+
+            data = json.loads(text)
+            quality = data.get("quality", "good")
+            return quality == "poor"
+        except Exception:
+            logger.debug("LLM rewrite quality check failed, using heuristic fallback", exc_info=True)
+
+    return _is_confused_output(result, original_desc, error)
 
 
 def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
@@ -1076,7 +1141,7 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
     )
     if low_confidence:
         logger.warning("  Low-confidence reflection, resampling rewrite...")
-    if _is_confused_output(result, step["description"], stderr_trimmed) or low_confidence:
+    if _check_rewrite_quality(result, step["description"], stderr_trimmed) or low_confidence:
         logger.warning("  Red-flag detected in rewrite output, resampling...")
         response = client.generate(prompt)
         result = re.sub(r"<diagnosis>.*?</diagnosis>", "", response, flags=re.DOTALL)

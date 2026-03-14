@@ -277,6 +277,7 @@ class TestApproachHints:
 class TestMainLoopWithBestOfN:
     """Integration tests: main() loop with best-of-N enabled."""
 
+    @patch("orchestrator.main.MINIMAL_MODE", True)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")

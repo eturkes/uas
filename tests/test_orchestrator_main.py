@@ -191,6 +191,7 @@ class TestGetTask:
 
 
 class TestMainLoop:
+    @patch("orchestrator.main.MINIMAL_MODE", True)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
@@ -208,6 +209,7 @@ class TestMainLoop:
         # Two sandbox calls: verify + execute
         assert mock_sandbox.call_count == 2
 
+    @patch("orchestrator.main.MINIMAL_MODE", True)
     @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
@@ -229,6 +231,7 @@ class TestMainLoop:
         assert exc_info.value.code == 0
         assert mock_client.generate.call_count == 2
 
+    @patch("orchestrator.main.MINIMAL_MODE", True)
     @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")

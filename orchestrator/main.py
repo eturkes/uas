@@ -26,6 +26,31 @@ STDERR_END = "===STDERR_END==="
 MAX_RETRIES = 3
 MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
+PRE_FLIGHT_PROMPT = """\
+You are reviewing generated Python code before it runs in a sandbox.
+
+<task>
+{task}
+</task>
+
+<code>
+{code}
+</code>
+
+Check for these common issues:
+1. Importing a package that is never pip-installed in the script
+2. Using file paths without os.path.join(workspace, ...) where workspace = os.environ.get("WORKSPACE", "/workspace")
+3. Missing the UAS_RESULT output line entirely
+4. Obvious infinite loops or blocking operations (e.g. server.serve_forever() without a thread)
+5. Using input() or other interactive operations that require stdin
+
+Return ONLY a JSON object (no other text):
+{{"issues": [{{"description": "...", "severity": "critical"}}], "safe_to_run": true}}
+
+severity must be "critical" (code will definitely fail) or "warning" (potential problem).
+safe_to_run should be false only when there are critical issues.
+If the code looks fine, return: {{"issues": [], "safe_to_run": true}}"""
+
 RETRY_STRATEGY_PROMPT = """\
 You are advising a code generation system that is retrying after a failed attempt.
 
@@ -148,6 +173,57 @@ def pre_execution_check(code: str) -> tuple[list[str], list[str]]:
             "Code does not contain 'UAS_RESULT'. "
             "The output may lack the required machine-readable summary line."
         )
+
+    return critical_errors, warnings
+
+
+def pre_execution_check_llm(code: str, task: str) -> tuple[list[str], list[str]]:
+    critical_errors, warnings = pre_execution_check(code)
+    if critical_errors:
+        return critical_errors, warnings
+
+    try:
+        from architect.events import EventType, get_event_log
+
+        prompt = PRE_FLIGHT_PROMPT.format(
+            task=task[:2000],
+            code=code[:8000],
+        )
+
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START, data={"purpose": "pre_flight_review"})
+        client = get_llm_client(role="planner")
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "pre_flight_review"})
+
+        text = response.strip()
+        fence_match = re.search(
+            r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL,
+        )
+        if fence_match:
+            text = fence_match.group(1)
+        else:
+            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+            if brace_match:
+                text = brace_match.group(0)
+
+        data = json.loads(text)
+        issues = data.get("issues", [])
+        safe_to_run = data.get("safe_to_run", True)
+
+        for issue in issues:
+            desc = issue.get("description", "")
+            severity = issue.get("severity", "warning")
+            if severity == "critical":
+                critical_errors.append(desc)
+            else:
+                warnings.append(desc)
+
+        if not safe_to_run and not critical_errors:
+            critical_errors.append("LLM pre-flight review determined code is not safe to run")
+
+    except Exception:
+        logger.debug("LLM pre-flight review failed, using heuristic fallback", exc_info=True)
 
     return critical_errors, warnings
 
@@ -1054,7 +1130,10 @@ def main():
                          len(code), code)
 
             # Section 9: Pre-execution sanity checks
-            critical_errors, warnings = pre_execution_check(code)
+            if not MINIMAL_MODE:
+                critical_errors, warnings = pre_execution_check_llm(code, task)
+            else:
+                critical_errors, warnings = pre_execution_check(code)
             for w in warnings:
                 logger.warning("Pre-execution warning: %s", w)
             if critical_errors:

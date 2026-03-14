@@ -26,7 +26,9 @@ MAX_RETRIES = 3
 
 logger = logging.getLogger(__name__)
 
-_UAS_RESULT_PATTERN = re.compile(r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE)
+_UAS_RESULT_PATTERN = re.compile(
+    r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE | re.IGNORECASE,
+)
 
 _INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
 
@@ -81,13 +83,21 @@ def parse_uas_result(stdout: str) -> dict | None:
     """Extract the UAS_RESULT JSON from stdout if present.
 
     Looks for a line matching: UAS_RESULT: {"status": "ok", ...}
+    Tolerates case variations, missing space after colon, and
+    single-quoted JSON as a fallback.
     Returns the parsed dict or None if not found/invalid.
     """
     match = _UAS_RESULT_PATTERN.search(stdout)
     if not match:
         return None
+    raw = match.group(1)
     try:
-        return json.loads(match.group(1))
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fallback: replace single quotes with double quotes
+    try:
+        return json.loads(raw.replace("'", '"'))
     except (json.JSONDecodeError, ValueError):
         return None
 
@@ -248,7 +258,7 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
     """Build the structured prompt for code generation.
 
     Uses XML tags with data sections (environment, task, workspace state)
-    at the top and instruction sections (role, constraints, verification)
+    at the top and instruction sections (role, constraints, output_contract)
     at the bottom for optimal Claude response quality.
     """
     pkg_hint = ""
@@ -347,7 +357,7 @@ Do not regenerate these files unless the task explicitly requires modifying them
 Reference them by path using os.path.join(workspace, ...).
 </workspace_state>"""
 
-    # Instruction sections at bottom (role, constraints, verification)
+    # Instruction sections at bottom (role, constraints, output_contract)
     prompt += """
 
 <role>
@@ -386,15 +396,29 @@ Do NOT use any XML tags, tool_call blocks, or analysis sections.
 - Pin dependency versions in pip install commands.
 </constraints>
 
-<verification>
-At the end of your script, include a self-verification section that:
-1. Checks that any output files actually exist and are non-empty.
-2. Validates the output format if applicable.
-3. Prints a machine-readable summary as the LAST line of stdout:
-   UAS_RESULT: {"status": "ok", "files_written": [...], "summary": "..."}
-   If verification fails, exit with code 1 and print:
-   UAS_RESULT: {"status": "error", "error": "description of what failed"}
-</verification>"""
+<output_contract>
+YOUR SCRIPT MUST PRODUCE THIS OUTPUT. This is not optional.
+
+At the end of your script, print a result summary as the last line of stdout:
+
+    import json
+    result = {
+        "status": "ok",
+        "files_written": ["list", "of", "files", "you", "created"],
+        "summary": "One sentence describing what was accomplished"
+    }
+    print(f"UAS_RESULT: {json.dumps(result)}")
+
+If your script encounters an unrecoverable error:
+
+    import json
+    result = {"status": "error", "error": "What went wrong and why"}
+    print(f"UAS_RESULT: {json.dumps(result)}")
+    sys.exit(1)
+
+The calling system parses this line to determine success or failure.
+If you don't print UAS_RESULT, the system cannot tell if you succeeded.
+</output_contract>"""
 
     # Section 11: Include full attempt history so the LLM sees all prior
     # attempts and avoids repeating failed approaches.

@@ -419,7 +419,9 @@ _DELIMITED_STDERR = re.compile(
 
 _FILES_PATTERN = re.compile(r"(/workspace/[\w./\-]+)")
 
-_UAS_RESULT_PATTERN = re.compile(r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE)
+_UAS_RESULT_PATTERN = re.compile(
+    r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE | re.IGNORECASE,
+)
 
 
 def truncate_output(text: str, max_length: int = MAX_CONTEXT_LENGTH) -> str:
@@ -647,13 +649,21 @@ def parse_uas_result(orchestrator_output: str) -> dict | None:
 
     Searches the full orchestrator stderr/stdout for a line matching:
         UAS_RESULT: {"status": "ok", ...}
+    Tolerates case variations, missing space after colon, and
+    single-quoted JSON as a fallback.
     Returns the parsed dict or None if not found/invalid.
     """
     import json
     match = _UAS_RESULT_PATTERN.search(orchestrator_output)
     if not match:
         return None
+    raw = match.group(1)
     try:
-        return json.loads(match.group(1))
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fallback: replace single quotes with double quotes
+    try:
+        return json.loads(raw.replace("'", '"'))
     except (json.JSONDecodeError, ValueError):
         return None

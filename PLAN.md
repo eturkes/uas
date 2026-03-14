@@ -733,7 +733,7 @@ our static rules.
 
 ---
 
-## [ ] Section 13: Structured Output Reinforcement — Make UAS_RESULT Reliable
+## [x] Section 13: Structured Output Reinforcement — Make UAS_RESULT Reliable
 
 **Goal:** Make UAS_RESULT output more reliable without hardcoded auto-appending.
 Instead, make the prompt so clear that the LLM virtually never forgets it, and

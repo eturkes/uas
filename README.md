@@ -517,7 +517,7 @@ included as a fifth tab in the HTML report.
 4. For attempt = 1..3:
    a. Build XML-structured prompt (data first: <environment>,
       <task>, <workspace_state>; then instructions: <role>,
-      <constraints>, <verification>)
+      <constraints>, <output_contract>)
    b. Determine sample count N for this attempt (see below)
    c. If N=1: send prompt to LLM, extract code, execute in sandbox
    d. If N>1: generate N code samples in parallel with different

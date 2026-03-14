@@ -44,10 +44,10 @@ class TestBuildPrompt:
         assert "Exit with code 0" in prompt
         assert "stdout" in prompt
 
-    def test_includes_xml_verification_section(self):
+    def test_includes_xml_output_contract_section(self):
         prompt = build_prompt("any task", attempt=1)
-        assert "<verification>" in prompt
-        assert "</verification>" in prompt
+        assert "<output_contract>" in prompt
+        assert "</output_contract>" in prompt
         assert "UAS_RESULT" in prompt
 
     def test_includes_sandbox_constraints(self):
@@ -131,11 +131,11 @@ class TestBuildPrompt:
         task_pos = prompt.index("<task>")
         role_pos = prompt.index("<role>")
         constraints_pos = prompt.index("<constraints>")
-        verification_pos = prompt.index("<verification>")
+        output_contract_pos = prompt.index("<output_contract>")
         assert env_pos < role_pos
         assert task_pos < role_pos
         assert role_pos < constraints_pos
-        assert constraints_pos < verification_pos
+        assert constraints_pos < output_contract_pos
 
 
 class TestParseUasResult:

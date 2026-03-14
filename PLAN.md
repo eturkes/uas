@@ -794,7 +794,7 @@ make the parser more tolerant of variations.
 
 ---
 
-## [ ] Section 14: Planner Context Enrichment — Give the Planner Network Access
+## [x] Section 14: Planner Context Enrichment — Give the Planner Network Access
 
 **Goal:** The planner (decomposition LLM) should be able to use the network to
 research the goal before decomposing it. Currently the planner gets only the

@@ -144,9 +144,10 @@ class ClaudeCodeClient:
         use_json = not stream
         if use_json:
             cmd.extend(["--output-format", "json"])
-            # For coder calls, disable tools to prevent Claude from entering
-            # a multi-turn tool-use conversation (Edit/Write/Bash) instead of
-            # returning the code in a fenced ```python block.
+            # Only coder calls have tools disabled, to force fenced code
+            # output instead of a multi-turn tool-use conversation.
+            # Planner calls intentionally keep tools enabled so the LLM
+            # can research APIs and libraries during decomposition.
             if self.role == "coder":
                 cmd.extend(["--tools", ""])
 
@@ -160,10 +161,11 @@ class ClaudeCodeClient:
         env.pop("CLAUDE_CODE_SESSION", None)
         env["IS_SANDBOX"] = "1"
         env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
-        # Streaming calls (planner) benefit from deep thinking.
-        # Non-streaming calls (code generation) need output tokens for the
-        # actual code, so use medium effort to avoid exhausting the budget
-        # on extended thinking.
+        # Planner streams with tool access so it can research APIs and
+        # libraries during decomposition.  Streaming calls also benefit
+        # from deep thinking.  Non-streaming calls (code generation) need
+        # output tokens for the actual code, so use medium effort to
+        # avoid exhausting the budget on extended thinking.
         env["CLAUDE_CODE_EFFORT_LEVEL"] = "high" if stream else "medium"
 
         last_error: RuntimeError | None = None

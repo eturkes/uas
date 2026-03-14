@@ -38,6 +38,16 @@ Return ONLY the goal text (expanded or unchanged). No explanation."""
 
 
 DECOMPOSITION_PROMPT = """\
+<research>
+You have full network access. If the goal involves:
+- An external API: Check its current documentation for endpoints and auth methods
+- A library you're unsure about: Verify it exists on PyPI and check its current version
+- A domain you're unfamiliar with: Look up best practices and common approaches
+
+Use what you learn to make your decomposition more specific and accurate.
+Don't guess at API formats or library capabilities — verify when uncertain.
+</research>
+
 <goal>{goal}</goal>
 
 <examples>

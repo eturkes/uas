@@ -10,9 +10,12 @@ import pytest
 from orchestrator.main import (
     _APPROACH_HINTS,
     _get_best_of_n,
+    _get_score_priorities,
+    _score_guidance_cache,
     generate_and_vote,
     main,
     score_result,
+    SCORE_GUIDANCE_PROMPT,
     MAX_RETRIES,
 )
 
@@ -383,3 +386,122 @@ class TestMainLoopWithBestOfN:
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
+
+
+class TestTaskAwareScoring:
+    """Section 9: Task-aware score_result with LLM guidance."""
+
+    def setup_method(self):
+        _score_guidance_cache.clear()
+
+    @patch("orchestrator.main.MINIMAL_MODE", False)
+    @patch("orchestrator.main.get_llm_client")
+    def test_files_priority_boosts_file_creation(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '{"priorities": ["files", "stdout_content", "exit_code"]}'
+        mock_get_client.return_value = mock_client
+
+        with_files = {
+            "exit_code": 0,
+            "stdout": 'UAS_RESULT: {"status": "ok", "files_written": ["a.txt", "b.txt"], "summary": "done"}\n',
+            "stderr": "",
+        }
+        without_files = {
+            "exit_code": 0,
+            "stdout": "lots of output " * 50,
+            "stderr": "",
+        }
+
+        task = "create data files for analysis"
+        score_with = score_result(with_files, task=task)
+        _score_guidance_cache.clear()
+        mock_client.generate.return_value = '{"priorities": ["files", "stdout_content", "exit_code"]}'
+        score_without = score_result(without_files, task=task)
+        assert score_with > score_without
+
+    @patch("orchestrator.main.MINIMAL_MODE", False)
+    @patch("orchestrator.main.get_llm_client")
+    def test_stdout_priority_boosts_computation(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '{"priorities": ["stdout_content", "exit_code", "files"]}'
+        mock_get_client.return_value = mock_client
+
+        verbose = {
+            "exit_code": 0,
+            "stdout": "result: " + "x" * 5000,
+            "stderr": "",
+        }
+        quiet = {
+            "exit_code": 0,
+            "stdout": "ok",
+            "stderr": "",
+        }
+
+        task = "compute the factorial of 100"
+        score_verbose = score_result(verbose, task=task)
+        _score_guidance_cache.clear()
+        mock_client.generate.return_value = '{"priorities": ["stdout_content", "exit_code", "files"]}'
+        score_quiet = score_result(quiet, task=task)
+        assert score_verbose > score_quiet
+
+    @patch("orchestrator.main.MINIMAL_MODE", False)
+    @patch("orchestrator.main.get_llm_client")
+    def test_llm_failure_falls_back_to_static(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.generate.side_effect = RuntimeError("API down")
+        mock_get_client.return_value = mock_client
+
+        result = {"exit_code": 0, "stdout": "ok", "stderr": ""}
+        score_with_task = score_result(result, task="some task")
+        score_without_task = score_result(result, task=None)
+        assert score_with_task == score_without_task
+
+    @patch("orchestrator.main.MINIMAL_MODE", False)
+    @patch("orchestrator.main.get_llm_client")
+    def test_cache_prevents_multiple_llm_calls(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '{"priorities": ["files", "exit_code", "stdout_content"]}'
+        mock_get_client.return_value = mock_client
+
+        result = {"exit_code": 0, "stdout": "ok", "stderr": ""}
+        task = "build a project"
+        score_result(result, task=task)
+        score_result(result, task=task)
+        score_result(result, task=task)
+        assert mock_client.generate.call_count == 1
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    def test_minimal_mode_skips_llm(self):
+        result = {"exit_code": 0, "stdout": "ok", "stderr": ""}
+        score_with_task = score_result(result, task="some task")
+        score_without_task = score_result(result, task=None)
+        assert score_with_task == score_without_task
+
+    def test_no_task_uses_static_scoring(self):
+        result = {"exit_code": 0, "stdout": "ok", "stderr": ""}
+        score = score_result(result)
+        assert score >= 1000
+
+    @patch("orchestrator.main.MINIMAL_MODE", False)
+    @patch("orchestrator.main.get_llm_client")
+    def test_invalid_priorities_ignored(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '{"priorities": ["invalid_signal", "also_bad"]}'
+        mock_get_client.return_value = mock_client
+
+        result = {"exit_code": 0, "stdout": "ok", "stderr": ""}
+        score_with_task = score_result(result, task="some task")
+        _score_guidance_cache.clear()
+        score_without_task = score_result(result, task=None)
+        assert score_with_task == score_without_task
+
+    @patch("orchestrator.main.MINIMAL_MODE", False)
+    @patch("orchestrator.main.get_llm_client")
+    def test_prompt_includes_task(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.generate.return_value = '{"priorities": ["exit_code"]}'
+        mock_get_client.return_value = mock_client
+
+        score_result({"exit_code": 0, "stdout": "", "stderr": ""}, task="build a calculator")
+        prompt = mock_client.generate.call_args[0][0]
+        assert "build a calculator" in prompt

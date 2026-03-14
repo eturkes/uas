@@ -780,10 +780,71 @@ def _get_best_of_n(attempt: int) -> int:
     return min(attempt, max_n)
 
 
-def score_result(result: dict) -> int:
+SCORE_GUIDANCE_PROMPT = """\
+Given this task, what are the most important success signals?
+
+<task>
+{task}
+</task>
+
+Return ONLY a JSON object (no other text):
+{{"priorities": ["files", "stdout_content", "exit_code"]}}
+
+priorities must be a list ordered from most to least important, using these signal names:
+- "files": the script creates output files
+- "stdout_content": the script prints meaningful results to stdout
+- "exit_code": the script exits successfully (code 0)
+
+Order them by what matters most for THIS specific task."""
+
+_score_guidance_cache: dict[str, list[str]] = {}
+
+
+def _get_score_priorities(task: str) -> list[str] | None:
+    if task in _score_guidance_cache:
+        return _score_guidance_cache[task]
+
+    try:
+        from architect.events import EventType, get_event_log
+
+        prompt = SCORE_GUIDANCE_PROMPT.format(task=task[:2000])
+
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START, data={"purpose": "score_guidance"})
+        client = get_llm_client(role="planner")
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "score_guidance"})
+
+        text = response.strip()
+        fence_match = re.search(
+            r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL,
+        )
+        if fence_match:
+            text = fence_match.group(1)
+        else:
+            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+            if brace_match:
+                text = brace_match.group(0)
+
+        data = json.loads(text)
+        priorities = data.get("priorities", [])
+        valid_signals = {"files", "stdout_content", "exit_code"}
+        priorities = [p for p in priorities if p in valid_signals]
+        if priorities:
+            _score_guidance_cache[task] = priorities
+            return priorities
+    except Exception:
+        logger.debug("LLM score guidance failed, using static scoring", exc_info=True)
+
+    return None
+
+
+def score_result(result: dict, task: str | None = None) -> int:
     """Score a sandbox execution result for selection among candidates.
 
     Section 7b: Prefer successful runs, then richer UAS_RESULT output.
+    When *task* is provided and not in MINIMAL_MODE, uses LLM guidance to
+    weight scoring priorities for the specific task type.
     Returns an integer score (higher is better).
     """
     score = 0
@@ -803,6 +864,25 @@ def score_result(result: dict) -> int:
     # Prefer runs with more stdout (more informative)
     stdout_len = len(result.get("stdout", ""))
     score += min(stdout_len // 100, 50)
+
+    if task is not None and not MINIMAL_MODE:
+        priorities = _get_score_priorities(task)
+        if priorities:
+            bonus_weights = {priorities[i]: 3 - i for i in range(len(priorities))}
+            files_bonus = 0
+            if uas and uas.get("files_written"):
+                files_bonus = len(uas["files_written"]) * 20
+            stdout_bonus = min(stdout_len // 50, 100)
+            exit_bonus = 100 if result["exit_code"] == 0 else 0
+
+            signal_scores = {
+                "files": files_bonus,
+                "stdout_content": stdout_bonus,
+                "exit_code": exit_bonus,
+            }
+            for signal, weight in bonus_weights.items():
+                score += signal_scores.get(signal, 0) * weight
+
     return score
 
 
@@ -907,7 +987,7 @@ def evaluate_candidates(
         )
 
     # Fallback: use score_result heuristic
-    return sorted(candidates, key=lambda x: score_result(x[1]), reverse=True)
+    return sorted(candidates, key=lambda x: score_result(x[1], task=task), reverse=True)
 
 
 def _generate_one(client, prompt: str, hint: str):
@@ -967,7 +1047,7 @@ def generate_and_vote(client, prompt: str, n: int,
         ranked = evaluate_candidates(client, task, valid)
         best_code, best_result, best_idx = ranked[0]
     else:
-        scored = [(code, result, idx, score_result(result))
+        scored = [(code, result, idx, score_result(result, task=task))
                   for code, result, idx in valid]
         scored.sort(key=lambda x: x[3], reverse=True)
         best_code, best_result, best_idx = scored[0][0], scored[0][1], scored[0][2]

@@ -334,7 +334,7 @@ that later steps depend on).
 ---
 
 ## Section 9: Task-Aware Score Result (Replace Arbitrary Point Values)
-- [ ] **Status: Pending**
+- [x] **Status: Complete**
 
 ### Problem
 `orchestrator/main.py:646-669` (`score_result`) assigns arbitrary point values:

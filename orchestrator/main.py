@@ -28,6 +28,40 @@ logger = logging.getLogger(__name__)
 
 _UAS_RESULT_PATTERN = re.compile(r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE)
 
+_INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
+
+
+def pre_execution_check(code: str) -> tuple[list[str], list[str]]:
+    """Check generated code for guaranteed failures before sandbox execution.
+
+    Returns (critical_errors, warnings). Critical errors mean the code should
+    not be executed. Warnings are logged but don't block execution.
+    """
+    critical_errors: list[str] = []
+    warnings: list[str] = []
+
+    # Syntax check
+    try:
+        compile(code, "<generated>", "exec")
+    except SyntaxError as exc:
+        critical_errors.append(f"Syntax error: {exc}")
+
+    # Interactive input check (sandbox has no stdin)
+    if _INPUT_CALL_PATTERN.search(code):
+        critical_errors.append(
+            "Code uses input() which requires interactive stdin. "
+            "The sandbox has no stdin — this will hang or crash."
+        )
+
+    # UAS_RESULT presence check (warning only — code might construct it dynamically)
+    if "UAS_RESULT" not in code:
+        warnings.append(
+            "Code does not contain 'UAS_RESULT'. "
+            "The output may lack the required machine-readable summary line."
+        )
+
+    return critical_errors, warnings
+
 
 def collect_system_state() -> str:
     """Collect system state for prompt context."""
@@ -809,6 +843,21 @@ def main():
 
             logger.debug("Generated code (%d chars):\n---\n%s\n---",
                          len(code), code)
+
+            # Section 9: Pre-execution sanity checks
+            critical_errors, warnings = pre_execution_check(code)
+            for w in warnings:
+                logger.warning("Pre-execution warning: %s", w)
+            if critical_errors:
+                previous_code = code
+                previous_error = (
+                    "Your code was not executed because it has a fatal issue:\n"
+                    + "\n".join(critical_errors)
+                    + "\nFix this issue and regenerate."
+                )
+                logger.error("Pre-execution check failed: %s",
+                             "; ".join(critical_errors))
+                continue
 
             logger.info("Executing in sandbox...")
             result = run_in_sandbox(code)

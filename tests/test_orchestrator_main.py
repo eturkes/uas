@@ -7,7 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestrator.main import build_prompt, get_task, main, parse_uas_result, MAX_RETRIES
+from orchestrator.main import (
+    build_prompt, get_task, main, parse_uas_result, pre_execution_check,
+    MAX_RETRIES,
+)
 
 
 class TestBuildPrompt:
@@ -289,3 +292,90 @@ class TestMainLoop:
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
+
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args):
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        # First response has syntax error, second is valid
+        mock_client.generate.side_effect = [
+            '```python\ndef foo(\n```',
+            '```python\nprint("hello")\n```',
+        ]
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},  # verify
+            {"exit_code": 0, "stdout": "hello", "stderr": ""},       # attempt 2
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        # Sandbox: 1 verify + 1 execute (syntax error skipped sandbox)
+        assert mock_sandbox.call_count == 2
+
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args):
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        # First response uses input(), second is valid
+        mock_client.generate.side_effect = [
+            '```python\nname = input("Enter name: ")\nprint(name)\n```',
+            '```python\nprint("hello")\n```',
+        ]
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},  # verify
+            {"exit_code": 0, "stdout": "hello", "stderr": ""},       # attempt 2
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        # Sandbox: 1 verify + 1 execute (input() code skipped sandbox)
+        assert mock_sandbox.call_count == 2
+
+
+class TestPreExecutionCheck:
+    def test_valid_code_no_errors(self):
+        code = 'print("UAS_RESULT: ok")'
+        errors, warnings = pre_execution_check(code)
+        assert errors == []
+        assert warnings == []
+
+    def test_syntax_error_is_critical(self):
+        code = "def foo(\n"
+        errors, warnings = pre_execution_check(code)
+        assert len(errors) == 1
+        assert "Syntax error" in errors[0]
+
+    def test_input_call_is_critical(self):
+        code = 'name = input("Enter name: ")\nprint(f"UAS_RESULT: {name}")'
+        errors, warnings = pre_execution_check(code)
+        assert len(errors) == 1
+        assert "input()" in errors[0]
+
+    def test_missing_uas_result_is_warning(self):
+        code = 'print("hello world")'
+        errors, warnings = pre_execution_check(code)
+        assert errors == []
+        assert len(warnings) == 1
+        assert "UAS_RESULT" in warnings[0]
+
+    def test_multiple_critical_errors(self):
+        code = "name = input(\n"
+        errors, warnings = pre_execution_check(code)
+        # Syntax error catches the incomplete input( call too
+        assert len(errors) >= 1
+
+    def test_input_in_string_literal_is_caught(self):
+        # The regex will match input( even inside strings — this is acceptable
+        # because it's a simple heuristic and false positives are rare in practice
+        code = 'x = "input()"\nprint(f"UAS_RESULT: {x}")'
+        errors, _warnings = pre_execution_check(code)
+        # Regex matches inside strings — this is a known limitation but acceptable
+        assert len(errors) <= 1

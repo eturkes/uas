@@ -525,7 +525,7 @@ facts, not heuristics. The LLM decides how to use the knowledge.
 
 ---
 
-## [ ] Section 9: Pre-Execution Sanity Checks — Catch Obvious Failures Fast
+## [x] Section 9: Pre-Execution Sanity Checks — Catch Obvious Failures Fast
 
 **Goal:** Before running generated code in the sandbox, catch issues that will
 definitely fail — syntax errors, missing `UAS_RESULT`, use of `input()`. This

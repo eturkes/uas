@@ -1134,6 +1134,91 @@ def validate_uas_result(step: dict, workspace: str) -> str | None:
     return None
 
 
+def check_output_quality(step: dict, workspace: str) -> list[str]:
+    """Validate quality of output files after successful execution.
+
+    Checks that all claimed files exist, are non-empty, and have valid
+    format for known file types (.json, .csv, .py).
+    Returns a list of issue strings (empty = clean).
+    """
+    issues: list[str] = []
+    files_written = step.get("files_written", [])
+
+    for f in files_written:
+        fpath = os.path.join(workspace, f) if not os.path.isabs(f) else f
+        if not os.path.exists(fpath):
+            # Already caught by validate_uas_result, skip here
+            continue
+
+        # Check non-empty
+        try:
+            size = os.path.getsize(fpath)
+        except OSError:
+            continue
+        if size == 0:
+            issues.append(f"File '{f}' is empty (0 bytes)")
+            continue
+
+        # Format-specific checks
+        lower = f.lower()
+        if lower.endswith(".json"):
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as jf:
+                    json.load(jf)
+            except (json.JSONDecodeError, OSError) as e:
+                issues.append(f"File '{f}' has invalid JSON: {e}")
+
+        elif lower.endswith(".csv"):
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as cf:
+                    first_line = cf.readline()
+                if not first_line.strip():
+                    issues.append(f"File '{f}' is a CSV with no header line")
+            except OSError as e:
+                issues.append(f"File '{f}' could not be read: {e}")
+
+        elif lower.endswith(".py"):
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as pf:
+                    source = pf.read()
+                compile(source, fpath, "exec")
+            except SyntaxError as e:
+                issues.append(f"File '{f}' has Python syntax error: {e}")
+            except OSError as e:
+                issues.append(f"File '{f}' could not be read: {e}")
+
+    return issues
+
+
+def cleanup_workspace_artifacts(workspace: str) -> None:
+    """Remove __pycache__ directories and .pyc files from workspace."""
+    try:
+        for root, dirs, files in os.walk(workspace):
+            # Remove .pyc files
+            for fname in files:
+                if fname.endswith(".pyc"):
+                    try:
+                        os.remove(os.path.join(root, fname))
+                    except OSError:
+                        pass
+            # Remove __pycache__ dirs (and don't recurse into them)
+            if "__pycache__" in dirs:
+                pycache = os.path.join(root, "__pycache__")
+                try:
+                    import shutil
+                    shutil.rmtree(pycache, ignore_errors=True)
+                except Exception:
+                    pass
+                dirs.remove("__pycache__")
+            # Skip .git and other internal dirs
+            dirs[:] = [
+                d for d in dirs
+                if d not in (".git", ".state", "node_modules")
+            ]
+    except OSError:
+        pass
+
+
 import re as _re
 
 # Patterns that indicate best-practice violations in generated code.
@@ -1634,6 +1719,23 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
 
             # Post-execution validation
             failure_reason = validate_uas_result(step, WORKSPACE)
+
+            # Section 16: Output quality checks
+            if failure_reason is None:
+                quality_issues = check_output_quality(step, WORKSPACE)
+                if quality_issues:
+                    for qi in quality_issues:
+                        logger.info("  Output quality issue: %s", qi)
+                    issue_list = "\n".join(f"- {qi}" for qi in quality_issues)
+                    failure_reason = (
+                        "Your script reported success but produced invalid output:\n"
+                        f"{issue_list}\n"
+                        "Fix the output and try again."
+                    )
+
+            # Section 16: Cleanup build artifacts
+            cleanup_workspace_artifacts(WORKSPACE)
+
             if failure_reason is None and step.get("verify"):
                 logger.info("  Verifying step output...")
                 if dashboard:

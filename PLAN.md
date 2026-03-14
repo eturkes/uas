@@ -878,7 +878,7 @@ ask for it. Each step's output gets committed, creating a clean history.
 
 ---
 
-## [ ] Section 16: Output Quality Checks — Validate What Was Produced
+## [x] Section 16: Output Quality Checks — Validate What Was Produced
 
 **Goal:** After successful code execution, validate the quality of outputs.
 Keep checks factual (files exist, formats are valid) — not stylistic.

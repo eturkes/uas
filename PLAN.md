@@ -390,7 +390,7 @@ mappings, instruct the LLM to do root cause analysis itself.
 
 ---
 
-## [ ] Section 7: System State Injection — Give the LLM Environmental Context
+## [x] Section 7: System State Injection — Give the LLM Environmental Context
 
 **Goal:** The LLM should know the current date, Python version, OS, available
 disk space, and network status. This is factual context that helps it make better

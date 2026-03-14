@@ -5,7 +5,9 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import re
+import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -25,6 +27,20 @@ MAX_RETRIES = 3
 logger = logging.getLogger(__name__)
 
 _UAS_RESULT_PATTERN = re.compile(r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE)
+
+
+def collect_system_state() -> str:
+    """Collect system state for prompt context."""
+    lines = []
+    lines.append(f"- Date: {datetime.now().strftime('%Y-%m-%d')}")
+    lines.append(f"- Python: {platform.python_version()}")
+    lines.append(f"- OS: {platform.system()} {platform.machine()}")
+    try:
+        usage = shutil.disk_usage(os.environ.get("WORKSPACE", "/workspace"))
+        lines.append(f"- Disk free: {round(usage.free / (1024**3), 1)} GB")
+    except Exception:
+        pass
+    return "\n".join(lines)
 
 
 def parse_uas_result(stdout: str) -> dict | None:
@@ -191,7 +207,8 @@ def scan_workspace(workspace_path: str, max_chars: int = 8000) -> str:
 def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  previous_code: str | None = None,
                  environment: list[str] | None = None,
-                 workspace_files: str | None = None) -> str:
+                 workspace_files: str | None = None,
+                 system_state: str | None = None) -> str:
     """Build the structured prompt for code generation.
 
     Uses XML tags with data sections (environment, task, workspace state)
@@ -207,6 +224,8 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
             "packages if you know a better option.\n"
         )
 
+    system_state_block = system_state or collect_system_state()
+
     # Data sections at top (environment, task, workspace state)
     prompt = f"""\
 <environment>
@@ -220,6 +239,8 @@ You are running inside an isolated, disposable container. You have FULL AUTONOMY
 
 This container is disposable. Nothing here affects the host. Be bold, not cautious.
 {pkg_hint}
+System info:
+{system_state_block}
 </environment>
 
 <approach>
@@ -683,6 +704,9 @@ def main():
         sys.exit(1)
     logger.info("Sandbox verified.")
 
+    # Section 7: Collect system state once and cache for all attempts.
+    system_state = collect_system_state()
+
     # Section 5c: Use coder-specific model for code generation
     client = get_llm_client(role="coder")
     previous_error = None
@@ -712,7 +736,8 @@ def main():
 
         prompt = build_prompt(task, attempt, previous_error, previous_code,
                               environment=environment,
-                              workspace_files=workspace_files)
+                              workspace_files=workspace_files,
+                              system_state=system_state)
 
         # Section 7c: Determine N for this attempt (budget-aware gating).
         n = _get_best_of_n(attempt)

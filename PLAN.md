@@ -1011,7 +1011,7 @@ experiments. Provide a single escape hatch for minimal mode.
 
 ---
 
-## [ ] Section 19: Integration Testing
+## [x] Section 19: Integration Testing
 
 **Goal:** Verify that all new features work correctly together. Tests should
 be unit-level (no LLM calls, no network) using mocks.

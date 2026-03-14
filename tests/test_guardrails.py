@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from architect.main import check_guardrails, check_guardrails_llm, check_project_guardrails
+from architect.main import (
+    check_guardrails,
+    check_guardrails_llm,
+    check_project_guardrails,
+    check_project_guardrails_llm,
+)
 
 
 class TestCheckGuardrails:
@@ -276,3 +281,87 @@ class TestLLMGuardrailsDefault:
             mock_factory.assert_not_called()
             assert any(v["severity"] == "error" for v in violations)
             assert any("hardcoded secret" in v["description"] for v in violations)
+
+
+class TestLLMProjectStructure:
+    """Tests for Section 6: LLM-assessed project structure checks."""
+
+    def _make_multi_file_project(self, tmp_path):
+        (tmp_path / "main.py").write_text("print('hello')")
+        (tmp_path / "utils.py").write_text("def helper(): pass")
+        (tmp_path / ".gitignore").write_text("__pycache__/\n")
+        (tmp_path / "README.md").write_text("# Project\n")
+        (tmp_path / "requirements.txt").write_text("requests==2.32.3\n")
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        (git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+
+    def test_llm_identifies_missing_artifacts(self, tmp_path):
+        self._make_multi_file_project(tmp_path)
+        llm_response = json.dumps({
+            "warnings": ["Missing Dockerfile for web application"],
+            "suggestions": ["Consider adding a Makefile"],
+        })
+        mock_client = MagicMock()
+        mock_client.generate.return_value = llm_response
+
+        with patch("orchestrator.llm_client.get_llm_client",
+                    return_value=mock_client):
+            warnings = check_project_guardrails_llm(
+                str(tmp_path), "Build a web API", [
+                    {"title": "Set up Flask app", "status": "completed"},
+                    {"title": "Add endpoints", "status": "completed"},
+                ]
+            )
+
+        mock_client.generate.assert_called_once()
+        assert len(warnings) == 1
+        assert "Dockerfile" in warnings[0]
+
+    def test_llm_no_warnings_for_simple_script(self, tmp_path):
+        (tmp_path / "script.py").write_text("print('hello')")
+        llm_response = json.dumps({
+            "warnings": [],
+            "suggestions": [],
+        })
+        mock_client = MagicMock()
+        mock_client.generate.return_value = llm_response
+
+        with patch("orchestrator.llm_client.get_llm_client",
+                    return_value=mock_client):
+            warnings = check_project_guardrails_llm(
+                str(tmp_path), "Print hello world", [
+                    {"title": "Write script", "status": "completed"},
+                ]
+            )
+
+        assert warnings == []
+
+    def test_llm_failure_falls_back_to_heuristic(self, tmp_path):
+        (tmp_path / "main.py").write_text("print('hello')")
+        (tmp_path / "utils.py").write_text("def helper(): pass")
+        mock_client = MagicMock()
+        mock_client.generate.side_effect = RuntimeError("LLM unavailable")
+
+        with patch("orchestrator.llm_client.get_llm_client",
+                    return_value=mock_client):
+            warnings = check_project_guardrails_llm(
+                str(tmp_path), "Build a project", []
+            )
+
+        assert any("Git repository" in w for w in warnings)
+
+    def test_minimal_mode_uses_heuristic(self, tmp_path):
+        self._make_multi_file_project(tmp_path)
+        with patch("architect.main.MINIMAL_MODE", True):
+            from architect.main import validate_workspace
+            state = {
+                "goal": "Build a project",
+                "steps": [
+                    {"title": "Step 1", "status": "completed",
+                     "files_written": []},
+                ],
+            }
+            with patch("orchestrator.llm_client.get_llm_client") as mock_factory:
+                validate_workspace(state, str(tmp_path))
+                mock_factory.assert_not_called()

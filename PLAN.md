@@ -221,7 +221,7 @@ runs miss these checks.
 ---
 
 ## Section 6: LLM-Assessed Project Structure (Replace check_project_guardrails)
-- [ ] **Status: Pending**
+- [x] **Status: Complete**
 
 ### Problem
 `architect/main.py:1357-1423` (`check_project_guardrails`) uses a hardcoded

@@ -1487,6 +1487,94 @@ def check_project_guardrails(workspace: str) -> list[str]:
     return warnings
 
 
+PROJECT_STRUCTURE_PROMPT = """\
+You are reviewing a project workspace to assess whether the right project \
+artifacts are present.
+
+**Goal:** {goal}
+
+**Files in workspace:**
+{file_list}
+
+**Steps completed:**
+{step_summaries}
+
+Given the specific type of project being built, assess which artifacts are \
+missing or unnecessary. Consider the project complexity: a single-file script \
+needs fewer artifacts than a multi-file application.
+
+Return ONLY valid JSON (no markdown fences):
+{{"warnings": ["missing artifact description", ...], "suggestions": ["optional improvement", ...]}}
+
+If everything looks appropriate for this project type, return \
+{{"warnings": [], "suggestions": []}}.
+"""
+
+
+def check_project_guardrails_llm(workspace: str, goal: str,
+                                 steps: list[dict]) -> list[str]:
+    try:
+        from orchestrator.llm_client import get_llm_client
+
+        try:
+            entries = os.listdir(workspace)
+        except OSError:
+            return check_project_guardrails(workspace)
+
+        file_list = "\n".join(
+            f"- {e}" for e in sorted(entries) if not e.startswith(".")
+        )
+        if not file_list:
+            file_list = "(empty workspace)"
+
+        step_summaries = "\n".join(
+            f"- Step {i+1}: {s.get('title', 'untitled')} "
+            f"[{s.get('status', 'unknown')}]"
+            for i, s in enumerate(steps)
+        )
+        if not step_summaries:
+            step_summaries = "(no steps)"
+
+        client = get_llm_client(role="planner")
+        prompt = PROJECT_STRUCTURE_PROMPT.format(
+            goal=goal,
+            file_list=file_list,
+            step_summaries=step_summaries,
+        )
+
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START,
+                       data={"purpose": "project_structure_review"})
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "project_structure_review"})
+
+        text = response.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [ln for ln in lines if not ln.startswith("```")]
+            text = "\n".join(lines).strip()
+
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end != -1:
+            text = text[brace_start:brace_end + 1]
+
+        result = json.loads(text)
+        warnings = result.get("warnings", [])
+        if not isinstance(warnings, list):
+            logger.warning("LLM project structure review returned non-list "
+                           "warnings, falling back to heuristic.")
+            return check_project_guardrails(workspace)
+
+        return [str(w)[:200] for w in warnings if isinstance(w, str)]
+
+    except Exception as exc:
+        logger.warning("LLM project structure review failed (%s), "
+                       "falling back to heuristic.", exc)
+        return check_project_guardrails(workspace)
+
+
 def verify_step_output(step: dict, workspace: str) -> str | None:
     """Verify step output against the step's verify criteria.
 
@@ -1583,7 +1671,12 @@ def validate_workspace(state: dict, workspace: str) -> dict:
         )
 
     # Project-level best-practice checks
-    bp_warnings = check_project_guardrails(workspace)
+    if not MINIMAL_MODE:
+        bp_warnings = check_project_guardrails_llm(
+            workspace, state.get("goal", ""), state.get("steps", [])
+        )
+    else:
+        bp_warnings = check_project_guardrails(workspace)
     if bp_warnings:
         lines.append("## Best Practice Warnings\n\n")
         for w in bp_warnings:

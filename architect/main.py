@@ -1575,6 +1575,123 @@ def check_project_guardrails_llm(workspace: str, goal: str,
         return check_project_guardrails(workspace)
 
 
+WORKSPACE_VALIDATION_PROMPT = """\
+You are reviewing a project workspace to assess whether the original goal \
+has been achieved.
+
+**Goal:** {goal}
+
+**Files in workspace (with sizes):**
+{file_listing}
+
+**File content previews:**
+{file_previews}
+
+**Steps completed:**
+{step_summaries}
+
+Assess whether the produced output actually satisfies the original goal. \
+Consider whether the files contain correct, complete content — not just \
+whether they exist.
+
+Return ONLY valid JSON (no markdown fences):
+{{"goal_satisfied": true/false, "confidence": "high"|"medium"|"low", \
+"issues": ["description of any problem", ...], \
+"summary": "brief assessment of the workspace"}}
+"""
+
+
+def validate_workspace_llm(state: dict, workspace: str) -> dict | None:
+    try:
+        from orchestrator.llm_client import get_llm_client
+
+        goal = state.get("goal", "")
+        if not goal:
+            return None
+
+        try:
+            ws_entries = [
+                e for e in os.listdir(workspace) if not e.startswith(".")
+            ]
+        except OSError:
+            return None
+
+        file_listing = ""
+        for entry in sorted(ws_entries):
+            path = os.path.join(workspace, entry)
+            try:
+                size = os.path.getsize(path)
+                file_listing += f"- {entry} ({size} bytes)\n"
+            except OSError:
+                file_listing += f"- {entry} (size unknown)\n"
+        if not file_listing:
+            file_listing = "(empty workspace)"
+
+        file_previews = ""
+        preview_count = 0
+        for entry in sorted(ws_entries):
+            if preview_count >= 5:
+                break
+            path = os.path.join(workspace, entry)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                    content = fh.read(200)
+                file_previews += f"### {entry}\n```\n{content}\n```\n\n"
+                preview_count += 1
+            except OSError:
+                continue
+        if not file_previews:
+            file_previews = "(no readable files)"
+
+        step_summaries = "\n".join(
+            f"- Step {i+1}: {s.get('title', 'untitled')} "
+            f"[{s.get('status', 'unknown')}]"
+            for i, s in enumerate(state.get("steps", []))
+        )
+        if not step_summaries:
+            step_summaries = "(no steps)"
+
+        client = get_llm_client(role="planner")
+        prompt = WORKSPACE_VALIDATION_PROMPT.format(
+            goal=goal,
+            file_listing=file_listing,
+            file_previews=file_previews,
+            step_summaries=step_summaries,
+        )
+
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START,
+                       data={"purpose": "workspace_validation"})
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "workspace_validation"})
+
+        text = response.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [ln for ln in lines if not ln.startswith("```")]
+            text = "\n".join(lines).strip()
+
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end != -1:
+            text = text[brace_start:brace_end + 1]
+
+        result = json.loads(text)
+        return {
+            "goal_satisfied": bool(result.get("goal_satisfied", True)),
+            "confidence": result.get("confidence", "low"),
+            "issues": result.get("issues", []),
+            "summary": result.get("summary", ""),
+        }
+
+    except Exception as exc:
+        logger.warning("LLM workspace validation failed (%s), skipping.", exc)
+        return None
+
+
 def verify_step_output(step: dict, workspace: str) -> str | None:
     """Verify step output against the step's verify criteria.
 
@@ -1683,6 +1800,27 @@ def validate_workspace(state: dict, workspace: str) -> dict:
             lines.append(f"- {w}\n")
         lines.append("\n")
 
+    llm_validation = None
+    if not MINIMAL_MODE:
+        llm_validation = validate_workspace_llm(state, workspace)
+        if llm_validation:
+            lines.append("## Goal Assessment (LLM)\n\n")
+            satisfied = llm_validation.get("goal_satisfied", True)
+            confidence = llm_validation.get("confidence", "unknown")
+            summary = llm_validation.get("summary", "")
+            lines.append(
+                f"- **Goal satisfied:** {'Yes' if satisfied else 'No'} "
+                f"(confidence: {confidence})\n"
+            )
+            if summary:
+                lines.append(f"- **Summary:** {summary}\n")
+            issues = llm_validation.get("issues", [])
+            if issues:
+                lines.append("- **Issues:**\n")
+                for issue in issues:
+                    lines.append(f"  - {issue}\n")
+            lines.append("\n")
+
     state_dir = os.path.join(workspace, ".state")
     try:
         os.makedirs(state_dir, exist_ok=True)
@@ -1698,6 +1836,8 @@ def validate_workspace(state: dict, workspace: str) -> dict:
         "workspace_empty": len(ws_entries) == 0,
         "best_practice_warnings": bp_warnings,
     }
+    if llm_validation:
+        validation_data["llm_assessment"] = llm_validation
     # Store validation data in state for programmatic access
     state["validation"] = validation_data
     return validation_data

@@ -576,6 +576,34 @@ python3 -m orchestrator.main -v "your task"
 UAS_VERBOSE=1 python3 -m architect.main "your goal"
 ```
 
+## Implicit Intelligence
+
+By default, UAS automatically applies a set of behavioral enhancements that
+improve reliability and output quality:
+
+- **Goal expansion:** Vague goals are automatically clarified with concrete
+  success criteria before decomposition.
+- **Cross-run knowledge base:** Package versions and lessons learned from
+  previous runs are persisted and used to avoid repeating past mistakes.
+- **PyPI version resolution:** Current stable versions of suggested packages
+  are resolved from PyPI and injected into prompts so the LLM pins versions.
+- **Git management:** The workspace is automatically initialized as a git
+  repository, with checkpoints committed after each successful step.
+- **Research-first prompts:** The LLM is instructed to reason through its
+  approach, verify library versions, and check for pitfalls before coding.
+- **Output validation:** Post-execution checks verify that the `UAS_RESULT`
+  JSON is present and that reported files actually exist.
+
+All of these are active by default. To disable them all at once (useful for
+debugging or minimal overhead), set:
+
+```bash
+UAS_MINIMAL=1 uas "your goal"
+```
+
+There are no per-feature toggles — `UAS_MINIMAL` is a single switch for
+all-or-nothing.
+
 ## Environment Variables
 
 | Variable | Purpose | Default |
@@ -601,6 +629,7 @@ UAS_VERBOSE=1 python3 -m architect.main "your goal"
 | `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | *(unlimited)* |
 | `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | *(unlimited)* |
 | `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | `3000` |
+| `UAS_MINIMAL` | Disable all optional enhancements (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_HOST_UID` | Host user UID for file ownership in containers | *(auto-set by wrapper)* |
 | `UAS_HOST_GID` | Host user GID for file ownership in containers | *(auto-set by wrapper)* |

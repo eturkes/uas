@@ -24,6 +24,7 @@ STDERR_START = "===STDERR_START==="
 STDERR_END = "===STDERR_END==="
 
 MAX_RETRIES = 3
+MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
 logger = logging.getLogger(__name__)
 
@@ -332,9 +333,10 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
 
         # Section 17: Resolve current stable versions from PyPI for packages
         # without version pins. Prefer knowledge base versions when available.
+        # Section 18: Skip in minimal mode.
         kb_versions = (knowledge or {}).get("package_versions", {})
         unpinned = [p for p in environment if "==" not in p]
-        if unpinned:
+        if unpinned and not MINIMAL_MODE:
             # Gather versions: knowledge base first, then live PyPI
             version_map: dict[str, str] = {}
             still_need: list[str] = []
@@ -361,8 +363,9 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
     system_state_block = system_state or collect_system_state()
 
     # Section 8: Format prior knowledge for prompt injection
+    # Section 18: Skip in minimal mode.
     knowledge_block = ""
-    if knowledge:
+    if knowledge and not MINIMAL_MODE:
         pkg_versions = knowledge.get("package_versions", {})
         lessons = knowledge.get("lessons", [])
         if pkg_versions or lessons:
@@ -391,23 +394,10 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                 "and to use known-good versions.\n</prior_knowledge>\n"
             )
 
-    # Data sections at top (environment, task, workspace state)
-    prompt = f"""\
-<environment>
-You are running inside an isolated, disposable container. You have FULL AUTONOMY:
-- ROOT ACCESS. Install any system packages with apt-get. No sudo needed.
-- UNRESTRICTED NETWORK. Fetch any URL, call any API, clone any repo. No firewall, no proxy.
-- PACKAGE INSTALLATION. pip install anything you need. Do it proactively at the top of your script.
-- COMMAND EXECUTION. Run any shell command via subprocess. No restrictions whatsoever.
-- WEB SEARCH. If you need to look something up — current library versions, API docs, best practices — you can and should use the network.
-- FILESYSTEM. Full read/write. Workspace: os.environ.get("WORKSPACE", "/workspace").
-
-This container is disposable. Nothing here affects the host. Be bold, not cautious.
-{pkg_hint}
-System info:
-{system_state_block}
-</environment>
-{knowledge_block}
+    # Section 18: Skip <approach> section in minimal mode.
+    approach_block = ""
+    if not MINIMAL_MODE:
+        approach_block = """
 <approach>
 Before writing code, reason through these questions:
 1. What is the best approach for this task? Are there multiple strategies?
@@ -430,7 +420,25 @@ Encode your research findings directly into your code as comments or as
 defensive checks. Don't produce a separate research document — just write
 better code because you researched first.
 </approach>
+"""
 
+    # Data sections at top (environment, task, workspace state)
+    prompt = f"""\
+<environment>
+You are running inside an isolated, disposable container. You have FULL AUTONOMY:
+- ROOT ACCESS. Install any system packages with apt-get. No sudo needed.
+- UNRESTRICTED NETWORK. Fetch any URL, call any API, clone any repo. No firewall, no proxy.
+- PACKAGE INSTALLATION. pip install anything you need. Do it proactively at the top of your script.
+- COMMAND EXECUTION. Run any shell command via subprocess. No restrictions whatsoever.
+- WEB SEARCH. If you need to look something up — current library versions, API docs, best practices — you can and should use the network.
+- FILESYSTEM. Full read/write. Workspace: os.environ.get("WORKSPACE", "/workspace").
+
+This container is disposable. Nothing here affects the host. Be bold, not cautious.
+{pkg_hint}
+System info:
+{system_state_block}
+</environment>
+{knowledge_block}{approach_block}
 <task>
 {task}
 </task>"""
@@ -909,14 +917,16 @@ def main():
     system_state = collect_system_state()
 
     # Section 8: Load cross-run knowledge base at startup.
+    # Section 18: Skip in minimal mode.
     knowledge = None
-    try:
-        from architect.state import read_knowledge_base
-        kb = read_knowledge_base()
-        if kb.get("package_versions") or kb.get("lessons"):
-            knowledge = kb
-    except Exception:
-        pass
+    if not MINIMAL_MODE:
+        try:
+            from architect.state import read_knowledge_base
+            kb = read_knowledge_base()
+            if kb.get("package_versions") or kb.get("lessons"):
+                knowledge = kb
+        except Exception:
+            pass
 
     # Section 5c: Use coder-specific model for code generation
     client = get_llm_client(role="coder")

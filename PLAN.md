@@ -963,7 +963,7 @@ also provide pre-fetched version data to save time.
 
 ---
 
-## [ ] Section 18: Consolidate Feature Controls
+## [x] Section 18: Consolidate Feature Controls
 
 **Goal:** Provide a clean interface for controlling optional behaviors. Most
 features from this plan should be on by default — they're improvements, not

@@ -60,6 +60,7 @@ from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
+MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
 
@@ -1857,27 +1858,31 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 )
 
                 # Section 8: Record knowledge from successful execution
-                step_output = step.get("output", "") or ""
-                step_stderr = step.get("stderr_output", "") or ""
-                combined_output = step_output + "\n" + step_stderr
-                installed_pkgs = _extract_installed_packages(combined_output)
-                if installed_pkgs:
-                    append_knowledge("package_version", installed_pkgs)
-                # Record lesson when a retry succeeded
-                if spec_attempt > 0:
-                    reflections = step.get("reflections", [])
-                    prev_error = (
-                        reflections[-1].get("root_cause", "")
-                        if reflections else ""
-                    )
-                    append_knowledge("lesson", {
-                        "error_snippet": prev_error[:200],
-                        "solution_snippet": step["description"][:200],
-                        "step_title": step["title"],
-                    })
+                # Section 18: Skip knowledge base updates in minimal mode.
+                if not MINIMAL_MODE:
+                    step_output = step.get("output", "") or ""
+                    step_stderr = step.get("stderr_output", "") or ""
+                    combined_output = step_output + "\n" + step_stderr
+                    installed_pkgs = _extract_installed_packages(combined_output)
+                    if installed_pkgs:
+                        append_knowledge("package_version", installed_pkgs)
+                    # Record lesson when a retry succeeded
+                    if spec_attempt > 0:
+                        reflections = step.get("reflections", [])
+                        prev_error = (
+                            reflections[-1].get("root_cause", "")
+                            if reflections else ""
+                        )
+                        append_knowledge("lesson", {
+                            "error_snippet": prev_error[:200],
+                            "solution_snippet": step["description"][:200],
+                            "step_title": step["title"],
+                        })
 
                 # Section 15: Git checkpoint after successful step
-                git_checkpoint(WORKSPACE, step["id"], step["title"])
+                # Section 18: Skip in minimal mode.
+                if not MINIMAL_MODE:
+                    git_checkpoint(WORKSPACE, step["id"], step["title"])
 
                 return True
 
@@ -2210,9 +2215,11 @@ def main():
             sys.exit(1)
 
         original_goal = goal
-        goal = expand_goal(goal)
-        if goal != original_goal:
-            logger.info("Expanded goal: %s", goal)
+        # Section 18: Skip goal expansion in minimal mode.
+        if not MINIMAL_MODE:
+            goal = expand_goal(goal)
+            if goal != original_goal:
+                logger.info("Expanded goal: %s", goal)
 
         logger.info("Goal: %s\n", goal)
         event_log.emit(EventType.GOAL_RECEIVED, data={"goal": goal})
@@ -2286,7 +2293,9 @@ def main():
         sys.exit(0)
 
     # Initialize git repo before execution starts
-    ensure_git_repo(WORKSPACE)
+    # Section 18: Skip in minimal mode.
+    if not MINIMAL_MODE:
+        ensure_git_repo(WORKSPACE)
 
     # Phase 2: Execute (resume-aware, parallel where possible)
     logger.info("\nPhase 2: Executing steps via Orchestrator...")

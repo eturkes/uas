@@ -302,7 +302,7 @@ to naturally apply these practices, not to enforce them with rigid rules.
 
 ---
 
-## [ ] Section 6: Smarter Error Context — Let the LLM Diagnose Root Causes
+## [x] Section 6: Smarter Error Context — Let the LLM Diagnose Root Causes
 
 **Goal:** When passing errors back to the LLM for retry, provide better structure
 that helps the LLM diagnose the issue. Instead of hardcoded exception→message

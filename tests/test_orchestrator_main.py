@@ -83,15 +83,18 @@ class TestBuildPrompt:
         prompt = build_prompt("task", attempt=MAX_RETRIES,
                               previous_error="error",
                               previous_code="code")
-        assert "FINAL attempt" in prompt
-        assert "maximally defensive" in prompt
+        assert "FINAL ATTEMPT" in prompt
+        assert "simplest possible script" in prompt
         assert "try/except" in prompt
+        assert "standard library" in prompt
 
+    @patch("orchestrator.main.MAX_RETRIES", 4)
     def test_second_retry_different_strategy(self):
         prompt = build_prompt("task", attempt=3,
                               previous_error="error",
                               previous_code="code")
-        assert "fundamentally different strategy" in prompt
+        assert "fundamentally flawed" in prompt
+        assert "completely different way" in prompt
 
     def test_environment_hints(self):
         prompt = build_prompt("task", attempt=1,
@@ -116,7 +119,7 @@ class TestBuildPrompt:
     def test_analysis_instruction_in_retry(self):
         prompt = build_prompt("any task", attempt=2, previous_error="some error")
         assert "<analysis>" in prompt
-        assert "analyze the root cause" in prompt
+        assert "diagnose the root cause" in prompt
 
     def test_data_before_instructions(self):
         """Data sections (environment, task) should appear before instructions (role, constraints)."""

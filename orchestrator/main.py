@@ -316,54 +316,65 @@ At the end of your script, include a self-verification section that:
             )
 
         if attempt >= MAX_RETRIES:
-            # Final attempt — maximally defensive
+            # Final attempt — simplify and be defensive
             prompt += f"""
 
 <previous_error attempt="{attempt - 1}">
+FINAL ATTEMPT. All previous approaches have failed.
+
 {code_section}
-Error output:
 ```
 {previous_error}
 ```
 
-This is the FINAL attempt. Be maximally defensive:
-- Add try/except around every external call.
-- Validate all inputs before use.
-- Include detailed error messages in every except block.
-- Do NOT repeat the same approach if it failed before.
-- Use a fundamentally different strategy if needed.
+Write the simplest possible script that accomplishes the core goal:
+- Use only the standard library if third-party packages are causing issues.
+- Wrap every external call in try/except with a meaningful fallback.
+- If the task involves network resources that may be unreliable, include
+  offline fallback behavior.
+- Validate every input and assumption.
 
-Before writing the script, analyze the root cause in <analysis> tags.
+Write your analysis in <analysis> tags, then write the defensive script.
 </previous_error>"""
         elif attempt > 2:
-            # Second retry — different strategy
+            # Second retry — fundamentally different approach
             prompt += f"""
 
 <previous_error attempt="{attempt - 1}">
+Your script has failed twice. The previous approach is fundamentally flawed.
+
 {code_section}
-Error output:
 ```
 {previous_error}
 ```
 
-The previous approach failed. Do NOT repeat the same approach.
-Identify what went wrong and use a fundamentally different strategy.
+Do NOT repeat the same approach. Step back and consider:
+- Is there a completely different way to accomplish this task?
+- Is the task description itself ambiguous? Interpret it more conservatively.
+- Are you relying on an assumption that's incorrect (API format, file location,
+  data schema)? Use the network to verify.
 
-Before writing the script, analyze the root cause in <analysis> tags.
+Write your new approach in <analysis> tags, then write a new script from scratch.
 </previous_error>"""
         else:
-            # First retry
+            # First retry — diagnose root cause
             prompt += f"""
 
 <previous_error attempt="{attempt - 1}">
+Your previous script failed. Here is the full output:
+
 {code_section}
-Error output:
 ```
 {previous_error}
 ```
 
-Before writing the corrected script, analyze the root cause of this
-error in <analysis> tags, then write the fixed script.
+Before writing the fix, diagnose the root cause:
+- Read the error message carefully. What specific line/operation failed?
+- Is this a missing dependency, a wrong file path, a network issue, a logic error,
+  or a data format mismatch?
+- What is the minimal change needed to fix it?
+
+Write your diagnosis in <analysis> tags, then write the corrected script.
 </previous_error>"""
 
     return prompt

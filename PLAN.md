@@ -571,7 +571,7 @@ not stylistic preferences.
 
 ---
 
-## [ ] Section 10: Goal Expansion — Clarify Vague Goals Automatically
+## [x] Section 10: Goal Expansion — Clarify Vague Goals Automatically
 
 **Goal:** When a user provides a vague goal, the system should expand it with
 reasonable defaults. Let the LLM do the expansion — it's a language task.

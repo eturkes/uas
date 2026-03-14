@@ -25,6 +25,7 @@ from .state import (
 from .planner import (
     decompose_goal,
     decompose_goal_with_voting,
+    expand_goal,
     reflect_and_rewrite,
     decompose_failing_step,
     generate_reflection,
@@ -2066,6 +2067,11 @@ def main():
             logger.error("No goal provided.")
             sys.exit(1)
 
+        original_goal = goal
+        goal = expand_goal(goal)
+        if goal != original_goal:
+            logger.info("Expanded goal: %s", goal)
+
         logger.info("Goal: %s\n", goal)
         event_log.emit(EventType.GOAL_RECEIVED, data={"goal": goal})
         goal_entity = prov.add_entity("goal", content=goal)
@@ -2076,6 +2082,7 @@ def main():
         event_log.emit(EventType.DECOMPOSITION_START)
         decompose_start = time.monotonic()
         state = init_state(goal, run_id=run_id)
+        state["original_goal"] = original_goal
         try:
             steps = decompose_goal_with_voting(goal)
         except Exception as e:

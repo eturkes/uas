@@ -14,6 +14,29 @@ _DEFAULT_REWRITE_TRIM = 3000
 
 logger = logging.getLogger(__name__)
 
+
+def expand_goal(goal: str) -> str:
+    """Expand a vague goal with reasonable defaults using LLM judgment."""
+    client = get_llm_client(role="planner")
+    prompt = f"""The user wants to accomplish this goal:
+"{goal}"
+
+If this goal is already clear and specific, return it unchanged.
+If it's vague or ambiguous, expand it with sensible defaults:
+- What should the output format be?
+- Where should outputs be saved?
+- What quality level is expected?
+- What scope is appropriate (prototype vs production)?
+
+Return ONLY the goal text (expanded or unchanged). No explanation."""
+
+    try:
+        expanded = client.generate(prompt)
+        return expanded.strip() if expanded.strip() else goal
+    except Exception:
+        return goal
+
+
 DECOMPOSITION_PROMPT = """\
 <goal>{goal}</goal>
 

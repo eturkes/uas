@@ -9,6 +9,7 @@ import platform
 import re
 import shutil
 import sys
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -31,6 +32,65 @@ _UAS_RESULT_PATTERN = re.compile(
 )
 
 _INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
+
+# Section 17: Module-level cache for resolved PyPI versions.
+_pypi_version_cache: dict[str, str] = {}
+
+
+def _fetch_pypi_version(package: str) -> tuple[str, str | None]:
+    """Fetch the latest stable version of *package* from PyPI.
+
+    Returns (package_name, version_string) or (package_name, None) on failure.
+    """
+    url = f"https://pypi.org/pypi/{package}/json"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read())
+        return package, data.get("info", {}).get("version")
+    except Exception:
+        return package, None
+
+
+def resolve_versions(packages: list[str]) -> dict[str, str]:
+    """Resolve current stable versions from PyPI for *packages*.
+
+    Only queries packages that don't already have ``==`` in them.
+    Results are cached in ``_pypi_version_cache`` for the process lifetime.
+    Runs requests concurrently with a ``ThreadPoolExecutor``.
+    Returns ``{package: version}``; skips any that failed.
+    """
+    to_query: list[str] = []
+    result: dict[str, str] = {}
+
+    for pkg in packages:
+        if "==" in pkg:
+            continue
+        # Strip any version specifiers (>=, ~=, etc.) to get the bare name
+        name = re.split(r"[><=!~]", pkg)[0].strip()
+        if not name:
+            continue
+        if name in _pypi_version_cache:
+            result[name] = _pypi_version_cache[name]
+        else:
+            to_query.append(name)
+
+    if not to_query:
+        return result
+
+    with ThreadPoolExecutor(max_workers=min(len(to_query), 8)) as pool:
+        futures = {pool.submit(_fetch_pypi_version, name): name
+                   for name in to_query}
+        for future in as_completed(futures):
+            try:
+                name, version = future.result()
+            except Exception:
+                continue
+            if version:
+                _pypi_version_cache[name] = version
+                result[name] = version
+
+    return result
 
 
 def pre_execution_check(code: str) -> tuple[list[str], list[str]]:
@@ -269,6 +329,34 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
             "Install these if appropriate, but use your own judgment — add or substitute\n"
             "packages if you know a better option.\n"
         )
+
+        # Section 17: Resolve current stable versions from PyPI for packages
+        # without version pins. Prefer knowledge base versions when available.
+        kb_versions = (knowledge or {}).get("package_versions", {})
+        unpinned = [p for p in environment if "==" not in p]
+        if unpinned:
+            # Gather versions: knowledge base first, then live PyPI
+            version_map: dict[str, str] = {}
+            still_need: list[str] = []
+            for pkg in unpinned:
+                name = re.split(r"[><=!~]", pkg)[0].strip()
+                if not name:
+                    continue
+                if name in kb_versions:
+                    version_map[name] = kb_versions[name]
+                else:
+                    still_need.append(name)
+            if still_need:
+                live = resolve_versions(still_need)
+                version_map.update(live)
+            if version_map:
+                version_lines = "\n".join(
+                    f"- {name}=={ver}" for name, ver in sorted(version_map.items())
+                )
+                pkg_hint += (
+                    f"\nCurrent stable versions from PyPI (use these for pip install):\n"
+                    f"{version_lines}\n"
+                )
 
     system_state_block = system_state or collect_system_state()
 

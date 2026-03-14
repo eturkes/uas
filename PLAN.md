@@ -920,7 +920,7 @@ Keep checks factual (files exist, formats are valid) — not stylistic.
 
 ---
 
-## [ ] Section 17: Package Version Context — Resolve Current Versions
+## [x] Section 17: Package Version Context — Resolve Current Versions
 
 **Goal:** Help the LLM pin package versions correctly by providing current stable
 versions from PyPI. The LLM is told to look things up (Section 2), but we can

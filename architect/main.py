@@ -80,19 +80,32 @@ def _extract_installed_packages(output: str) -> dict[str, str]:
             packages[pkg_match.group(1)] = pkg_match.group(2)
     return packages
 
-# Section 3b: Error-type-adaptive retry budgets.
-# Maps error type to max retries before early escalation.
-# Does not reduce MAX_SPEC_REWRITES — just exits the loop early for
-# error types where additional retries are unlikely to help.
-_ERROR_RETRY_BUDGETS = {
-    "dependency_error": 1,
-    "logic_error": MAX_SPEC_REWRITES,
-    "environment_error": 1,
-    "network_error": 2,
-    "timeout": 0,
-    "format_error": 2,
-    "unknown": MAX_SPEC_REWRITES,
-}
+RETRY_DECISION_PROMPT = """\
+You are deciding whether to retry a failing step in an automated code generation pipeline.
+
+<step_description>
+{step_description}
+</step_description>
+
+<current_error>
+Type: {error_type}
+</current_error>
+
+<attempt_info>
+Current attempt: {attempt} of {max_attempts} maximum
+</attempt_info>
+
+<reflection_history>
+{reflections_text}
+</reflection_history>
+
+Consider:
+- Are the reflections showing progress toward a fix, or repeating the same ideas?
+- Is this error type likely fixable with more retries?
+- Has a genuinely different approach been suggested?
+
+Return ONLY valid JSON: {{"continue": true, "reason": "..."}} or {{"continue": false, "reason": "..."}}
+"""
 
 
 _GITIGNORE_CONTENT = """\
@@ -215,24 +228,21 @@ def _text_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
 
 
-def should_continue_retrying(step, spec_attempt, error_type, reflections):
-    """Decide whether to continue retrying based on reflection quality.
+def _should_continue_retrying_heuristic(step, spec_attempt, error_type, reflections):
+    """Heuristic fallback for retry decisions using error budgets and text similarity."""
+    _ERROR_RETRY_BUDGETS = {
+        "dependency_error": 1,
+        "logic_error": MAX_SPEC_REWRITES,
+        "environment_error": 1,
+        "network_error": 2,
+        "timeout": 0,
+        "format_error": 2,
+        "unknown": MAX_SPEC_REWRITES,
+    }
 
-    Uses _ERROR_RETRY_BUDGETS as the upper bound but allows early termination
-    if reflections show stagnation, or extension beyond budget if reflections
-    show genuine progress. MAX_SPEC_REWRITES remains the hard ceiling.
-
-    Returns (should_continue: bool, reason: str).
-    """
     attempts_so_far = spec_attempt + 1
     error_budget = _ERROR_RETRY_BUDGETS.get(error_type, MAX_SPEC_REWRITES)
 
-    # Hard ceiling: never exceed MAX_SPEC_REWRITES
-    if spec_attempt >= MAX_SPEC_REWRITES:
-        return False, f"reached max spec rewrites ({MAX_SPEC_REWRITES})"
-
-    # Stagnation detection: if last 2 reflections have same error_type AND
-    # similar root_cause, we're not making progress — stop early
     if len(reflections) >= 2:
         last = reflections[-1]
         prev = reflections[-2]
@@ -246,11 +256,9 @@ def should_continue_retrying(step, spec_attempt, error_type, reflections):
                 f"and similar root_cause across last 2 attempts"
             )
 
-    # Within budget and not stagnating: continue
     if attempts_so_far <= error_budget:
         return True, f"within retry budget ({attempts_so_far}/{error_budget})"
 
-    # Over budget: allow extension only if reflections show a novel approach
     if len(reflections) >= 2:
         last_suggestion = reflections[-1].get("what_to_try_next", "").strip()
         if last_suggestion:
@@ -268,6 +276,64 @@ def should_continue_retrying(step, spec_attempt, error_type, reflections):
                 )
 
     return False, f"exceeded retry budget ({attempts_so_far}/{error_budget})"
+
+
+def should_continue_retrying(step, spec_attempt, error_type, reflections):
+    """Decide whether to continue retrying using LLM analysis with heuristic fallback.
+
+    Returns (should_continue: bool, reason: str).
+    """
+    if spec_attempt >= MAX_SPEC_REWRITES:
+        return False, f"reached max spec rewrites ({MAX_SPEC_REWRITES})"
+
+    if not MINIMAL_MODE:
+        try:
+            from orchestrator.llm_client import get_llm_client
+
+            reflections_text = ""
+            for i, r in enumerate(reflections):
+                reflections_text += (
+                    f"Attempt {r.get('attempt', i + 1)}:\n"
+                    f"  Error type: {r.get('error_type', 'unknown')}\n"
+                    f"  Root cause: {r.get('root_cause', 'unknown')}\n"
+                    f"  Next approach: {r.get('what_to_try_next', 'unknown')}\n\n"
+                )
+            if not reflections_text:
+                reflections_text = "No previous reflections."
+
+            prompt = RETRY_DECISION_PROMPT.format(
+                step_description=step.get("description", ""),
+                error_type=error_type,
+                attempt=spec_attempt + 1,
+                max_attempts=MAX_SPEC_REWRITES,
+                reflections_text=reflections_text,
+            )
+
+            event_log = get_event_log()
+            event_log.emit(EventType.LLM_CALL_START, data={"purpose": "retry_decision"})
+            client = get_llm_client(role="planner")
+            response = client.generate(prompt)
+            event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "retry_decision"})
+
+            text = response.strip()
+            fence_match = re.search(
+                r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL,
+            )
+            if fence_match:
+                text = fence_match.group(1)
+            else:
+                brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+                if brace_match:
+                    text = brace_match.group(0)
+
+            data = json.loads(text)
+            should_cont = data.get("continue", True)
+            reason = data.get("reason", "LLM decision")
+            return bool(should_cont), reason
+        except Exception:
+            logger.debug("LLM retry decision failed, using heuristic fallback", exc_info=True)
+
+    return _should_continue_retrying_heuristic(step, spec_attempt, error_type, reflections)
 
 
 

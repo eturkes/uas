@@ -13,7 +13,7 @@ independence (no section depends on a later section).
 ---
 
 ## Section 1: LLM-Based Retry Decision (Replace Stagnation Detection + Error Budgets)
-- [ ] **Status: Pending**
+- [x] **Status: Complete**
 
 ### Problem
 `architect/main.py:83-95` defines `_ERROR_RETRY_BUDGETS` — a hardcoded dict mapping

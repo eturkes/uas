@@ -174,32 +174,43 @@ class TestReflectionsInState:
 
 class TestErrorRetryBudgets:
     def test_dependency_error_budget(self):
-        from architect.main import _ERROR_RETRY_BUDGETS
-        assert _ERROR_RETRY_BUDGETS["dependency_error"] == 1
+        from architect.main import _should_continue_retrying_heuristic
+        ok, _ = _should_continue_retrying_heuristic({"id": 1}, 1, "dependency_error", [])
+        assert ok is False
 
     def test_logic_error_full_budget(self):
-        from architect.main import _ERROR_RETRY_BUDGETS, MAX_SPEC_REWRITES
-        assert _ERROR_RETRY_BUDGETS["logic_error"] == MAX_SPEC_REWRITES
+        from architect.main import _should_continue_retrying_heuristic, MAX_SPEC_REWRITES
+        ok, reason = _should_continue_retrying_heuristic({"id": 1}, 0, "logic_error", [])
+        assert ok is True
+        assert f"/{MAX_SPEC_REWRITES}" in reason
 
     def test_timeout_zero_budget(self):
-        from architect.main import _ERROR_RETRY_BUDGETS
-        assert _ERROR_RETRY_BUDGETS["timeout"] == 0
+        from architect.main import _should_continue_retrying_heuristic
+        ok, _ = _should_continue_retrying_heuristic({"id": 1}, 0, "timeout", [{"error_type": "timeout", "root_cause": "timed out", "what_to_try_next": "optimize"}])
+        assert ok is False
 
     def test_network_error_budget(self):
-        from architect.main import _ERROR_RETRY_BUDGETS
-        assert _ERROR_RETRY_BUDGETS["network_error"] == 2
+        from architect.main import _should_continue_retrying_heuristic
+        ok, reason = _should_continue_retrying_heuristic({"id": 1}, 0, "network_error", [])
+        assert ok is True
+        assert "/2" in reason
 
     def test_environment_error_budget(self):
-        from architect.main import _ERROR_RETRY_BUDGETS
-        assert _ERROR_RETRY_BUDGETS["environment_error"] == 1
+        from architect.main import _should_continue_retrying_heuristic
+        ok, _ = _should_continue_retrying_heuristic({"id": 1}, 1, "environment_error", [])
+        assert ok is False
 
     def test_format_error_budget(self):
-        from architect.main import _ERROR_RETRY_BUDGETS
-        assert _ERROR_RETRY_BUDGETS["format_error"] == 2
+        from architect.main import _should_continue_retrying_heuristic
+        ok, reason = _should_continue_retrying_heuristic({"id": 1}, 0, "format_error", [])
+        assert ok is True
+        assert "/2" in reason
 
     def test_unknown_full_budget(self):
-        from architect.main import _ERROR_RETRY_BUDGETS, MAX_SPEC_REWRITES
-        assert _ERROR_RETRY_BUDGETS["unknown"] == MAX_SPEC_REWRITES
+        from architect.main import _should_continue_retrying_heuristic, MAX_SPEC_REWRITES
+        ok, reason = _should_continue_retrying_heuristic({"id": 1}, 0, "brand_new_error", [])
+        assert ok is True
+        assert f"/{MAX_SPEC_REWRITES}" in reason
 
     def test_classify_failure_used_for_budget(self):
         """classify_failure is importable from explain and returns valid types."""
@@ -212,6 +223,7 @@ class TestErrorRetryBudgets:
 # Section 4: Adaptive retry budgets using reflection quality
 # ---------------------------------------------------------------------------
 
+@patch("architect.main.MINIMAL_MODE", True)
 class TestShouldContinueRetrying:
     def test_within_budget_no_reflections(self):
         from architect.main import should_continue_retrying

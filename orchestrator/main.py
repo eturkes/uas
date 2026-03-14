@@ -119,14 +119,13 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
     at the top and instruction sections (role, constraints, verification)
     at the bottom for optimal Claude response quality.
     """
-    env_setup = ""
+    pkg_hint = ""
     if environment:
         pkgs = " ".join(environment)
-        env_setup = (
-            f"\n- Required packages for this task: {pkgs}\n"
-            "- Install them at the top of your script using subprocess:\n"
-            "  subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', "
-            f"'{pkgs}'], check=True)\n"
+        pkg_hint = (
+            f"\nSuggested packages for this task: {pkgs}\n"
+            "Install these if appropriate, but use your own judgment — add or substitute\n"
+            "packages if you know a better option.\n"
         )
 
     # Data sections at top (environment, task, workspace state)
@@ -141,8 +140,25 @@ You are running inside an isolated, disposable container. You have FULL AUTONOMY
 - FILESYSTEM. Full read/write. Workspace: os.environ.get("WORKSPACE", "/workspace").
 
 This container is disposable. Nothing here affects the host. Be bold, not cautious.
-{env_setup}
+{pkg_hint}
 </environment>
+
+<approach>
+Before writing code, reason through these questions:
+1. What is the best approach for this task? Are there multiple strategies?
+   Pick the most robust one.
+2. What packages or tools does this require? What are their current stable
+   versions? If you're not sure, check PyPI (https://pypi.org/pypi/PACKAGE/json)
+   or use pip's --dry-run flag to verify availability.
+3. Are there known pitfalls, breaking changes, or deprecations in the
+   libraries you plan to use? If uncertain, check the docs.
+4. If the task involves an external API or data source, what is its current
+   format/schema? Don't assume — verify if possible.
+
+Encode your research findings directly into your code as comments or as
+defensive checks. Don't produce a separate research document — just write
+better code because you researched first.
+</approach>
 
 <task>
 {task}

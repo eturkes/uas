@@ -88,7 +88,7 @@ should be told plainly: you can do anything, and you should.
 
 ---
 
-## [ ] Section 2: Implicit Research — Tell the LLM to Research Before Coding
+## [x] Section 2: Implicit Research — Tell the LLM to Research Before Coding
 
 **Goal:** Instead of building a separate research pipeline in Python, instruct the
 code-generation LLM to research the problem domain itself before writing code.

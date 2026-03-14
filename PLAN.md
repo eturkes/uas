@@ -249,7 +249,7 @@ decide what's relevant.
 
 ---
 
-## [ ] Section 5: Enhanced Decomposition — Implicit Best Practices in Planning
+## [x] Section 5: Enhanced Decomposition — Implicit Best Practices in Planning
 
 **Goal:** The planner's decomposition prompt should encode best practices that
 sophisticated users currently specify manually. The key is to instruct the LLM

@@ -39,9 +39,9 @@ Failure modes: network timeout, malformed CSV, empty dataset after cleaning.
 </analysis>
 <complexity_assessment>medium — 3 sequential data processing steps</complexity_assessment>
 [
-  {{"title": "Download CSV", "description": "Download the CSV file from the given URL using requests and save it to the workspace as raw_data.csv. Print the number of rows and columns.", "depends_on": [], "verify": "raw_data.csv exists in workspace and has >0 rows", "environment": ["requests"]}},
-  {{"title": "Clean data", "description": "Read raw_data.csv from the workspace, handle missing values (drop rows with >50% nulls, fill numeric nulls with median), remove duplicates, and save as cleaned_data.csv. Print cleaning summary.", "depends_on": [1], "verify": "cleaned_data.csv exists and has fewer or equal rows to raw_data.csv", "environment": ["pandas"]}},
-  {{"title": "Summary statistics", "description": "Read cleaned_data.csv, compute summary statistics (mean, median, std, min, max for numeric columns), and save results to summary.json and summary.txt. Print the summary.", "depends_on": [2], "verify": "summary.json and summary.txt exist in workspace", "environment": ["pandas"]}}
+  {{"title": "Download CSV", "description": "Download the CSV file from the given URL using requests and save it to the workspace as raw_data.csv. Validate the response is valid CSV (not HTML error page). Print the number of rows and columns.", "depends_on": [], "verify": "raw_data.csv exists in workspace, has >0 rows, and stdout prints row/column counts", "environment": ["requests"]}},
+  {{"title": "Clean data", "description": "Read raw_data.csv from the workspace, handle missing values (drop rows with >50% nulls, fill numeric nulls with median), remove duplicates, and save as cleaned_data.csv. Print cleaning summary showing rows before, rows dropped, rows remaining.", "depends_on": [1], "verify": "cleaned_data.csv exists, row count <= raw_data.csv row count, stdout shows before/after row counts and number of nulls filled", "environment": ["pandas"]}},
+  {{"title": "Summary statistics", "description": "Read cleaned_data.csv, compute summary statistics (mean, median, std, min, max for numeric columns), and save results to summary.json and summary.txt. Print the summary table to stdout.", "depends_on": [2], "verify": "summary.json contains keys for each numeric column with mean/median/std/min/max values; summary.txt is human-readable; stdout shows the statistics table", "environment": ["pandas"]}}
 ]
 
 Example 3 — Complex with parallelism:
@@ -76,7 +76,33 @@ specify that it must read from the actual file or use names established by the p
 For example, if a data source has column "SEX" (numeric 1/2), don't tell a downstream \
 visualization step to look for "Sex" (string "Male"/"Female") — the consumer must either \
 use the exact source column name or a data-loading step must explicitly perform the mapping.
+- Assuming knowledge instead of verifying: don't assume specific API endpoints, library \
+interfaces, or data formats are current — they may have changed. \
+BAD: "Use the Twitter API v2 endpoint /tweets/search/recent" (may be outdated) \
+GOOD: "Query the Twitter/X API documentation to find the current search endpoint, then implement"
 </anti_patterns>
+
+<expert_approach>
+## How an Expert Would Approach This
+Think like a senior engineer planning this project:
+
+- If you're unsure about the best library, API format, or approach for part of
+  the task, add an early exploration step that investigates options and writes
+  findings to a file. Later steps can read that file.
+- If a step produces code, describe what "done" looks like in the `verify` field.
+  Don't just say "code works" — be specific about expected outputs.
+- If a step processes external data, mention validation in the description.
+  Don't assume the data will be clean or in the expected format.
+- Structure steps so each one produces a concrete, verifiable artifact.
+  A step that only "sets up" without producing testable output is a wasted step.
+- For project creation tasks, the first step should produce a complete skeleton
+  (directory structure, config files, dependency manifest, .gitignore, README)
+  in one shot. Don't spread project boilerplate across multiple steps.
+- You have full network access in the execution environment. If a step needs
+  to discover the current version of a library, API endpoint format, or best
+  practices, mention that in the step description. The executor can and will
+  look things up.
+</expert_approach>
 
 <instructions>
 You are a task decomposition engine. Given the goal above, break it into \

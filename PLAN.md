@@ -188,7 +188,7 @@ for the task at hand. The LLM should use the network to find tools if needed.
 
 ---
 
-## [ ] Section 4: Workspace Understanding — Let the LLM Analyze Context
+## [x] Section 4: Workspace Understanding — Let the LLM Analyze Context
 
 **Goal:** Before generating code, give the LLM rich context about the existing
 workspace. Currently `scan_workspace()` produces a shallow file listing. Instead,

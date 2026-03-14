@@ -77,36 +77,115 @@ _TEXT_EXTENSIONS = {
 _SKIP_DIRS = {".state", ".git", "__pycache__", "node_modules", "venv", ".venv", ".claude"}
 
 
-def scan_workspace(workspace_path: str, max_chars: int = 4000) -> str:
-    """Scan workspace and return a formatted listing of existing files.
+_EXTENSION_LABELS = {
+    ".py": "Python", ".json": "JSON", ".csv": "CSV", ".yaml": "YAML",
+    ".yml": "YAML", ".md": "Markdown", ".html": "HTML", ".xml": "XML",
+    ".txt": "text", ".log": "Log", ".tsv": "TSV", ".sh": "Shell",
+    ".cfg": "Config", ".ini": "Config", ".toml": "TOML",
+}
 
-    Section 5b: Allows the orchestrator to be aware of workspace contents
-    even when the architect hasn't passed UAS_WORKSPACE_FILES.
+# Priority tiers for file ordering: Python first, then data, then others.
+_PRIORITY_EXTENSIONS = {
+    ".py": 0,
+    ".json": 1, ".csv": 1, ".yaml": 1, ".yml": 1, ".tsv": 1,
+}
+
+_PREVIEW_LINES = 30
+
+
+def _file_sort_key(entry: str) -> tuple[int, str]:
+    """Sort key: priority tier first, then alphabetical."""
+    _, ext = os.path.splitext(entry.lower())
+    tier = _PRIORITY_EXTENSIONS.get(ext, 2)
+    return (tier, entry)
+
+
+def scan_workspace(workspace_path: str, max_chars: int = 8000) -> str:
+    """Scan workspace and return a formatted listing with content previews.
+
+    For text files, includes the first 30 lines as an indented preview.
+    Binary files show name and size only. Python files are listed first,
+    then data files, then everything else. Stays within max_chars budget.
     """
     if not workspace_path or not os.path.isdir(workspace_path):
         return ""
-    lines: list[str] = []
-    total = 0
-    for entry in sorted(os.listdir(workspace_path)):
-        if total >= max_chars:
-            break
+    entries: list[str] = []
+    dirs: list[str] = []
+    for entry in os.listdir(workspace_path):
         if entry.startswith(".") or entry in _SKIP_DIRS:
             continue
         full = os.path.join(workspace_path, entry)
         if os.path.isfile(full):
-            try:
-                size = os.path.getsize(full)
-            except OSError:
-                continue
-            _, ext = os.path.splitext(entry.lower())
-            ftype = "text" if ext in _TEXT_EXTENSIONS else "binary"
-            line = f"  {entry} ({size} bytes, {ftype})"
-            lines.append(line)
-            total += len(line)
+            entries.append(entry)
         elif os.path.isdir(full):
-            lines.append(f"  {entry}/")
-            total += len(entry) + 3
-    return "\n".join(lines)
+            dirs.append(entry)
+
+    if not entries and not dirs:
+        return ""
+
+    # Sort files by priority tier, directories alphabetically
+    entries.sort(key=_file_sort_key)
+    dirs.sort()
+
+    lines: list[str] = ["=== workspace contents ==="]
+    total = len(lines[0])
+
+    for entry in entries:
+        if total >= max_chars:
+            break
+        full = os.path.join(workspace_path, entry)
+        try:
+            size = os.path.getsize(full)
+        except OSError:
+            continue
+        _, ext = os.path.splitext(entry.lower())
+        is_text = ext in _TEXT_EXTENSIONS
+        label = _EXTENSION_LABELS.get(ext, "text" if is_text else "binary")
+        header = f"{entry} ({size} bytes, {label}):"
+        total += len(header) + 1  # +1 for newline
+
+        if is_text:
+            # Read first 30 lines as preview
+            preview_lines: list[str] = []
+            try:
+                with open(full, encoding="utf-8", errors="replace") as f:
+                    for i, line in enumerate(f):
+                        if i >= _PREVIEW_LINES:
+                            break
+                        preview_lines.append(line.rstrip("\n\r"))
+            except OSError:
+                pass
+
+            if preview_lines:
+                preview = "\n".join(f"  {pl}" for pl in preview_lines)
+                # Check budget before adding preview
+                entry_text = f"{header}\n{preview}\n"
+                if total + len(preview) + len(preview_lines) * 2 > max_chars:
+                    # Truncate preview to fit budget
+                    remaining = max_chars - total - 10
+                    if remaining > 0:
+                        preview = preview[:remaining]
+                        entry_text = f"{header}\n{preview}\n  ...\n"
+                    else:
+                        entry_text = f"{header}\n"
+                else:
+                    entry_text = f"{header}\n{preview}\n"
+                lines.append(entry_text.rstrip("\n"))
+                total += len(entry_text)
+            else:
+                lines.append(header)
+        else:
+            # Binary: name and size only
+            lines.append(header)
+
+    for d in sorted(dirs):
+        if total >= max_chars:
+            break
+        line = f"{d}/ (directory)"
+        lines.append(line)
+        total += len(line) + 1
+
+    return "\n\n".join(lines)
 
 
 def build_prompt(task: str, attempt: int, previous_error: str | None = None,

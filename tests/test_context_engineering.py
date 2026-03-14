@@ -256,6 +256,7 @@ class TestCompressContext:
         assert "preview:" not in result
         assert "keys:" not in result
 
+    @patch("architect.main.MINIMAL_MODE", True)
     def test_tier4_emergency_truncation(self):
         progress = "## Current State\n- Steps completed: 5/10"
         context = "x" * 10000
@@ -266,6 +267,7 @@ class TestCompressContext:
         assert "## Current State" in result
         assert len(result) <= 550  # Allow slight overflow from header
 
+    @patch("architect.main.MINIMAL_MODE", True)
     def test_tier4_without_progress(self):
         context = "x" * 10000
         result = compress_context(context, max_length=500)
@@ -275,6 +277,99 @@ class TestCompressContext:
     def test_no_limit_returns_original(self):
         context = "x" * 10000
         assert compress_context(context, max_length=0) == context
+
+
+# ── Section 8: Smart Emergency Context Compression ────────────────
+
+
+class TestEmergencyCompressLLM:
+    @patch("architect.main.MINIMAL_MODE", False)
+    @patch("architect.main.get_event_log")
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_llm_compression_produces_output_under_limit(self, mock_get_client, mock_event_log):
+        compressed = "Goal: build app\nFiles: app.py\nProgress: 5/10 steps done"
+        client = MagicMock()
+        client.generate.return_value = compressed
+        mock_get_client.return_value = client
+        mock_event_log.return_value = MagicMock()
+
+        context = "x" * 10000
+        result = compress_context(
+            context, max_length=500,
+            progress_content="## Progress",
+            current_step_description="Build the frontend",
+        )
+        assert result == compressed
+        assert len(result) <= 500
+        client.generate.assert_called_once()
+
+    @patch("architect.main.MINIMAL_MODE", False)
+    @patch("architect.main.get_event_log")
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_timeout_falls_back_to_truncation(self, mock_get_client, mock_event_log):
+        import concurrent.futures
+        client = MagicMock()
+        client.generate.side_effect = lambda _: (_ for _ in ()).throw(
+            concurrent.futures.TimeoutError("timed out")
+        )
+        mock_get_client.return_value = client
+        mock_event_log.return_value = MagicMock()
+
+        progress = "## Current State\n- Steps completed: 5/10"
+        context = "x" * 10000
+        result = compress_context(
+            context, max_length=500,
+            progress_content=progress,
+        )
+        assert "## Current State" in result
+        assert len(result) <= 550
+
+    @patch("architect.main.MINIMAL_MODE", False)
+    @patch("architect.main.get_event_log")
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_llm_failure_falls_back_to_truncation(self, mock_get_client, mock_event_log):
+        client = MagicMock()
+        client.generate.side_effect = RuntimeError("API unavailable")
+        mock_get_client.return_value = client
+        mock_event_log.return_value = MagicMock()
+
+        progress = "## Progress info"
+        context = "important data " * 700
+        result = compress_context(
+            context, max_length=500,
+            progress_content=progress,
+        )
+        assert "## Progress info" in result
+        assert len(result) <= 550
+
+    @patch("architect.main.MINIMAL_MODE", False)
+    @patch("architect.main.get_event_log")
+    @patch("orchestrator.llm_client.get_llm_client")
+    def test_progress_file_prioritized_in_fallback(self, mock_get_client, mock_event_log):
+        client = MagicMock()
+        client.generate.side_effect = RuntimeError("fail")
+        mock_get_client.return_value = client
+        mock_event_log.return_value = MagicMock()
+
+        progress = "## Critical Progress\nStep 3 of 5 done"
+        context = "a" * 10000
+        result = compress_context(
+            context, max_length=500,
+            progress_content=progress,
+        )
+        assert "## Critical Progress" in result
+        assert "Step 3 of 5 done" in result
+
+    @patch("architect.main.MINIMAL_MODE", True)
+    def test_minimal_mode_skips_llm(self):
+        progress = "## State"
+        context = "x" * 10000
+        result = compress_context(
+            context, max_length=500,
+            progress_content=progress,
+        )
+        assert "## State" in result
+        assert len(result) <= 550
 
 
 # ── Section 4d: Dependency output distillation ───────────────────

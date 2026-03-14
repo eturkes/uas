@@ -107,6 +107,37 @@ Consider:
 Return ONLY valid JSON: {{"continue": true, "reason": "..."}} or {{"continue": false, "reason": "..."}}
 """
 
+EMERGENCY_COMPRESS_PROMPT = """\
+You are compressing context for an automated code generation pipeline that has hit its context size limit.
+Extract ONLY the information essential for the next step.
+
+<next_step>
+{next_step}
+</next_step>
+
+<target_length>
+{target_length} characters maximum
+</target_length>
+
+<context_start>
+{context_start}
+</context_start>
+
+<context_end>
+{context_end}
+</context_end>
+
+Produce a compressed summary under {target_length} characters that preserves:
+- The original goal
+- File paths created or modified
+- Error messages and their resolutions
+- Key results needed by the next step
+- Current plan state and progress
+
+Omit verbose stdout/stderr, raw data, and redundant information.
+Output ONLY the compressed summary text, nothing else.
+"""
+
 
 _GITIGNORE_CONTENT = """\
 # Python
@@ -552,7 +583,41 @@ def compress_context(context: str, max_length: int,
             return compressed
         # If still too long, fall through to Tier 4
 
-    # Tier 4: Emergency truncation — progress file + tail of context
+    # Tier 4: Emergency truncation
+    # Try LLM summarization before falling back to head/tail truncation
+    if not MINIMAL_MODE:
+        try:
+            import concurrent.futures as _cf
+            from orchestrator.llm_client import get_llm_client
+
+            context_start = context[:5000]
+            context_end = context[-5000:]
+            prompt = EMERGENCY_COMPRESS_PROMPT.format(
+                next_step=current_step_description or "unknown",
+                target_length=max_length,
+                context_start=context_start,
+                context_end=context_end,
+            )
+
+            event_log = get_event_log()
+            event_log.emit(EventType.LLM_CALL_START,
+                           data={"purpose": "emergency_compress"})
+            client = get_llm_client(role="planner")
+
+            with _cf.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(client.generate, prompt)
+                summary = future.result(timeout=15)
+
+            event_log.emit(EventType.LLM_CALL_COMPLETE,
+                           data={"purpose": "emergency_compress"})
+
+            if summary and len(summary) <= max_length:
+                return summary
+        except Exception:
+            logger.debug("LLM emergency compression failed, using truncation fallback",
+                         exc_info=True)
+
+    # Fallback: progress file + tail of context
     if progress_content:
         budget = max_length - len(progress_content) - 50
         if budget > 200:

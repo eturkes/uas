@@ -1,5 +1,6 @@
 """Interface to the Orchestrator: local subprocess or container modes."""
 
+import hashlib
 import logging
 import os
 import re
@@ -7,7 +8,6 @@ import shutil
 import subprocess
 import sys
 import time as _time
-import uuid
 
 from orchestrator.claude_config import get_claude_md_content
 from orchestrator.llm_client import heartbeat_log
@@ -284,9 +284,140 @@ def _kill_container(engine: str, name: str):
         pass
 
 
+def _project_id() -> str:
+    """Derive a short project identifier from the host workspace path."""
+    host_ws = os.environ.get("UAS_HOST_WORKSPACE", "")
+    if not host_ws:
+        host_ws = os.environ.get("UAS_WORKSPACE", "/workspace")
+    return hashlib.sha256(host_ws.encode()).hexdigest()[:12]
+
+
+def _project_container_name() -> str:
+    """Deterministic container name for the current project."""
+    return f"uas-project-{_project_id()}"
+
+
+def _project_image_name() -> str:
+    """Deterministic image name for committed project containers."""
+    return f"uas-project-{_project_id()}"
+
+
+def _ensure_project_container(engine: str) -> str:
+    """Ensure the persistent project container exists and is running.
+
+    Creates from a previously committed project image if available,
+    otherwise from the uas-sandbox base image.  The container stays
+    alive across steps so installed packages persist.
+    """
+    name = _project_container_name()
+    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
+
+    # Check if container already exists
+    result = subprocess.run(
+        _podman_cmd(engine, "container", "inspect",
+                    "--format", "{{.State.Running}}", name),
+        capture_output=True, text=True,
+    )
+
+    if result.returncode == 0:
+        if result.stdout.strip().lower() == "true":
+            return name
+        # Exists but stopped — start it
+        subprocess.run(
+            _podman_cmd(engine, "start", name),
+            check=True, capture_output=True,
+        )
+        return name
+
+    # Container doesn't exist — check for a committed project image
+    project_image = _project_image_name()
+    base_image = SANDBOX_IMAGE_NAME
+
+    check = subprocess.run(
+        _podman_cmd(engine, "image", "inspect", project_image),
+        capture_output=True,
+    )
+    if check.returncode == 0:
+        base_image = project_image
+        logger.info("  Reusing committed project image: %s", project_image)
+
+    # Mount auth credentials for Claude CLI
+    auth_args: list[str] = []
+    for auth_dir in ["/root/.claude",
+                     os.path.join(os.path.expanduser("~"), ".claude")]:
+        if os.path.isdir(auth_dir):
+            auth_args = ["-v", f"{auth_dir}:/root/.claude:Z"]
+            break
+
+    cmd = _podman_cmd(
+        engine, "run", "-d",
+        "--name", name,
+        "-v", f"{workspace}:/workspace:Z",
+    ) + auth_args + [
+        base_image,
+        "sleep", "infinity",
+    ]
+
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    logger.info("  Created persistent project container: %s", name)
+    return name
+
+
+def commit_project_image():
+    """Commit the persistent project container as a reusable image.
+
+    Saves the container state (including installed packages) as a
+    project-specific image, then stops and removes the container.
+    """
+    engine = find_engine()
+    if not engine:
+        return
+
+    name = _project_container_name()
+    image = _project_image_name()
+
+    # Check if container exists
+    result = subprocess.run(
+        _podman_cmd(engine, "container", "inspect", name),
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return
+
+    try:
+        subprocess.run(
+            _podman_cmd(engine, "commit", name, image),
+            check=True, capture_output=True, text=True,
+        )
+        logger.info("  Committed project image: %s", image)
+    except subprocess.CalledProcessError as e:
+        logger.warning("  Failed to commit project image: %s",
+                       e.stderr if e.stderr else str(e))
+
+    _stop_project_container(engine, name)
+
+
+def _stop_project_container(engine: str, name: str):
+    """Stop and remove the persistent project container."""
+    try:
+        subprocess.run(
+            _podman_cmd(engine, "stop", "-t", "5", name),
+            capture_output=True, timeout=30,
+        )
+    except Exception:
+        pass
+    try:
+        subprocess.run(
+            _podman_cmd(engine, "rm", "-f", name),
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+
 def _run_container(task: str, extra_env: dict | None = None,
                    output_callback=None) -> dict:
-    """Run the Orchestrator inside a lightweight sandbox container."""
+    """Run the Orchestrator inside the persistent project container."""
     engine = find_engine()
     if not engine:
         return {
@@ -304,10 +435,16 @@ def _run_container(task: str, extra_env: dict | None = None,
             "stderr": "Failed to build sandbox image. See error output above.",
         }
 
-    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
-    container_name = f"uas-orchestrator-{uuid.uuid4().hex[:8]}"
+    try:
+        container_name = _ensure_project_container(engine)
+    except subprocess.CalledProcessError as e:
+        return {
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": f"Failed to create project container: {e.stderr or str(e)}",
+        }
 
-    # Pass through API keys and config from host environment
+    # Build env args for podman exec
     env_args = []
     for var in [
         "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL",
@@ -337,29 +474,17 @@ def _run_container(task: str, extra_env: dict | None = None,
         for k, v in extra_env.items():
             env_args.extend(["-e", f"{k}={v}"])
 
-    # Mount auth credentials so the Claude CLI can authenticate and
-    # write session/cache files. Check /root/.claude (inside uas-engine
-    # container) then fall back to ~/.claude (running from host).
-    auth_args = []
-    for auth_dir in ["/root/.claude", os.path.join(os.path.expanduser("~"), ".claude")]:
-        if os.path.isdir(auth_dir):
-            auth_args = ["-v", f"{auth_dir}:/root/.claude:Z"]
-            break
-
     cmd = _podman_cmd(
-        engine, "run", "--rm",
-        "--name", container_name,
-        "--entrypoint", "python3",
-        "-v", f"{workspace}:/workspace:Z",
-    ) + auth_args + env_args + [
-        SANDBOX_IMAGE_NAME,
-        "-m", "orchestrator.main",
+        engine, "exec",
+        "-w", "/workspace",
+    ) + env_args + [
+        container_name,
+        "python3", "-m", "orchestrator.main",
     ]
 
     if output_callback:
-        result = _run_streaming(cmd, callback=output_callback,
-                                container_cleanup=(engine, container_name))
-        return result
+        # No container_cleanup — don't destroy the persistent container
+        return _run_streaming(cmd, callback=output_callback)
 
     try:
         result = subprocess.run(
@@ -376,7 +501,7 @@ def _run_container(task: str, extra_env: dict | None = None,
         }
     except subprocess.CalledProcessError as e:
         logger.error(
-            "  Container run failed (exit %d).", e.returncode
+            "  Container exec failed (exit %d).", e.returncode
         )
         if e.stderr:
             logger.error("  Podman stderr:\n%s", e.stderr)
@@ -388,8 +513,6 @@ def _run_container(task: str, extra_env: dict | None = None,
             "stderr": e.stderr or "",
         }
     except subprocess.TimeoutExpired:
-        logger.warning("  Killing timed-out container %s...", container_name)
-        _kill_container(engine, container_name)
         return {
             "exit_code": -1,
             "stdout": "",

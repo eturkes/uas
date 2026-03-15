@@ -39,6 +39,11 @@ mkdir -p "$AUTH_DIR"
 CLAUDE_JSON="$AUTH_DIR/claude.json"
 [ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
 
+# Persistent Podman storage so sandbox images and committed project
+# containers survive across uas sessions.
+UAS_STORAGE="$HOME/.uas/containers"
+mkdir -p "$UAS_STORAGE"
+
 # --- Launch the Orchestrator with nested-container privileges ---
 echo "Launching Orchestrator..."
 TTY_ARGS=()
@@ -52,8 +57,10 @@ exec "$ENGINE" run --rm \
     -e IS_SANDBOX=1 \
     -e "UAS_HOST_UID=$(id -u)" \
     -e "UAS_HOST_GID=$(id -g)" \
+    -e "UAS_HOST_WORKSPACE=$PWD" \
     -v "${AUTH_DIR}:/root/.claude:Z" \
     -v "${CLAUDE_JSON}:/root/.claude.json:Z" \
+    -v "${UAS_STORAGE}:/var/lib/containers:Z" \
     -v "$PWD:/workspace:Z" \
     -w /workspace \
     "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \

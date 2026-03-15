@@ -47,6 +47,7 @@ from .executor import (
     parse_uas_result,
     scan_workspace_files,
     format_workspace_scan,
+    commit_project_image,
     MAX_CONTEXT_LENGTH,
 )
 from .events import EventType, get_event_log, reset_event_log
@@ -3062,6 +3063,7 @@ def main():
                 })
                 _finalize_code_tracking(run_id=state.get("run_id", ""))
                 prov.save()
+                commit_project_image()
                 dashboard.finish(state)
                 logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
                 sys.exit(1)
@@ -3134,6 +3136,7 @@ def main():
                 })
                 _finalize_code_tracking(run_id=state.get("run_id", ""))
                 prov.save()
+                commit_project_image()
                 dashboard.finish(state)
                 logger.error("HALTED: Step %s failed irrecoverably.",
                              failed_step["id"])
@@ -3179,6 +3182,10 @@ def main():
     })
     _finalize_code_tracking(run_id=state.get("run_id", ""))
     prov.save()
+
+    # Commit the persistent project container so installed packages
+    # are preserved for future runs.
+    commit_project_image()
 
     # Build shared data for report and explanation
     events_data = [e.to_dict() for e in event_log.events]

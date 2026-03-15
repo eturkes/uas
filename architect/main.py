@@ -439,6 +439,9 @@ def get_goal(args) -> str:
         return goal
     goal_file = getattr(args, "goal_file", None) or os.environ.get("UAS_GOAL_FILE")
     if goal_file:
+        goal_file = os.path.expanduser(goal_file)
+        if not os.path.isabs(goal_file):
+            goal_file = os.path.join(WORKSPACE, goal_file)
         with open(goal_file, encoding="utf-8") as f:
             return f.read().strip()
     print("Enter your goal (submit with Ctrl+D):", file=sys.stderr)

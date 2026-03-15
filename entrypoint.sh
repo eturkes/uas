@@ -14,8 +14,8 @@ fi
 # =============================================================================
 # Non-interactive mode: skip Stage 1 when called programmatically
 # =============================================================================
-if [ -n "${UAS_TASK:-}" ] || [ -n "${UAS_GOAL:-}" ]; then
-    echo "Non-interactive mode detected (UAS_TASK or UAS_GOAL set)."
+if [ -n "${UAS_TASK:-}" ] || [ -n "${UAS_GOAL:-}" ] || [ -n "${UAS_GOAL_FILE:-}" ]; then
+    echo "Non-interactive mode detected (UAS_TASK, UAS_GOAL, or UAS_GOAL_FILE set)."
     echo "Skipping interactive setup."
     cd /uas
     python3 -m architect.main "$@"

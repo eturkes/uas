@@ -235,6 +235,10 @@ python3 -m architect.explain --cost /path/to/workspace
 # Run without containers (uses local Python + Claude Code CLI):
 UAS_SANDBOX_MODE=local UAS_GOAL="your goal" python3 -m architect.main
 
+# Read goal from a file (useful for long or multi-line goals):
+python3 -m architect.main --goal-file goal.txt
+UAS_GOAL_FILE=goal.txt python3 -m architect.main
+
 # Or run the prompt evaluation suite:
 python3 integration/eval.py                # Run all prompt cases
 python3 integration/eval.py -k hello       # Run cases matching 'hello'
@@ -243,8 +247,9 @@ python3 integration/eval.py --local        # Use local subprocess mode
 python3 integration/eval.py -v             # Verbose (show architect logs)
 ```
 
-When `UAS_GOAL` or `UAS_TASK` is set, the entrypoint skips the
-interactive Claude Code setup and proceeds directly to execution.
+When `UAS_GOAL`, `UAS_TASK`, or `UAS_GOAL_FILE` is set, the entrypoint
+skips the interactive Claude Code setup and proceeds directly to
+execution.
 
 ## Requirements
 
@@ -609,6 +614,7 @@ but `UAS_MINIMAL` is the simplest single switch to disable everything.
 | Variable | Purpose | Default |
 |---|---|---|
 | `UAS_GOAL` | Goal for the Architect Agent | *(prompted)* |
+| `UAS_GOAL_FILE` | Read goal from this file path | *(off)* |
 | `UAS_TASK` | Task for the Orchestrator | *(prompted)* |
 | `UAS_SANDBOX_MODE` | `container` or `local` | `container` |
 | `UAS_WORKSPACE` | Workspace directory path | `/workspace` |

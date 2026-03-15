@@ -107,6 +107,7 @@ def _run_container(code: str, timeout: int) -> dict:
             [
                 "podman", "--storage-driver=vfs",
                 "run", "--rm",
+                "--network=host",
                 "--name", container_name,
             ] + user_args + [
                 "-v", f"{script_path}:/sandbox/script.py:ro,Z",

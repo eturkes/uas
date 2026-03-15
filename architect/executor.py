@@ -86,7 +86,8 @@ def ensure_image(engine: str):
         try:
             subprocess.run(
                 _podman_cmd(
-                    engine, "build", "-t", SANDBOX_IMAGE_NAME,
+                    engine, "build", "--network=host",
+                    "-t", SANDBOX_IMAGE_NAME,
                     "-f", dockerfile_path,
                     framework_root,
                 ),
@@ -351,6 +352,7 @@ def _ensure_project_container(engine: str) -> str:
 
     cmd = _podman_cmd(
         engine, "run", "-d",
+        "--network=host",
         "--name", name,
         "-v", f"{workspace}:/workspace:Z",
     ) + auth_args + [

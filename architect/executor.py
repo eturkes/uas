@@ -15,6 +15,7 @@ from .events import EventType, get_event_log
 from .provenance import get_provenance_graph
 
 SANDBOX_IMAGE_NAME = "uas-sandbox"
+SANDBOX_TARBALL = "/var/lib/containers/sandbox.tar"
 MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "0"))
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
 RUN_TIMEOUT = None
@@ -47,9 +48,9 @@ def _podman_cmd(engine: str, *args: str) -> list[str]:
 def ensure_image(engine: str):
     """Ensure the lightweight uas-sandbox image exists.
 
-    Builds a minimal Python-based image with just the orchestrator code,
-    NOT the full uas-engine image (which would cause an inception loop
-    when already running inside uas-engine).
+    Prefers loading from a pre-built tarball (created by install.sh on
+    the host) to avoid running podman build inside a container.  Falls
+    back to building in-place for local development without containers.
     """
     check = subprocess.run(
         _podman_cmd(engine, "image", "inspect", SANDBOX_IMAGE_NAME),
@@ -58,11 +59,20 @@ def ensure_image(engine: str):
     if check.returncode == 0:
         return
 
+    # Prefer pre-built tarball (created by install.sh on the host).
+    if os.path.isfile(SANDBOX_TARBALL):
+        logger.info("  Loading sandbox image from pre-built tarball...")
+        subprocess.run(
+            _podman_cmd(engine, "load", "-i", SANDBOX_TARBALL),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return
+
+    # Fallback: build in-place (works when running outside containers).
     framework_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
-    # Dynamically generate a minimal Dockerfile for the sandbox.
-    # Node.js + Claude Code CLI are required so the orchestrator
-    # can call the LLM from inside the container.
     dockerfile_content = (
         f"FROM {SANDBOX_BASE_IMAGE}\n"
         "RUN apt-get update && apt-get install -y --no-install-recommends "

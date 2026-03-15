@@ -27,10 +27,36 @@ fi
 
 echo "Using container engine: ${ENGINE}"
 
-# --- Build the container image ---
+# --- Build the engine image ---
 echo "Building '${IMAGE_TAG}'..."
 "$ENGINE" build --no-cache -t "$IMAGE_TAG" -f "${SCRIPT_DIR}/Containerfile" "$SCRIPT_DIR"
 echo "Image '${IMAGE_TAG}' built successfully."
+echo ""
+
+# --- Build the sandbox image (pre-built on host for reliability) ---
+echo "Building sandbox image..."
+SANDBOX_DF=$(mktemp)
+cat > "$SANDBOX_DF" << 'SBOX_EOF'
+FROM docker.io/library/python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @anthropic-ai/claude-code
+WORKDIR /uas
+COPY orchestrator/ ./orchestrator/
+VOLUME /workspace
+WORKDIR /workspace
+SBOX_EOF
+"$ENGINE" build -t uas-sandbox -f "$SANDBOX_DF" "$SCRIPT_DIR"
+rm -f "$SANDBOX_DF"
+
+# Export sandbox image for the engine container's Podman
+UAS_STORAGE="$HOME/.uas/containers"
+mkdir -p "$UAS_STORAGE"
+"$ENGINE" save uas-sandbox -o "$UAS_STORAGE/sandbox.tar"
+echo "Sandbox image exported."
 echo ""
 
 # --- Ensure install directory exists ---

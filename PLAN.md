@@ -401,7 +401,7 @@ complex failures (where N=3 on attempt 2 would help).
 ---
 
 ## Section 11: LLM-Targeted Dependency Output Distillation
-- [ ] **Status: Pending**
+- [x] **Status: Complete**
 
 ### Problem
 `architect/main.py:503+` (`_distill_dependency_output`) uses a fixed template to

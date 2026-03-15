@@ -439,7 +439,11 @@ class TestDistillDependencyOutput:
 
 
 class TestBuildContextWithDistillation:
-    def test_uses_distilled_format_when_step_has_summary(self):
+    @patch("architect.main._distill_dependency_output_llm",
+           side_effect=lambda dep_id, dep_step, output, consumer_desc:
+               __import__("architect.main", fromlist=["_distill_dependency_output"])
+               ._distill_dependency_output(dep_id, dep_step, output))
+    def test_uses_distilled_format_when_step_has_summary(self, _mock_llm):
         step = {"depends_on": [1]}
         outputs = {1: {"stdout": "raw output", "stderr": "", "files": ["out.txt"]}}
         state = {

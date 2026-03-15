@@ -697,25 +697,54 @@ to the next step. Be concise. Include file paths and key data."""
 def distill_dependency_for_step(dep_id: int, dep_step: dict,
                                 output: str | dict,
                                 next_step: dict) -> str:
-    """Distill a dependency's output with awareness of the consuming step.
-
-    Uses an LLM to produce a targeted summary of what the next step needs
-    from this dependency. Falls back to _distill_dependency_output() on failure.
-
-    Gated behind UAS_SMART_DISTILL=1 env var.
-    """
-    if not os.environ.get("UAS_SMART_DISTILL"):
+    if MINIMAL_MODE:
         return _distill_dependency_output(dep_id, dep_step, output)
 
+    return _distill_dependency_output_llm(
+        dep_id, dep_step, output,
+        next_step.get("description", ""),
+    )
+
+
+TARGETED_DISTILL_PROMPT = """\
+A completed step produced the following output. Extract ONLY the information \
+that the consuming step needs.
+
+<completed_step>
+Step {dep_id} ({dep_title})
+Files produced: {files}
+Output:
+{output_preview}
+</completed_step>
+
+<consuming_step>
+{consumer_desc}
+</consuming_step>
+
+Return a concise summary containing ONLY:
+- File paths the consuming step will need to read or reference
+- Data schemas, column names, or key structures if the consuming step processes data
+- API responses, configuration values, or computed results the consuming step depends on
+- Any error or warning information relevant to the consuming step
+
+Do NOT include generic status information or redundant details. Be as brief as possible."""
+
+
+def _distill_dependency_output_llm(dep_id: int, dep_step: dict,
+                                   output: str | dict,
+                                   consumer_desc: str) -> str:
     try:
         from orchestrator.llm_client import get_llm_client
+
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START,
+                       data={"purpose": "targeted_distill"})
+
         client = get_llm_client(role="planner")
 
         title = dep_step.get("title", f"Step {dep_id}")
-        summary = dep_step.get("summary", "")
         files_written = dep_step.get("files_written", [])
 
-        # Build output preview
         if isinstance(output, dict):
             stdout = output.get("stdout", "")
             output_preview = stdout[:500] if stdout else ""
@@ -724,28 +753,35 @@ def distill_dependency_for_step(dep_id: int, dep_step: dict,
         else:
             output_preview = ""
 
-        prompt = DISTILL_PROMPT.format(
+        summary = dep_step.get("summary", "")
+        if summary:
+            output_preview = f"{summary}\n{output_preview}"
+
+        prompt = TARGETED_DISTILL_PROMPT.format(
             dep_id=dep_id,
             dep_title=title,
-            dep_summary=summary or "(no summary)",
             files=", ".join(files_written) if files_written else "(none)",
             output_preview=output_preview or "(no output)",
-            next_id=next_step.get("id", "?"),
-            next_title=next_step.get("title", "untitled"),
-            next_description=next_step.get("description", "no description"),
+            consumer_desc=consumer_desc or "(no description)",
         )
 
         response = client.generate(prompt)
+
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "targeted_distill"})
+
         if response and response.strip():
-            return (
-                f'<dependency step="{dep_id}" title="{title}">\n'
-                f"  {response.strip()}\n"
-                f"</dependency>"
-            )
+            verify = dep_step.get("verify", "")
+            parts = [f'<dependency step="{dep_id}" title="{title}">']
+            parts.append(f"  {response.strip()}")
+            if verify:
+                parts.append(
+                    f"  <verification>{verify}</verification>")
+            parts.append("</dependency>")
+            return "\n".join(parts)
     except Exception:
         pass
 
-    # Fallback to heuristic distillation
     return _distill_dependency_output(dep_id, dep_step, output)
 
 

@@ -12,8 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
-# Use vfs storage driver -- most reliable for nested container scenarios
-RUN printf '[storage]\ndriver = "vfs"\n' > /etc/containers/storage.conf
+# Configure Podman for in-container use: vfs storage (no kernel overlay
+# support needed), cgroupfs (systemd unavailable), file-based logging.
+RUN printf '[storage]\ndriver = "vfs"\n' > /etc/containers/storage.conf \
+    && printf '[engine]\ncgroup_manager = "cgroupfs"\nevents_logger = "file"\n' \
+       > /etc/containers/containers.conf
 
 # Install framework into /uas (immutable application code)
 WORKDIR /uas

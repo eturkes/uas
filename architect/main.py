@@ -1944,6 +1944,136 @@ def validate_workspace(state: dict, workspace: str) -> dict:
     return validation_data
 
 
+META_LEARNING_PROMPT = """\
+You are performing a post-run analysis of an automated code generation pipeline run.
+
+<goal>
+{goal}
+</goal>
+
+<step_outcomes>
+{step_outcomes}
+</step_outcomes>
+
+<run_stats>
+Total elapsed time: {total_elapsed:.1f} seconds
+Replanning events: {replan_count}
+</run_stats>
+
+Analyze the run holistically. Identify systemic patterns — not per-step issues, \
+but recurring themes across the run (e.g., "decomposition produced too many steps", \
+"API integration steps consistently required multiple retries", \
+"dependency errors were caused by version mismatches").
+
+Return ONLY valid JSON (no markdown fences):
+{{"systemic_lessons": [{{"pattern": "description of the pattern", \
+"recommendation": "what to do differently next time"}}], \
+"decomposition_feedback": "brief assessment of how well the goal was decomposed", \
+"knowledge_to_persist": [{{"key": "short label", "value": "lesson learned"}}]}}
+"""
+
+
+def post_run_meta_learning(state: dict) -> dict | None:
+    try:
+        from orchestrator.llm_client import get_llm_client
+
+        goal = state.get("goal", "")
+        if not goal:
+            return None
+
+        steps = state.get("steps", [])
+        if not steps:
+            return None
+
+        step_lines = []
+        for i, s in enumerate(steps):
+            error_types = []
+            for r in s.get("reflections", []):
+                et = r.get("error_type", "")
+                if et:
+                    error_types.append(et)
+            step_lines.append(
+                f"- Step {i+1}: {s.get('title', 'untitled')} | "
+                f"status={s.get('status', 'unknown')} | "
+                f"attempts={s.get('spec_attempt', 0)} | "
+                f"errors=[{', '.join(error_types)}]"
+            )
+        step_outcomes = "\n".join(step_lines) if step_lines else "(no steps)"
+
+        replan_count = sum(
+            1 for e in get_event_log().events
+            if hasattr(e, "event_type") and "replan" in str(getattr(e, "event_type", "")).lower()
+        )
+
+        client = get_llm_client(role="planner")
+        prompt = META_LEARNING_PROMPT.format(
+            goal=goal,
+            step_outcomes=step_outcomes,
+            total_elapsed=state.get("total_elapsed", 0.0),
+            replan_count=replan_count,
+        )
+
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START,
+                       data={"purpose": "meta_learning"})
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "meta_learning"})
+
+        text = response.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [ln for ln in lines if not ln.startswith("```")]
+            text = "\n".join(lines).strip()
+
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end != -1:
+            text = text[brace_start:brace_end + 1]
+
+        data = json.loads(text)
+
+        lessons = data.get("systemic_lessons", [])
+        knowledge_items = data.get("knowledge_to_persist", [])
+        decomp_feedback = data.get("decomposition_feedback", "")
+
+        for item in knowledge_items:
+            key = item.get("key", "")
+            value = item.get("value", "")
+            if key and value:
+                append_knowledge("lesson", {
+                    "source": "meta_learning",
+                    "key": key,
+                    "value": value,
+                })
+
+        scratchpad_lines = ["### Post-Run Meta-Learning"]
+        if decomp_feedback:
+            scratchpad_lines.append(f"Decomposition: {decomp_feedback}")
+        for lesson in lessons:
+            pattern = lesson.get("pattern", "")
+            rec = lesson.get("recommendation", "")
+            if pattern:
+                scratchpad_lines.append(f"- {pattern}: {rec}")
+        append_scratchpad(
+            "\n".join(scratchpad_lines),
+            run_id=state.get("run_id", ""),
+        )
+
+        logger.info("Post-run meta-learning: %d lessons, %d knowledge items",
+                     len(lessons), len(knowledge_items))
+
+        return {
+            "systemic_lessons": lessons,
+            "decomposition_feedback": decomp_feedback,
+            "knowledge_to_persist": knowledge_items,
+        }
+
+    except Exception as exc:
+        logger.debug("Post-run meta-learning failed (%s), skipping.", exc)
+        return None
+
+
 def _finalize_code_tracking(run_id: str = ""):
     """Load code versions from disk and record provenance links."""
     tracker = get_code_tracker()
@@ -3025,6 +3155,9 @@ def main():
         logger.warning("  Warning: workspace is empty")
     for bp_warn in validation.get("best_practice_warnings", []):
         logger.warning("  Best practice: %s", bp_warn)
+
+    if not MINIMAL_MODE:
+        post_run_meta_learning(state)
 
     if output_path:
         write_json_output(state, output_path)

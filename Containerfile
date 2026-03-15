@@ -1,9 +1,13 @@
-FROM quay.io/podman/stable:latest
+FROM docker.io/library/python:3.12-bookworm
 
 USER root
 
-# Install Python 3, pip, Node.js, and npm
-RUN dnf install -y python3 python3-pip nodejs npm && dnf clean all
+# Install Podman (for nested sandbox containers), Node.js, and npm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    podman crun slirp4netns ca-certificates curl \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code

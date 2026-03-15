@@ -33,32 +33,6 @@ echo "Building '${IMAGE_TAG}'..."
 echo "Image '${IMAGE_TAG}' built successfully."
 echo ""
 
-# --- Build the sandbox image (pre-built on host for reliability) ---
-echo "Building sandbox image..."
-SANDBOX_DF=$(mktemp)
-cat > "$SANDBOX_DF" << 'SBOX_EOF'
-FROM docker.io/library/python:3.12-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @anthropic-ai/claude-code
-WORKDIR /uas
-COPY orchestrator/ ./orchestrator/
-VOLUME /workspace
-WORKDIR /workspace
-SBOX_EOF
-"$ENGINE" build -t uas-sandbox -f "$SANDBOX_DF" "$SCRIPT_DIR"
-rm -f "$SANDBOX_DF"
-
-# Export sandbox image for the engine container's Podman
-UAS_STORAGE="$HOME/.uas/containers"
-mkdir -p "$UAS_STORAGE"
-"$ENGINE" save uas-sandbox -o "$UAS_STORAGE/sandbox.tar"
-echo "Sandbox image exported."
-echo ""
-
 # --- Ensure install directory exists ---
 mkdir -p "$INSTALL_DIR"
 
@@ -90,24 +64,47 @@ mkdir -p "$AUTH_DIR"
 CLAUDE_JSON="$AUTH_DIR/claude.json"
 [ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
 
-# Persistent Podman storage so sandbox images and committed project
-# containers survive across uas sessions.
-UAS_STORAGE="$HOME/.uas/containers"
-mkdir -p "$UAS_STORAGE"
+# --- Per-project container reuse ---
+# Deterministic name from the project directory so packages installed
+# during a previous run are already present on the next run.
+PROJECT_HASH=$(echo -n "$PWD" | sha256sum | cut -c1-12)
+PROJECT_IMAGE="uas-project-${PROJECT_HASH}"
+CONTAINER_NAME="uas-run-${PROJECT_HASH}"
 
-exec "$ENGINE" run --rm -it \
+# Use committed project image if available, otherwise base engine image.
+BASE_IMAGE="uas-engine:latest"
+if "$ENGINE" image inspect "$PROJECT_IMAGE" &>/dev/null; then
+    BASE_IMAGE="$PROJECT_IMAGE"
+fi
+
+# Remove leftover container from a previous interrupted run.
+"$ENGINE" rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+# Run without --rm so we can commit the container afterward.
+"$ENGINE" run -it \
     --privileged \
+    --name "$CONTAINER_NAME" \
     -e IS_SANDBOX=1 \
+    -e UAS_SANDBOX_MODE=local \
     -e UAS_HOST_UID="$(id -u)" \
     -e UAS_HOST_GID="$(id -g)" \
-    -e UAS_HOST_WORKSPACE="$PWD" \
     -v "$AUTH_DIR:/root/.claude:Z" \
     -v "$CLAUDE_JSON:/root/.claude.json:Z" \
-    -v "$UAS_STORAGE:/var/lib/containers:Z" \
     -v "$PWD:/workspace:Z" \
     -w /workspace \
-    uas-engine:latest \
+    "$BASE_IMAGE" \
     "$@"
+EXIT_CODE=$?
+
+# Commit the container as a project-specific image so installed
+# packages (pip, apt-get) are preserved for the next run.
+"$ENGINE" commit "$CONTAINER_NAME" "$PROJECT_IMAGE" 2>/dev/null && \
+    echo "Project image saved: $PROJECT_IMAGE" || true
+
+# Clean up the container.
+"$ENGINE" rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+exit $EXIT_CODE
 WRAPPER_EOF
 
 chmod +x "$WRAPPER"

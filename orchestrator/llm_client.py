@@ -141,8 +141,8 @@ class ClaudeCodeClient:
         if self.role == "coder":
             cmd.extend(["--tools", ""])
 
-        if self.model:
-            cmd.extend(["--model", self.model])
+        cmd.extend(["--model", self.model or "claude-opus-4-6"])
+        cmd.extend(["--effort", "max"])
 
         # Copy the full current environment to preserve PATH and other vars.
         # Only strip session-specific vars that cause nested-session detection.
@@ -151,12 +151,6 @@ class ClaudeCodeClient:
         env.pop("CLAUDE_CODE_SESSION", None)
         env["IS_SANDBOX"] = "1"
         env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
-        # Planner streams with tool access so it can research APIs and
-        # libraries during decomposition.  Streaming calls also benefit
-        # from deep thinking.  Non-streaming calls (code generation) need
-        # output tokens for the actual code, so use medium effort to
-        # avoid exhausting the budget on extended thinking.
-        env["CLAUDE_CODE_EFFORT_LEVEL"] = "high" if stream else "medium"
 
         last_error: RuntimeError | None = None
         for attempt in range(1 + MAX_RETRIES):

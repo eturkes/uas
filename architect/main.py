@@ -367,6 +367,17 @@ def should_continue_retrying(step, spec_attempt, error_type, reflections):
     return _should_continue_retrying_heuristic(step, spec_attempt, error_type, reflections)
 
 
+def _is_verification_stagnation(attempt_history: list[dict]) -> bool:
+    """Detect repeated validation/verification failures suggesting upstream data issues.
+
+    Returns True if the last 2+ attempts were validation failures (step code
+    succeeded but verification/validation failed), indicating the step's code
+    is fine but its input data is wrong.
+    """
+    if len(attempt_history) < 2:
+        return False
+    recent = attempt_history[-2:]
+    return all(a.get("is_validation_failure", False) for a in recent)
 
 
 logger = logging.getLogger(__name__)
@@ -2431,9 +2442,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
 
             # Validation failed — treat as step failure
             error_info = failure_reason
+            is_validation_failure = True
         else:
             # Execution failed
             error_info = result["stderr"] or result["stdout"] or "Unknown error"
+            is_validation_failure = False
 
         step["error"] = error_info
         step["status"] = "failed"
@@ -2512,27 +2525,13 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             "attempt": spec_attempt + 1,
             "error": error_info[:300],
             "strategy": f"attempt {spec_attempt + 1}",
+            "is_validation_failure": is_validation_failure,
         })
 
-        # Section 4: Adaptive retry check using reflection quality
-        should_retry, retry_reason = should_continue_retrying(
-            step, spec_attempt, error_type, step.get("reflections", [])
-        )
-        if not should_retry and spec_attempt < MAX_SPEC_REWRITES:
-            logger.info("  Stopping retries: %s", retry_reason)
-            # For timeout errors, try decomposing once before giving up
-            if error_type == "timeout" and spec_attempt == 0:
-                logger.info("  Timeout: decomposing step into sub-phases...")
-                step["description"] = decompose_failing_step(
-                    step, result.get("stdout", ""), result.get("stderr", "")
-                )
-                step["rewrites"] = spec_attempt + 1
-                _save_state_threadsafe(state)
-                continue
-            break
-
         if spec_attempt < MAX_SPEC_REWRITES:
-            # Section 3c: Counterfactual root cause tracing
+            # Section 3c: Root cause tracing and backtracking
+            # Runs BEFORE retry budget check so backtracking is always
+            # attempted even when stagnation is detected.
             did_backtrack = False
             if step["depends_on"]:
                 event_log.emit(EventType.ROOT_CAUSE_TRACED,
@@ -2546,31 +2545,77 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                                data={"target": root_target,
                                      "dep_id": dep_id})
 
-                # Section 3d: Backtracking
+                # Determine which dependency to backtrack to:
+                # either from root cause tracing or forced by stagnation
+                backtrack_dep_id = None
                 if (root_target == "dependency"
                         and dep_id is not None
                         and dep_id not in backtracked_steps):
+                    backtrack_dep_id = dep_id
+                elif (root_target == "self"
+                        and _is_verification_stagnation(attempt_history)):
+                    # Force backtracking: repeated validation failures
+                    # with similar errors suggest upstream data is wrong,
+                    # even though root cause tracing said SELF
+                    force_dep_id = next(
+                        (d for d in step["depends_on"]
+                         if d not in backtracked_steps),
+                        None,
+                    )
+                    if force_dep_id is not None:
+                        logger.info(
+                            "  Verification stagnation detected. "
+                            "Force-backtracking to dep step %d...",
+                            force_dep_id,
+                        )
+                        backtrack_dep_id = force_dep_id
+
+                # Section 3d: Backtracking (with informed description)
+                if backtrack_dep_id is not None:
                     step_by_id = {s["id"]: s for s in state["steps"]}
-                    dep_step = step_by_id.get(dep_id)
+                    dep_step = step_by_id.get(backtrack_dep_id)
                     if dep_step:
                         logger.info(
                             "  Root cause in dependency step %d. "
                             "Backtracking to re-execute...",
-                            dep_id,
+                            backtrack_dep_id,
                         )
-                        backtracked_steps.add(dep_id)
+                        backtracked_steps.add(backtrack_dep_id)
                         event_log.emit(EventType.BACKTRACK_START,
                                        step_id=step["id"],
-                                       data={"backtrack_to": dep_id})
+                                       data={"backtrack_to": backtrack_dep_id})
                         if dashboard:
                             dashboard.set_step_activity(
                                 step["id"],
-                                f"Backtracking to step {dep_id}...",
+                                f"Backtracking to step {backtrack_dep_id}...",
                             )
                             dashboard.log(
                                 f"Step {step['id']}: root cause in "
-                                f"step {dep_id}, backtracking"
+                                f"step {backtrack_dep_id}, backtracking"
                             )
+
+                        # Augment dependency description with downstream
+                        # failure context so it knows what to fix
+                        original_dep_desc = dep_step["description"]
+                        verify_info = step.get("verify", "")
+                        dep_step["description"] += (
+                            f"\n\n--- DOWNSTREAM FAILURE FEEDBACK ---\n"
+                            f"A downstream step (Step {step['id']}: "
+                            f"{step['title']}) that consumes this step's "
+                            f"output failed with:\n"
+                            f"{error_info[:800]}\n"
+                            + (f"Downstream verification criteria: "
+                               f"{verify_info}\n"
+                               if verify_info else "")
+                            + "You MUST adjust your output to satisfy "
+                            "these downstream requirements. This likely "
+                            "requires a fundamentally different approach "
+                            "(e.g., if generating simulated data, ensure "
+                            "strong predictive signal between features "
+                            "and target; if processing data, preserve "
+                            "required structure and relationships).\n"
+                            "--- END FEEDBACK ---"
+                        )
 
                         # Reset dependency step for re-execution
                         dep_step["status"] = "pending"
@@ -2584,16 +2629,20 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                             progress_counts, dashboard,
                             backtracked_steps,
                         )
+
+                        # Restore original description
+                        dep_step["description"] = original_dep_desc
+
                         event_log.emit(
                             EventType.BACKTRACK_COMPLETE,
                             step_id=step["id"],
-                            data={"backtrack_to": dep_id,
+                            data={"backtrack_to": backtrack_dep_id,
                                   "success": dep_success},
                         )
 
                         if dep_success:
                             # Update completed outputs from re-executed dep
-                            completed_outputs[dep_id] = {
+                            completed_outputs[backtrack_dep_id] = {
                                 "stdout": dep_step.get("output", ""),
                                 "stderr": dep_step.get(
                                     "stderr_output", ""),
@@ -2610,12 +2659,12 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                             logger.info(
                                 "  Backtrack to step %d succeeded. "
                                 "Retrying current step...",
-                                dep_id,
+                                backtrack_dep_id,
                             )
                         else:
                             logger.warning(
                                 "  Backtrack to step %d also failed.",
-                                dep_id,
+                                backtrack_dep_id,
                             )
 
             if did_backtrack:
@@ -2623,6 +2672,24 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 step["rewrites"] = spec_attempt + 1
                 _save_state_threadsafe(state)
                 continue
+
+            # Section 4: Adaptive retry check (for rewrite path only;
+            # backtracking is always attempted regardless of retry budget)
+            should_retry, retry_reason = should_continue_retrying(
+                step, spec_attempt, error_type, step.get("reflections", [])
+            )
+            if not should_retry:
+                logger.info("  Stopping retries: %s", retry_reason)
+                # For timeout errors, try decomposing once before giving up
+                if error_type == "timeout" and spec_attempt == 0:
+                    logger.info("  Timeout: decomposing step into sub-phases...")
+                    step["description"] = decompose_failing_step(
+                        step, result.get("stdout", ""), result.get("stderr", "")
+                    )
+                    step["rewrites"] = spec_attempt + 1
+                    _save_state_threadsafe(state)
+                    continue
+                break
 
             # Standard rewrite path — LLM chooses strategy freely
             event_log.emit(EventType.REWRITE_START, step_id=step["id"],

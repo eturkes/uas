@@ -393,10 +393,18 @@ while logic errors get the full budget.
 
 **Counterfactual root cause tracing:** When a failing step has
 dependencies, the Architect asks the LLM whether the root cause is in
-the current step or propagated from a dependency. If a dependency is
-identified as the root cause, **backtracking** re-executes that
-dependency step, updates the context with fresh output, and retries the
-current step — limited to depth 1 to avoid infinite loops.
+the current step or propagated from a dependency. Root cause tracing
+runs before retry budget checks, so backtracking is always attempted
+even when stagnation would otherwise stop retries. If a dependency is
+identified as the root cause, **informed backtracking** augments the
+dependency's description with downstream failure context (the error
+message, verification criteria, and guidance to change approach), then
+re-executes that dependency step and retries the current step with
+fresh output — limited to depth 1 to avoid infinite loops. As a safety
+net, **verification stagnation detection** forces backtracking when
+2+ consecutive attempts pass code execution but fail
+validation/verification with similar errors, even if root cause
+tracing attributed the failure to the current step.
 
 Each rewrite prompt also includes a `<previous_attempts>` section and a
 `<counterfactual>` reasoning step. Outputs are red-flagged and resampled

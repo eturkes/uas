@@ -800,6 +800,8 @@ ROOT_CAUSE_PROMPT = """\
 <failed_step>
 <description>{description}</description>
 <error>{error}</error>
+<verification_criteria>{verify_criteria}</verification_criteria>
+<step_output_preview>{step_output}</step_output_preview>
 </failed_step>
 
 <completed_dependencies>
@@ -813,9 +815,16 @@ Determine: is the root cause of this failure in the current step itself, or was 
 caused by incorrect or incomplete output from one of its dependency steps?
 
 Consider:
-- If this step reads files produced by a dependency, are those files likely correct?
+- If this step reads files produced by a dependency, are those files likely correct \
+and suitable for the step's needs?
 - Could the dependency have produced subtly wrong output that causes this step to fail?
 - Is the error clearly a code issue in this step (syntax, logic, missing import)?
+- IMPORTANT: If this is a MODEL PERFORMANCE issue (low R², accuracy, AUC, RMSE, etc.), \
+the most likely cause is that INPUT DATA from a dependency step lacks sufficient \
+signal, structure, or quality. Randomly generated, purely noise, or poorly structured \
+data will cause low model performance regardless of model configuration or hyperparameters.
+- If the verification criteria include quantitative thresholds (e.g., R² > 0.7) and \
+the actual metric is far below the threshold, the input data is almost certainly the cause.
 
 Respond with ONLY one of:
 - SELF (if the root cause is in this step)
@@ -919,15 +928,23 @@ def trace_root_cause(step: dict, error: str,
             files = []
         dep_lines.append(
             f"Step {dep_id} ({dep_step.get('title', '?')}): "
-            f"files={files}, output_preview={stdout[:300]}"
+            f"description={dep_step.get('description', '')[:200]}, "
+            f"files={files}, output_preview={stdout[:800]}"
         )
 
     dependency_info = "\n".join(dep_lines)
+
+    # Include verification criteria and step output for better diagnosis
+    verify_criteria = step.get("verify", "none specified")
+    step_output = step.get("output", "")[-500:] if step.get("output") else "none"
+
     client = get_llm_client(role="planner")
     prompt = ROOT_CAUSE_PROMPT.format(
         description=step["description"],
         error=error[:1000],
         dependency_info=dependency_info,
+        verify_criteria=verify_criteria,
+        step_output=step_output,
     )
 
     event_log = get_event_log()

@@ -150,6 +150,7 @@ class ClaudeCodeClient:
         env.pop("CLAUDECODE", None)
         env.pop("CLAUDE_CODE_SESSION", None)
         env["IS_SANDBOX"] = "1"
+        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
 
         last_error: RuntimeError | None = None

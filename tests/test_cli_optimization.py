@@ -1,19 +1,17 @@
 """Tests for Section 5: Claude CLI Optimization.
 
-Covers: JSON output mode (5a), workspace scanning (5b), model tiering (5c),
+Covers: workspace scanning (5b), model tiering (5c),
 and delimited output parsing (5d).
 """
 
 import json
 import os
-import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from orchestrator.llm_client import (
     ClaudeCodeClient,
-    _extract_from_json,
     get_llm_client,
 )
 from orchestrator.parser import extract_code, extract_code_from_json
@@ -27,74 +25,27 @@ from architect.executor import (
 )
 
 
-# ── Section 5a: JSON output mode ──────────────────────────────────────────
+# ── Section 5a: Streaming + code extraction ──────────────────────────────
 
 
-class TestExtractFromJson:
-    def test_valid_json_response(self):
-        raw = json.dumps({"result": "Hello world", "cost_usd": 0.01})
-        assert _extract_from_json(raw) == "Hello world"
-
-    def test_result_with_whitespace(self):
-        raw = json.dumps({"result": "  response text  "})
-        assert _extract_from_json(raw) == "response text"
-
-    def test_missing_result_key(self):
-        raw = json.dumps({"output": "something"})
-        assert _extract_from_json(raw) is None
-
-    def test_invalid_json(self):
-        assert _extract_from_json("not json") is None
-
-    def test_empty_result(self):
-        raw = json.dumps({"result": ""})
-        assert _extract_from_json(raw) == ""
-
-    def test_non_dict_json(self):
-        raw = json.dumps([1, 2, 3])
-        assert _extract_from_json(raw) is None
-
-    def test_result_not_string(self):
-        raw = json.dumps({"result": 42})
-        assert _extract_from_json(raw) is None
-
-
-class TestJsonOutputFlag:
-    @patch("orchestrator.llm_client.subprocess.run")
+class TestStreamingGenerate:
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_json_flag_added_for_non_streaming(self, _mock_which, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout=json.dumps({"result": "response text"}),
-            stderr="",
-        )
+    def test_always_streams(self, _mock_which, mock_stream):
+        """generate() always uses _run_streaming for real-time output."""
+        mock_stream.return_value = ("response text", "", 0)
         client = ClaudeCodeClient()
         result = client.generate("hello", stream=False)
-        cmd = mock_run.call_args[0][0]
-        assert "--output-format" in cmd
-        idx = cmd.index("--output-format")
-        assert cmd[idx + 1] == "json"
+        assert mock_stream.called
         assert result == "response text"
-
-    @patch("orchestrator.llm_client.subprocess.run")
-    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_json_fallback_to_text(self, _mock_which, mock_run):
-        """When JSON parsing fails, fall back to raw text."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="plain text response",
-            stderr="",
-        )
-        client = ClaudeCodeClient()
-        result = client.generate("hello")
-        assert result == "plain text response"
 
     @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_no_json_flag_for_streaming(self, _mock_which, mock_stream):
+    def test_no_json_output_format(self, _mock_which, mock_stream):
+        """generate() never adds --output-format json."""
         mock_stream.return_value = ("response text", "", 0)
         client = ClaudeCodeClient()
-        client.generate("hello", stream=True)
+        client.generate("hello")
         cmd = mock_stream.call_args[0][0]
         assert "--output-format" not in cmd
 

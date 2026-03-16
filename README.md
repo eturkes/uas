@@ -319,8 +319,8 @@ User (any directory)
 ```
 
 All LLM calls go through the Claude Code CLI (`claude -p`)
-installed inside the container, using `--output-format json` for
-reliable response extraction with text-mode fallback. Authentication
+installed inside the container, streaming output line-by-line for
+real-time visibility into LLM generation. Authentication
 is persisted to `$PWD/.uas_auth/` via bind mount, so interactive
 login is only required once per project.
 

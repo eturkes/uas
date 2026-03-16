@@ -1,7 +1,6 @@
 """LLM client via the Claude Code CLI subprocess wrapper."""
 
 import contextlib
-import json
 import logging
 import os
 import shutil
@@ -114,12 +113,10 @@ class ClaudeCodeClient:
     def generate(self, prompt: str, stream: bool = False) -> str:
         """Send a prompt to Claude Code CLI and return the text response.
 
-        When stream=True, output is printed to stderr line-by-line as it
-        arrives, providing real-time visibility into LLM generation.
-
-        For non-streaming calls, uses ``--output-format json`` for cleaner
-        response extraction (Section 5a), falling back to text mode on
-        JSON parse failure.
+        Output is always streamed line-by-line to the logger, providing
+        real-time visibility into LLM generation.  When stream=True,
+        an "ultrathink" prefix is added for deeper reasoning and effort
+        level is set to high.
         """
         # "ultrathink" is only beneficial for planning/reasoning tasks.
         # For code generation, it can cause the LLM to exhaust output tokens
@@ -138,18 +135,11 @@ class ClaudeCodeClient:
                 "-p", prompt, "--dangerously-skip-permissions",
             ]
 
-        # Section 5a: Use JSON output for non-streaming calls for cleaner
-        # response extraction.  Streaming keeps text mode since it reads
-        # stdout line-by-line.
-        use_json = not stream
-        if use_json:
-            cmd.extend(["--output-format", "json"])
-            # Only coder calls have tools disabled, to force fenced code
-            # output instead of a multi-turn tool-use conversation.
-            # Planner calls intentionally keep tools enabled so the LLM
-            # can research APIs and libraries during decomposition.
-            if self.role == "coder":
-                cmd.extend(["--tools", ""])
+        # Coder calls disable tools to force fenced code output instead
+        # of a multi-turn tool-use conversation.  Planner calls keep
+        # tools enabled so the LLM can research APIs and libraries.
+        if self.role == "coder":
+            cmd.extend(["--tools", ""])
 
         if self.model:
             cmd.extend(["--model", self.model])
@@ -171,19 +161,7 @@ class ClaudeCodeClient:
         last_error: RuntimeError | None = None
         for attempt in range(1 + MAX_RETRIES):
             try:
-                if stream:
-                    stdout, stderr, returncode = self._run_streaming(cmd, env)
-                else:
-                    with heartbeat_log("LLM responding"):
-                        r = subprocess.run(
-                            cmd,
-                            capture_output=True,
-                            text=True,
-                            timeout=self.timeout,
-                            stdin=subprocess.DEVNULL,
-                            env=env,
-                        )
-                    stdout, stderr, returncode = r.stdout, r.stderr, r.returncode
+                stdout, stderr, returncode = self._run_streaming(cmd, env)
             except subprocess.TimeoutExpired:
                 last_error = RuntimeError(
                     f"Claude Code CLI timed out after {self.timeout} seconds."
@@ -218,35 +196,10 @@ class ClaudeCodeClient:
                     continue
                 raise error
 
-            raw = stdout.strip()
-
-            # Section 5a: Parse JSON output when available
-            if use_json:
-                parsed = _extract_from_json(raw)
-                if parsed is not None:
-                    return parsed
-                logger.debug("JSON parse failed, falling back to text mode.")
-
-            return raw
+            return stdout.strip()
 
         # Should not be reached, but satisfy type checker.
         raise last_error  # type: ignore[misc]
-
-
-def _extract_from_json(raw: str) -> str | None:
-    """Try to extract the ``result`` field from a JSON CLI response.
-
-    Claude Code's ``--output-format json`` emits a JSON object with a
-    ``result`` field containing the LLM's text response.  Returns the
-    extracted text, or None if parsing fails.
-    """
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict) and "result" in data:
-            return data["result"].strip()
-    except (json.JSONDecodeError, ValueError, AttributeError):
-        pass
-    return None
 
 
 def get_llm_client(role: str | None = None) -> ClaudeCodeClient:

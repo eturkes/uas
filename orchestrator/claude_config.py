@@ -1,7 +1,5 @@
 """CLAUDE.md template for workspace-level Claude Code CLI guidance."""
 
-from datetime import datetime
-
 CLAUDE_MD_TEMPLATE = """\
 # CLAUDE.md - Workspace Instructions for UAS Code Generation
 
@@ -23,7 +21,6 @@ Your script will run inside an isolated workspace directory.
 - Workspace directory: use `os.environ.get('WORKSPACE', '/workspace')` for all file paths
 - No packages are pre-installed. Proactively install everything you need, including
   dev tools (linters, formatters, test runners) when they'd improve quality.
-- Current date: {date}
 
 ## Coding Standards
 - Produce a single, self-contained Python script with all imports at the top
@@ -114,7 +111,7 @@ def get_claude_md_content(step_context: dict | None = None) -> str:
             step_title, dependencies, prior_steps. When provided, appends
             a dynamic section describing the current task context.
     """
-    content = CLAUDE_MD_TEMPLATE.replace("{date}", datetime.now().strftime("%Y-%m-%d"))
+    content = CLAUDE_MD_TEMPLATE
     if step_context:
         content += "\n" + _format_step_context(step_context)
     return content

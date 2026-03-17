@@ -272,7 +272,24 @@ def parse_uas_result(stdout: str) -> dict | None:
     return None
 
 
-MAX_CONTINUATIONS = 2
+MAX_CONTINUATIONS = 5
+
+
+def _extract_header_context(code: str, max_lines: int = 40) -> str:
+    """Extract import statements and function/class signatures from the start of code.
+
+    Provides structural context so continuation prompts can reference
+    earlier definitions without sending the entire script.
+    """
+    header_parts: list[str] = []
+    for line in code.splitlines()[:max_lines]:
+        stripped = line.strip()
+        if (stripped.startswith(("import ", "from "))
+                or stripped.startswith(("def ", "class "))
+                or stripped.startswith("#")
+                or not stripped):
+            header_parts.append(line)
+    return "\n".join(header_parts)
 
 
 def _request_continuation(client, truncated_code: str) -> str | None:
@@ -287,9 +304,21 @@ def _request_continuation(client, truncated_code: str) -> str | None:
     tail_size = min(len(lines), 200)
     tail = "\n".join(lines[-tail_size:])
 
+    # Extract header context (imports, function signatures) so the LLM
+    # can reference earlier definitions when continuing.
+    header = _extract_header_context(truncated_code)
+    header_block = ""
+    if header and len(lines) > tail_size:
+        header_block = (
+            "For reference, here are the imports and definitions from the "
+            "START of the script:\n"
+            f"```python\n{header}\n```\n\n"
+        )
+
     prompt = (
         "Your previous response was truncated mid-line.  The code block "
         "was cut off before completion.\n\n"
+        f"{header_block}"
         "Here is the END of what was generated (the last portion of the script):\n"
         f"```python\n{tail}\n```\n\n"
         "Continue the script from EXACTLY where it was cut off.  "
@@ -298,7 +327,8 @@ def _request_continuation(client, truncated_code: str) -> str | None:
         "Do NOT include explanatory text outside the code fence."
     )
     for _attempt in range(MAX_CONTINUATIONS):
-        logger.info("Requesting continuation for truncated code...")
+        logger.info("Requesting continuation for truncated code "
+                     "(attempt %d/%d)...", _attempt + 1, MAX_CONTINUATIONS)
         try:
             response = client.generate(prompt)
         except Exception as exc:
@@ -332,6 +362,7 @@ def _request_continuation(client, truncated_code: str) -> str | None:
             prompt = (
                 "The continuation was not complete.  Here is the END of the "
                 "script so far:\n"
+                f"{header_block}"
                 f"```python\n{tail}\n```\n\n"
                 "Continue from EXACTLY where it ends.  Output ONLY the remaining "
                 "code inside a ```python fence."
@@ -704,6 +735,25 @@ Files already present in the workspace from prior steps:
 Do not regenerate these files unless the task explicitly requires modifying them.
 Reference them by path using os.path.join(workspace, ...).
 </workspace_state>"""
+
+    # Section 19: Truncation-aware code length guidance.
+    # When prior attempts for this step produced code that was truncated,
+    # instruct the LLM to produce more concise output.
+    if os.environ.get("UAS_TRUNCATION_DETECTED"):
+        prompt += """
+
+<code_length_warning>
+CRITICAL: Previous attempts to generate code for this task were TRUNCATED because
+the script was too long. You MUST keep your script concise to avoid truncation:
+- Use helper functions to avoid repeating similar code patterns.
+- Minimize inline comments — only comment non-obvious logic.
+- Use compact data structures (dicts, lists) instead of verbose if/elif chains.
+- Prefer library functions over manual implementations.
+- Save intermediate artifacts (models, data) to disk files in the workspace so
+  that separate scripts can load and reuse them if needed.
+- Aim for under 300 lines of code. If you cannot fit everything, prioritize
+  correctness of the core logic over extra features or verbose output formatting.
+</code_length_warning>"""
 
     # Instruction sections at bottom (role, constraints, output_contract)
     prompt += """

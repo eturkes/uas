@@ -99,7 +99,11 @@ Failure modes: blocked by site, empty results, no matching products.
 <anti_patterns>
 Common decomposition mistakes to avoid:
 - Over-splitting trivial tasks: a single pip install + script does not need 3 separate steps
-- Under-splitting complex tasks: a step that does "download, parse, transform, analyze, and visualize" should be broken down
+- Under-splitting complex tasks: a step that does "download, parse, transform, analyze, \
+and visualize" should be broken down. A step that requires model training AND \
+explainability AND visualization is too large — split them into separate steps \
+that save/load intermediate artifacts (e.g., save the trained model with joblib, \
+then a separate step loads it and computes SHAP values)
 - Missing dependencies: if step 3 reads a file written by step 1, it must list step 1 in depends_on
 - Implicit ordering: steps that must run sequentially need explicit depends_on, even if the order seems obvious
 - Overly vague descriptions: "process the data" tells the code-generating LLM nothing — be specific about format, method, and expected output
@@ -168,11 +172,16 @@ Then produce the step DAG as a JSON array.
 The path is available via os.environ.get('WORKSPACE', '/workspace'). \
 Later steps can read files written by earlier steps from this directory.
 3. Each step should be as small and focused as possible — the smaller the \
-subtask, the more reliable the execution.
+subtask, the more reliable the execution. Each step is implemented as a \
+single Python script; the script MUST stay under ~250 lines so the code \
+generator can produce it in one pass without truncation. If a sub-task \
+would clearly require a longer script, split it into multiple steps that \
+save/load intermediate artifacts via the shared workspace.
 4. Steps can run in parallel when they have no dependency relationship. \
 Maximize parallelism by making steps independent whenever possible.
 5. Scale the number of steps to the goal's complexity: \
-1 step for trivial tasks, 2-3 for simple, 4-7 for medium, 8+ for complex.
+1 step for trivial tasks, 2-3 for simple, 5-10 for medium, 10-20 for complex. \
+Prefer more, smaller steps over fewer, larger ones.
 6. The execution environment has full unrestricted network access and complete \
 autonomy. Install any packages needed (pip, apt-get, etc.) without hesitation.
 7. Each step must produce observable output to stdout so downstream steps \
@@ -646,7 +655,10 @@ identify any issues. Be concise and actionable.
 </instructions>
 
 <review_criteria>
-1. Are any steps too broad and should be split further?
+1. Are any steps too broad and should be split further? Each step is implemented \
+as a single Python script that must stay under ~250 lines. If a step would \
+clearly exceed that, split it into smaller steps that save/load intermediate \
+artifacts via the shared workspace.
 2. Are there missing steps needed to achieve the goal?
 3. Are the dependencies correct? Could any steps be made independent to enable parallelism?
 4. Are there missing error handling considerations for external resources (network, files)?
@@ -991,6 +1003,36 @@ Provide ONLY the improved task description. No explanation.
 </instructions>
 """
 
+DECOMPOSE_TRUNCATION_PROMPT = """\
+<failed_task>{description}</failed_task>
+
+<failure_output>
+<stdout>{stdout}</stdout>
+<stderr>{stderr}</stderr>
+</failure_output>
+
+<instructions>
+This code-generation task has failed multiple times because the generated Python \
+script is TOO LONG and gets truncated before completion. The LLM cannot produce \
+the full script in a single generation pass.
+
+Rewrite the task description to produce a MUCH SHORTER script. Apply these strategies:
+
+1. **Ruthless scoping**: Identify the 2-3 most important sub-tasks. Describe ONLY \
+   those in detail. Defer nice-to-have features (extra plots, verbose formatting, \
+   additional analyses) to a brief "if time permits" section.
+2. **Modularity via disk**: Instruct the script to save intermediate artifacts \
+   (trained models, processed data, computed metrics) to disk using joblib/pickle/CSV. \
+   This allows the work to be split across multiple runs if needed.
+3. **Compact code patterns**: Explicitly instruct the script to use helper functions, \
+   avoid inline comments, prefer dict/list comprehensions, and avoid verbose string \
+   formatting.
+4. **Target under 250 lines**: State this line budget explicitly in the description.
+
+Provide ONLY the improved task description. No explanation.
+</instructions>
+"""
+
 REWRITE_QUALITY_PROMPT = """\
 You are evaluating the quality of a rewritten task description in an automated code generation pipeline.
 
@@ -1184,7 +1226,8 @@ concurrently, but merging related steps reduces overhead.
 For each execution level that has multiple steps, decide which pairs of steps
 (if any) should be merged. Steps should only be merged if:
 1. They are semantically related (working toward the same sub-goal)
-2. The combined task remains simple enough for a single script to handle well
+2. The combined task can be implemented in under ~250 lines of Python — if not,
+   keep them separate so each script fits in a single code-generation pass
 3. Merging them does not create an overly complex or unrelated multi-task step
 
 Only propose merges within the same execution level (steps shown together below).
@@ -1763,15 +1806,23 @@ def enrich_step_descriptions(
 
 
 def decompose_failing_step(step: dict, orchestrator_stdout: str,
-                           orchestrator_stderr: str) -> str:
-    """Decompose a failing step into a more granular multi-phase description."""
+                           orchestrator_stderr: str,
+                           is_truncation: bool = False) -> str:
+    """Decompose a failing step into a more granular multi-phase description.
+
+    Args:
+        is_truncation: If True, the failure is due to code being too long
+            for a single LLM generation pass.  Uses a truncation-specific
+            prompt that emphasises code brevity and modularity.
+    """
     client = get_llm_client(role="planner")
 
     trim_limit = MAX_ERROR_LENGTH if MAX_ERROR_LENGTH > 0 else _DEFAULT_REWRITE_TRIM
     stdout_trimmed = orchestrator_stdout[-trim_limit:] if len(orchestrator_stdout) > trim_limit else orchestrator_stdout
     stderr_trimmed = orchestrator_stderr[-trim_limit:] if len(orchestrator_stderr) > trim_limit else orchestrator_stderr
 
-    prompt = DECOMPOSE_STEP_PROMPT.format(
+    template = DECOMPOSE_TRUNCATION_PROMPT if is_truncation else DECOMPOSE_STEP_PROMPT
+    prompt = template.format(
         description=step["description"],
         stdout=stdout_trimmed,
         stderr=stderr_trimmed,

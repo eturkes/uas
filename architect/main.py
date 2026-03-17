@@ -2210,6 +2210,15 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             "UAS_SPEC_ATTEMPT": str(spec_attempt),
             "UAS_RUN_ID": run_id,
         }
+        # Section 19: Signal truncation history to orchestrator so it can
+        # add code-length guidance to the prompt.
+        truncation_detected = any(
+            r.get("error_type") == "format_error"
+            and "truncat" in (r.get("root_cause", "") + r.get("lesson", "")).lower()
+            for r in step.get("reflections", [])
+        )
+        if truncation_detected:
+            extra_env["UAS_TRUNCATION_DETECTED"] = "1"
         # Pass step's environment/package requirements to the orchestrator
         # so build_prompt() can include explicit pip install instructions.
         if step.get("environment"):
@@ -2680,12 +2689,34 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             )
             if not should_retry:
                 logger.info("  Stopping retries: %s", retry_reason)
-                # For timeout errors, try decomposing once before giving up
-                if error_type == "timeout" and spec_attempt == 0:
-                    logger.info("  Timeout: decomposing step into sub-phases...")
-                    step["description"] = decompose_failing_step(
-                        step, result.get("stdout", ""), result.get("stderr", "")
+                # For timeout or truncation errors, try decomposing once
+                # before giving up.  Truncation (format_error with
+                # truncation-related reflections) means the script is too
+                # long for a single LLM generation pass; decomposing the
+                # task description into explicit sub-phases helps the LLM
+                # produce shorter, focused code.
+                is_truncation = (
+                    error_type == "format_error"
+                    and not step.get("_decomposed")
+                    and any(
+                        "truncat" in (
+                            r.get("root_cause", "")
+                            + r.get("lesson", "")
+                        ).lower()
+                        for r in step.get("reflections", [])
                     )
+                )
+                is_timeout = error_type == "timeout" and spec_attempt == 0
+                if is_timeout or is_truncation:
+                    logger.info(
+                        "  %s: decomposing step into sub-phases...",
+                        "Truncation" if is_truncation else "Timeout",
+                    )
+                    step["description"] = decompose_failing_step(
+                        step, result.get("stdout", ""), result.get("stderr", ""),
+                        is_truncation=is_truncation,
+                    )
+                    step["_decomposed"] = True
                     step["rewrites"] = spec_attempt + 1
                     _save_state_threadsafe(state)
                     continue

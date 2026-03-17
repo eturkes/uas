@@ -18,7 +18,6 @@ Your script will run inside an isolated workspace directory.
 - Workspace directory: use `os.environ.get('WORKSPACE', '/workspace')` for all file paths
 - No packages are pre-installed. Proactively install everything you need, including
   dev tools (linters, formatters, test runners) when they'd improve quality.
-- Current date: 2026-03-15
 
 ## Coding Standards
 - Produce a single, self-contained Python script with all imports at the top

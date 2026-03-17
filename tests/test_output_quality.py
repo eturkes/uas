@@ -91,3 +91,32 @@ class TestCheckOutputQuality:
         step = {"files_written": [str(f)]}
         issues = check_output_quality(step, str(tmp_path))
         assert issues == []
+
+    def test_directory_skipped(self, tmp_path):
+        d = tmp_path / "notebooks"
+        d.mkdir()
+        step = {"files_written": ["notebooks"]}
+        issues = check_output_quality(step, str(tmp_path))
+        assert issues == []
+
+    def test_empty_init_py_allowed(self, tmp_path):
+        f = tmp_path / "__init__.py"
+        f.write_text("", encoding="utf-8")
+        step = {"files_written": ["__init__.py"]}
+        issues = check_output_quality(step, str(tmp_path))
+        assert issues == []
+
+    def test_empty_gitkeep_allowed(self, tmp_path):
+        f = tmp_path / ".gitkeep"
+        f.write_text("", encoding="utf-8")
+        step = {"files_written": [".gitkeep"]}
+        issues = check_output_quality(step, str(tmp_path))
+        assert issues == []
+
+    def test_empty_regular_file_still_flagged(self, tmp_path):
+        f = tmp_path / "data.txt"
+        f.write_text("", encoding="utf-8")
+        step = {"files_written": ["data.txt"]}
+        issues = check_output_quality(step, str(tmp_path))
+        assert len(issues) == 1
+        assert "empty" in issues[0].lower()

@@ -1331,6 +1331,12 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
     format for known file types (.json, .csv, .py).
     Returns a list of issue strings (empty = clean).
     """
+    # Files that are legitimately empty by convention.
+    _ALLOWED_EMPTY_BASENAMES = {
+        "__init__.py", "__init__.pyi", "py.typed",
+        ".gitkeep", ".keep", ".gitignore", ".nojekyll",
+    }
+
     issues: list[str] = []
     files_written = step.get("files_written", [])
 
@@ -1340,12 +1346,18 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
             # Already caught by validate_uas_result, skip here
             continue
 
-        # Check non-empty
+        # Skip directories — they are structural, not content files.
+        if os.path.isdir(fpath):
+            continue
+
+        # Check non-empty (allow conventionally-empty files)
         try:
             size = os.path.getsize(fpath)
         except OSError:
             continue
         if size == 0:
+            if os.path.basename(fpath) in _ALLOWED_EMPTY_BASENAMES:
+                continue
             issues.append(f"File '{f}' is empty (0 bytes)")
             continue
 

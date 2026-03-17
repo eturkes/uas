@@ -170,7 +170,11 @@ Then produce the step DAG as a JSON array.
 1. Each step MUST be a self-contained Python script task.
 2. Steps share a persistent workspace directory for file I/O. \
 The path is available via os.environ.get('WORKSPACE', '/workspace'). \
-Later steps can read files written by earlier steps from this directory.
+Later steps can read files written by earlier steps from this directory. \
+NEVER use hardcoded absolute paths (like /uas/..., /home/..., /tmp/...) \
+in step descriptions. When a step description references directories, \
+use {{WORKSPACE}} as a placeholder (e.g. "Create project at {{WORKSPACE}}/myapp"). \
+Files written outside the workspace are lost after execution.
 3. Each step should be as small and focused as possible — the smaller the \
 subtask, the more reliable the execution. Each step is implemented as a \
 single Python script; the script MUST stay under ~250 lines so the code \

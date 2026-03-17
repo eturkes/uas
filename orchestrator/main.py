@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from .llm_client import get_llm_client
-from .parser import extract_code
+from .parser import extract_code, extract_truncated_block
 from .sandbox import run_in_sandbox
 
 # Section 5d: Delimited output markers for reliable parsing by the architect.
@@ -246,23 +246,97 @@ def parse_uas_result(stdout: str) -> dict | None:
     """Extract the UAS_RESULT JSON from stdout if present.
 
     Looks for a line matching: UAS_RESULT: {"status": "ok", ...}
+    Uses the **last** match, since scripts are instructed to print
+    UAS_RESULT as the final line of stdout.  When a script runs
+    sub-scripts, their UAS_RESULT lines may also appear in stdout;
+    the last one is the authoritative result from the outer script.
     Tolerates case variations, missing space after colon, and
     single-quoted JSON as a fallback.
     Returns the parsed dict or None if not found/invalid.
     """
-    match = _UAS_RESULT_PATTERN.search(stdout)
-    if not match:
+    matches = list(_UAS_RESULT_PATTERN.finditer(stdout))
+    if not matches:
         return None
-    raw = match.group(1)
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        pass
-    # Fallback: replace single quotes with double quotes
-    try:
-        return json.loads(raw.replace("'", '"'))
-    except (json.JSONDecodeError, ValueError):
-        return None
+    # Try matches from last to first, returning the first parseable one.
+    for match in reversed(matches):
+        raw = match.group(1)
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Fallback: replace single quotes with double quotes
+        try:
+            return json.loads(raw.replace("'", '"'))
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+
+MAX_CONTINUATIONS = 2
+
+
+def _request_continuation(client, truncated_code: str) -> str | None:
+    """Ask the LLM to finish a truncated code block.
+
+    Sends the last portion of the truncated code back and asks for
+    the remaining lines.  Returns the complete code (prefix + continuation)
+    if successful, or None if the continuation also fails.
+    """
+    # Send the last ~200 lines as context so the LLM knows where it left off.
+    lines = truncated_code.splitlines()
+    tail_size = min(len(lines), 200)
+    tail = "\n".join(lines[-tail_size:])
+
+    prompt = (
+        "Your previous response was truncated mid-line.  The code block "
+        "was cut off before completion.\n\n"
+        "Here is the END of what was generated (the last portion of the script):\n"
+        f"```python\n{tail}\n```\n\n"
+        "Continue the script from EXACTLY where it was cut off.  "
+        "Output ONLY the remaining code that comes after the last line shown above, "
+        "inside a ```python fence.  Do NOT repeat any code already shown.  "
+        "Do NOT include explanatory text outside the code fence."
+    )
+    for _attempt in range(MAX_CONTINUATIONS):
+        logger.info("Requesting continuation for truncated code...")
+        try:
+            response = client.generate(prompt)
+        except Exception as exc:
+            logger.warning("Continuation request failed: %s", exc)
+            return None
+
+        continuation = extract_code(response)
+        if not continuation:
+            # Try raw extraction — the continuation may be just a few lines.
+            continuation = response.strip()
+            # Strip markdown fences if present.
+            continuation = re.sub(r"^```(?:python)?\s*\n?", "", continuation)
+            continuation = re.sub(r"\n?```\s*$", "", continuation)
+
+        if not continuation:
+            logger.warning("Continuation produced no code.")
+            return None
+
+        combined = truncated_code + "\n" + continuation
+        try:
+            compile(combined, "<combined>", "exec")
+            logger.info("Continuation succeeded (%d + %d lines).",
+                         len(lines), len(continuation.splitlines()))
+            return combined
+        except SyntaxError:
+            logger.warning("Combined code still invalid, retrying continuation...")
+            # Update context for next attempt with longer tail.
+            tail_size = min(len(combined.splitlines()), 300)
+            tail = "\n".join(combined.splitlines()[-tail_size:])
+            truncated_code = combined
+            prompt = (
+                "The continuation was not complete.  Here is the END of the "
+                "script so far:\n"
+                f"```python\n{tail}\n```\n\n"
+                "Continue from EXACTLY where it ends.  Output ONLY the remaining "
+                "code inside a ```python fence."
+            )
+    return None
 
 
 def configure_logging(verbose: bool = False):
@@ -1065,6 +1139,15 @@ def _generate_one(client, prompt: str, hint: str):
     response = client.generate(full_prompt)
     code = extract_code(response)
     if not code:
+        # Attempt truncation recovery before giving up.
+        truncated = extract_truncated_block(response)
+        if truncated:
+            logger.warning(
+                "Detected truncated code in parallel sample (%d lines), "
+                "requesting continuation...", len(truncated.splitlines()),
+            )
+            code = _request_continuation(client, truncated)
+    if not code:
         return None, None
     result = run_in_sandbox(code)
     return code, result
@@ -1267,6 +1350,18 @@ def main():
             response = client.generate(prompt)
 
             code = extract_code(response)
+            if not code:
+                # Check for truncation before giving up — if the LLM
+                # produced a ```python block that was cut off, request
+                # a continuation rather than wasting an attempt.
+                truncated = extract_truncated_block(response)
+                if truncated:
+                    logger.warning(
+                        "Detected truncated code block (%d lines), "
+                        "requesting continuation...", len(truncated.splitlines()),
+                    )
+                    code = _request_continuation(client, truncated)
+
             if not code:
                 previous_error = "Failed to extract code block from LLM response."
                 previous_code = None

@@ -108,6 +108,48 @@ def extract_code(response: str) -> str | None:
     return None
 
 
+def extract_truncated_block(response: str) -> str | None:
+    """Return the truncated code if a ```python block was opened but never closed.
+
+    Detects LLM output truncation — the response contains a ```python opener
+    but no valid closing fence for it, meaning the code was cut off mid-line.
+    Returns the incomplete code (everything after the last ```python opener
+    to end-of-string) so the caller can request continuation, or None if
+    there is no evidence of truncation.
+    """
+    opener_re = re.compile(r"```python\s*\n", re.IGNORECASE)
+    fence_re = re.compile(r"\n```\s*(?:\n|$)")
+
+    openers = list(opener_re.finditer(response))
+    if not openers:
+        return None
+
+    # Use the last opener — the LLM may have prose-then-code structure.
+    last_opener = openers[-1]
+    start = last_opener.end()
+
+    # Check if there is a closing fence after this opener.
+    closers = list(fence_re.finditer(response, start))
+    if closers:
+        # A closing fence exists — the LLM finished the code block.
+        # Invalid code within a properly fenced block is a generation
+        # error, not truncation.  Don't attempt continuation.
+        return None
+
+    tail = response[start:].strip()
+    # Strip a trailing partial closing fence (e.g., trailing "``")
+    tail = re.sub(r"`{1,2}\s*$", "", tail).strip()
+    if not tail:
+        return None
+    # Sanity: the tail should look like Python, not just random prose.
+    if not _looks_like_python(tail):
+        return None
+    # Final check: is the tail already valid Python?
+    if _is_valid_python(tail):
+        return None  # Not truncated — extract_code would have found it.
+    return tail
+
+
 def _looks_like_python(text: str) -> bool:
     """Heuristic check for whether text looks like raw Python code."""
     # Quick reject: if the text contains heavy markdown formatting it's

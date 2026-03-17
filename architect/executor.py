@@ -784,21 +784,28 @@ def parse_uas_result(orchestrator_output: str) -> dict | None:
 
     Searches the full orchestrator stderr/stdout for a line matching:
         UAS_RESULT: {"status": "ok", ...}
+    Uses the **last** match, since scripts are instructed to print
+    UAS_RESULT as the final line of stdout.  When a script runs
+    sub-scripts, their UAS_RESULT lines may also appear in the
+    output; the last one is the authoritative result.
     Tolerates case variations, missing space after colon, and
     single-quoted JSON as a fallback.
     Returns the parsed dict or None if not found/invalid.
     """
     import json
-    match = _UAS_RESULT_PATTERN.search(orchestrator_output)
-    if not match:
+    matches = list(_UAS_RESULT_PATTERN.finditer(orchestrator_output))
+    if not matches:
         return None
-    raw = match.group(1)
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        pass
-    # Fallback: replace single quotes with double quotes
-    try:
-        return json.loads(raw.replace("'", '"'))
-    except (json.JSONDecodeError, ValueError):
-        return None
+    # Try matches from last to first, returning the first parseable one.
+    for match in reversed(matches):
+        raw = match.group(1)
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Fallback: replace single quotes with double quotes
+        try:
+            return json.loads(raw.replace("'", '"'))
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None

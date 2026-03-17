@@ -177,6 +177,18 @@ class ClaudeCodeClient:
 
             if returncode != 0:
                 stderr_s = stderr.strip()
+                # If the CLI produced substantial output before failing
+                # (e.g. truncated due to output token limit), return what
+                # we have so downstream truncation handling can attempt
+                # a continuation rather than wasting the partial output.
+                if stdout.strip():
+                    logger.warning(
+                        "Claude Code CLI exited with code %d but produced "
+                        "output (%d chars); returning partial output for "
+                        "truncation recovery.",
+                        returncode, len(stdout),
+                    )
+                    return stdout.strip()
                 error = RuntimeError(
                     f"Claude Code CLI exited with code {returncode}: {stderr_s}"
                 )

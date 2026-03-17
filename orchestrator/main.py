@@ -1397,7 +1397,18 @@ def main():
         else:
             # Standard single-sample path.
             logger.info("Querying LLM...")
-            response = client.generate(prompt)
+            try:
+                response = client.generate(prompt)
+            except RuntimeError as exc:
+                previous_error = str(exc)
+                previous_code = None
+                logger.error("LLM generation failed: %s", exc)
+                attempt_history.append({
+                    "attempt": attempt,
+                    "error": previous_error[:500],
+                    "code_snippet": "",
+                })
+                continue
 
             code = extract_code(response)
             if not code:

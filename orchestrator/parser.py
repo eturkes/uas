@@ -108,14 +108,44 @@ def extract_code(response: str) -> str | None:
     return None
 
 
-def extract_truncated_block(response: str) -> str | None:
-    """Return the truncated code if a ```python block was opened but never closed.
+def _is_truncation_syntax_error(code: str) -> bool:
+    """Check whether a SyntaxError looks like mid-line truncation.
 
-    Detects LLM output truncation — the response contains a ```python opener
-    but no valid closing fence for it, meaning the code was cut off mid-line.
-    Returns the incomplete code (everything after the last ```python opener
-    to end-of-string) so the caller can request continuation, or None if
-    there is no evidence of truncation.
+    Distinguishes truncation (code was cut off) from normal generation
+    errors (wrong syntax, typos).  Truncation typically produces:
+    - Unterminated string literals or f-strings
+    - Unexpected EOF inside brackets, parens, or braces
+    - Incomplete expressions at end of file
+    """
+    try:
+        compile(code, "<truncation_check>", "exec")
+        return False  # Valid Python — not truncated.
+    except SyntaxError as e:
+        msg = str(e).lower()
+        truncation_signals = (
+            "unterminated",          # unterminated string/f-string
+            "unexpected eof",        # unexpected EOF in expression
+            "eof while scanning",    # EOF while scanning string
+            "was never closed",      # bracket/paren was never closed
+            "expected an indented",  # block left open
+            "unexpected end",        # unexpected end of input
+        )
+        return any(sig in msg for sig in truncation_signals)
+
+
+def extract_truncated_block(response: str) -> str | None:
+    """Return truncated code from a ``python block, whether or not the fence was closed.
+
+    Detects two truncation patterns:
+    1. **Open fence**: a ```python block was opened but never closed —
+       the response was cut off before the closing fence.
+    2. **Closed fence with truncated code**: the LLM emitted a closing
+       fence near the token limit, but the code inside is syntactically
+       broken in a way characteristic of truncation (unterminated string,
+       unexpected EOF, unclosed brackets).
+
+    Returns the incomplete code so the caller can request continuation,
+    or None if there is no evidence of truncation.
     """
     opener_re = re.compile(r"```python\s*\n", re.IGNORECASE)
     fence_re = re.compile(r"\n```\s*(?:\n|$)")
@@ -131,9 +161,17 @@ def extract_truncated_block(response: str) -> str | None:
     # Check if there is a closing fence after this opener.
     closers = list(fence_re.finditer(response, start))
     if closers:
-        # A closing fence exists — the LLM finished the code block.
-        # Invalid code within a properly fenced block is a generation
-        # error, not truncation.  Don't attempt continuation.
+        # A closing fence exists.  Normally this means the LLM finished
+        # the code block.  But when the model approaches the token limit
+        # it sometimes emits a closing fence even though the code inside
+        # is incomplete.  Detect this by checking for truncation-specific
+        # SyntaxErrors.
+        last_closer = closers[-1]
+        code = response[start:last_closer.start()].strip()
+        if (code
+                and _looks_like_python(code)
+                and _is_truncation_syntax_error(code)):
+            return code
         return None
 
     tail = response[start:].strip()

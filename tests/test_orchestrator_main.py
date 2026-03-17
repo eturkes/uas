@@ -308,9 +308,9 @@ class TestMainLoop:
     def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
-        # First response has syntax error, second is valid
+        # First response has syntax error (not truncation), second is valid
         mock_client.generate.side_effect = [
-            '```python\ndef foo(\n```',
+            '```python\ndef foo(x):\n    x = = 2\n```',
             '```python\nprint("hello")\n```',
         ]
         mock_client_factory.return_value = mock_client

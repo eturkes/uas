@@ -876,7 +876,7 @@ def generate_reflection(step: dict, stdout: str, stderr: str,
         return {
             "attempt": attempt,
             "error_type": "unknown",
-            "root_cause": stderr[:200] if stderr else "unknown",
+            "root_cause": stderr or "unknown",
             "strategy_tried": f"attempt {attempt}",
             "lesson": "LLM reflection failed",
             "what_to_try_next": "retry with different approach",
@@ -911,9 +911,9 @@ def generate_reflection(step: dict, stdout: str, stderr: str,
     return {
         "attempt": attempt,
         "error_type": "unknown",
-        "root_cause": stderr[:200] if stderr else "unknown",
+        "root_cause": stderr or "unknown",
         "strategy_tried": f"attempt {attempt}",
-        "lesson": text[:200] if text else "",
+        "lesson": text or "",
         "what_to_try_next": "retry with different approach",
     }
 
@@ -944,8 +944,8 @@ def trace_root_cause(step: dict, error: str,
             files = []
         dep_lines.append(
             f"Step {dep_id} ({dep_step.get('title', '?')}): "
-            f"description={dep_step.get('description', '')[:200]}, "
-            f"files={files}, output_preview={stdout[:800]}"
+            f"description={dep_step.get('description', '')}, "
+            f"files={files}, output_preview={stdout}"
         )
 
     dependency_info = "\n".join(dep_lines)
@@ -957,7 +957,7 @@ def trace_root_cause(step: dict, error: str,
     client = get_llm_client(role="planner")
     prompt = ROOT_CAUSE_PROMPT.format(
         description=step["description"],
-        error=error[:1000],
+        error=error,
         dependency_info=dependency_info,
         verify_criteria=verify_criteria,
         step_output=step_output,
@@ -1148,7 +1148,7 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
         for attempt in previous_attempts:
             lines.append(
                 f"- Attempt {attempt['attempt']}: "
-                f"error={attempt['error'][:200]} | "
+                f"error={attempt['error']} | "
                 f"strategy={attempt['strategy']}"
             )
         previous_attempts_section = (
@@ -1760,7 +1760,7 @@ def enrich_step_descriptions(
     # Build enrichment text
     parts = []
     if files_written:
-        parts.append(f"files produced: {', '.join(files_written[:10])}")
+        parts.append(f"files produced: {', '.join(files_written)}")
     if summary:
         parts.append(f"output summary: {summary}")
     if uas_result and isinstance(uas_result, dict):
@@ -1771,7 +1771,7 @@ def enrich_step_descriptions(
     # Extract schemas from data files so downstream steps know the exact
     # column names / keys to code against (prevents data contract mismatch).
     if workspace and files_written:
-        for fpath in files_written[:5]:
+        for fpath in files_written:
             if not fpath.endswith((".csv", ".tsv", ".json")):
                 continue
             full = os.path.join(workspace, fpath) if not os.path.isabs(fpath) else fpath

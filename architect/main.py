@@ -612,8 +612,8 @@ def compress_context(context: str, max_length: int,
             import concurrent.futures as _cf
             from orchestrator.llm_client import get_llm_client
 
-            context_start = context[:5000]
-            context_end = context[-5000:]
+            context_start = context[:len(context)//2]
+            context_end = context[len(context)//2:]
             prompt = EMERGENCY_COMPRESS_PROMPT.format(
                 next_step=current_step_description or "unknown",
                 target_length=max_length,
@@ -668,26 +668,26 @@ def _distill_dependency_output(dep_id: int, dep_step: dict,
     # Build files_produced line
     files_str = ""
     if files_written:
-        files_str = ", ".join(files_written[:10])
+        files_str = ", ".join(files_written)
 
     # Build key_outputs from summary or output
     key_outputs = summary
     if not key_outputs:
         if isinstance(output, dict):
             stdout = output.get("stdout", "")
-            key_outputs = stdout[:300] if stdout else ""
+            key_outputs = stdout or ""
         elif isinstance(output, str):
-            key_outputs = output[:300]
+            key_outputs = output
 
-    # Build relevant_data from raw output (truncated)
+    # Build relevant_data from raw output
     relevant_data = ""
     if isinstance(output, dict):
         stderr = output.get("stderr", "")
         if stderr:
-            relevant_data = f"stderr: {stderr[:200]}"
+            relevant_data = f"stderr: {stderr}"
     elif isinstance(output, str) and not summary:
         # Only include raw output as fallback when no structured summary
-        relevant_data = output[:500]
+        relevant_data = output
 
     parts = [f'<dependency step="{dep_id}" title="{title}">']
     if files_str:
@@ -769,9 +769,9 @@ def _distill_dependency_output_llm(dep_id: int, dep_step: dict,
 
         if isinstance(output, dict):
             stdout = output.get("stdout", "")
-            output_preview = stdout[:500] if stdout else ""
+            output_preview = stdout or ""
         elif isinstance(output, str):
-            output_preview = output[:500]
+            output_preview = output
         else:
             output_preview = ""
 
@@ -1501,9 +1501,7 @@ def check_guardrails_llm(code: str) -> list[dict]:
         from orchestrator.llm_client import get_llm_client
 
         client = get_llm_client(role="planner")
-        # Truncate very large files to avoid overwhelming the LLM
-        code_preview = code[:15000] if len(code) > 15000 else code
-        prompt = GUARDRAIL_REVIEW_PROMPT.format(code=code_preview)
+        prompt = GUARDRAIL_REVIEW_PROMPT.format(code=code)
 
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START,
@@ -2624,7 +2622,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                             f"A downstream step (Step {step['id']}: "
                             f"{step['title']}) that consumes this step's "
                             f"output failed with:\n"
-                            f"{error_info[:800]}\n"
+                            f"{error_info}\n"
                             + (f"Downstream verification criteria: "
                                f"{verify_info}\n"
                                if verify_info else "")

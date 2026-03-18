@@ -186,8 +186,8 @@ def pre_execution_check_llm(code: str, task: str) -> tuple[list[str], list[str]]
         from architect.events import EventType, get_event_log
 
         prompt = PRE_FLIGHT_PROMPT.format(
-            task=task[:2000],
-            code=code[:8000],
+            task=task,
+            code=code,
         )
 
         event_log = get_event_log()
@@ -561,17 +561,17 @@ def _llm_retry_guidance(task: str, attempt: int, code_section: str,
             for entry in attempt_history:
                 a = entry.get("attempt", "?")
                 err = entry.get("error", "")
-                lines.append(f"Attempt {a}: {err[:300]}")
+                lines.append(f"Attempt {a}: {err}")
             history_section = (
                 "<attempt_history>\n" + "\n".join(lines) + "\n</attempt_history>"
             )
 
         prompt = RETRY_STRATEGY_PROMPT.format(
-            task=task[:2000],
+            task=task,
             attempt=attempt,
             max_retries=MAX_RETRIES,
-            code_section=code_section[:4000] if code_section else "(no code)",
-            error_output=previous_error[:3000],
+            code_section=code_section or "(no code)",
+            error_output=previous_error,
             history_section=history_section,
         )
 
@@ -663,8 +663,8 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
             if lessons:
                 formatted_lessons = "\n".join(
                     f"  - [{l.get('step_title', 'unknown')}] "
-                    f"Error: {l.get('error_snippet', '')[:100]} -> "
-                    f"Fix: {l.get('solution_snippet', '')[:100]}"
+                    f"Error: {l.get('error_snippet', '')} -> "
+                    f"Fix: {l.get('solution_snippet', '')}"
                     for l in lessons[-10:]  # Show most recent 10
                 )
                 parts.append(
@@ -938,8 +938,8 @@ def _get_best_of_n_llm(attempt: int, task: str, previous_error: str) -> int:
         from architect.events import EventType, get_event_log
 
         prompt = BEST_OF_N_PROMPT.format(
-            task=task[:2000],
-            error=previous_error[:2000],
+            task=task,
+            error=previous_error,
             attempt=attempt,
         )
 
@@ -997,7 +997,7 @@ def _get_score_priorities(task: str) -> list[str] | None:
     try:
         from architect.events import EventType, get_event_log
 
-        prompt = SCORE_GUIDANCE_PROMPT.format(task=task[:2000])
+        prompt = SCORE_GUIDANCE_PROMPT.format(task=task)
 
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START, data={"purpose": "score_guidance"})
@@ -1113,18 +1113,16 @@ def evaluate_candidates(
     if len(candidates) < 2:
         return list(candidates)
 
-    # Build candidates section with truncated previews
     sections = []
     for code, result, idx in candidates:
         exit_code = result.get("exit_code", -1)
-        stdout = (result.get("stdout", "") or "")[:2000]
-        stderr = (result.get("stderr", "") or "")[:1000]
-        code_preview = (code or "")[:3000]
+        stdout = result.get("stdout", "") or ""
+        stderr = result.get("stderr", "") or ""
 
         sections.append(
             f"<candidate index=\"{idx}\">\n"
             f"Exit code: {exit_code}\n"
-            f"Code:\n```python\n{code_preview}\n```\n"
+            f"Code:\n```python\n{code or ''}\n```\n"
             f"Stdout:\n```\n{stdout}\n```\n"
             f"Stderr:\n```\n{stderr}\n```\n"
             f"</candidate>"
@@ -1405,7 +1403,7 @@ def main():
                 logger.error("LLM generation failed: %s", exc)
                 attempt_history.append({
                     "attempt": attempt,
-                    "error": previous_error[:500],
+                    "error": previous_error,
                     "code_snippet": "",
                 })
                 continue
@@ -1488,8 +1486,8 @@ def main():
         # Section 11: Accumulate attempt history for retry context.
         attempt_history.append({
             "attempt": attempt,
-            "error": previous_error[:500],
-            "code_snippet": code[:300] if code else "",
+            "error": previous_error,
+            "code_snippet": code or "",
         })
         logger.error("FAILED on attempt %d.", attempt)
 

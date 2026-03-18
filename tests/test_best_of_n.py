@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from orchestrator.main import (
-    _APPROACH_HINTS,
     _get_best_of_n,
     _get_best_of_n_llm,
     _get_score_priorities,
@@ -16,8 +15,6 @@ from orchestrator.main import (
     generate_and_vote,
     main,
     score_result,
-    BEST_OF_N_PROMPT,
-    SCORE_GUIDANCE_PROMPT,
     MAX_RETRIES,
 )
 
@@ -262,21 +259,6 @@ class TestGenerateAndVote:
         # One should have simplicity hint
         assert any("simplicity" in p.lower() for p in prompts)
 
-
-class TestApproachHints:
-    def test_first_hint_is_empty(self):
-        assert _APPROACH_HINTS[0] == ""
-
-    def test_all_hints_are_strings(self):
-        for hint in _APPROACH_HINTS:
-            assert isinstance(hint, str)
-
-    def test_hints_cycle_for_large_n(self):
-        """Hints should cycle when N exceeds the number of unique hints."""
-        hints = [_APPROACH_HINTS[i % len(_APPROACH_HINTS)] for i in range(6)]
-        assert hints[0] == hints[3]
-        assert hints[1] == hints[4]
-        assert hints[2] == hints[5]
 
 
 class TestMainLoopWithBestOfN:

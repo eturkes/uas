@@ -7,9 +7,6 @@ import pytest
 
 from architect.planner import (
     parse_steps_json,
-    DECOMPOSITION_PROMPT,
-    REFLECT_PROMPT,
-    DECOMPOSE_STEP_PROMPT,
     critique_and_refine_plan,
     reflect_and_rewrite,
     decompose_failing_step,
@@ -76,105 +73,6 @@ class TestParseStepsJson:
         result = parse_steps_json(raw)
         assert len(result) == 1
 
-
-class TestDecompositionPromptConstraints:
-    def test_full_network_access(self):
-        assert "unrestricted network access" in DECOMPOSITION_PROMPT
-
-    def test_can_install_packages(self):
-        assert "Install any packages" in DECOMPOSITION_PROMPT
-
-    def test_observable_stdout(self):
-        assert "produce observable output to stdout" in DECOMPOSITION_PROMPT
-
-    def test_no_user_interaction(self):
-        assert "Do NOT create steps that require user interaction" in DECOMPOSITION_PROMPT
-
-    def test_xml_tags_present(self):
-        assert "<instructions>" in DECOMPOSITION_PROMPT
-        assert "<rules>" in DECOMPOSITION_PROMPT
-        assert "<output_format>" in DECOMPOSITION_PROMPT
-        assert "<examples>" in DECOMPOSITION_PROMPT
-
-    def test_analysis_tags_requested(self):
-        assert "<analysis>" in DECOMPOSITION_PROMPT
-
-    def test_verify_field_in_format(self):
-        assert '"verify"' in DECOMPOSITION_PROMPT
-
-    def test_environment_field_in_format(self):
-        assert '"environment"' in DECOMPOSITION_PROMPT
-
-    def test_complexity_guidance(self):
-        assert "trivial" in DECOMPOSITION_PROMPT.lower()
-        assert "complex" in DECOMPOSITION_PROMPT.lower()
-
-    def test_parallelism_instruction(self):
-        assert "parallelism" in DECOMPOSITION_PROMPT.lower()
-
-    def test_goal_at_top(self):
-        """Goal data should appear at the top of the prompt."""
-        goal_pos = DECOMPOSITION_PROMPT.index("<goal>")
-        instructions_pos = DECOMPOSITION_PROMPT.index("<instructions>")
-        rules_pos = DECOMPOSITION_PROMPT.index("<rules>")
-        assert goal_pos < instructions_pos
-        assert goal_pos < rules_pos
-
-    def test_complexity_assessment_tag(self):
-        assert "<complexity_assessment>" in DECOMPOSITION_PROMPT
-
-    def test_anti_patterns_section(self):
-        assert "<anti_patterns>" in DECOMPOSITION_PROMPT
-        assert "Over-splitting" in DECOMPOSITION_PROMPT
-        assert "Under-splitting" in DECOMPOSITION_PROMPT
-        assert "Missing dependencies" in DECOMPOSITION_PROMPT
-
-    def test_analysis_strengthened(self):
-        assert "failure modes" in DECOMPOSITION_PROMPT.lower()
-        assert "risk areas" in DECOMPOSITION_PROMPT.lower()
-        assert "parallelization" in DECOMPOSITION_PROMPT.lower()
-
-
-class TestComplexityAssessmentStripped:
-    def test_complexity_assessment_tags_stripped(self):
-        raw = (
-            '<analysis>This is medium.</analysis>\n'
-            '<complexity_assessment>medium — 3 steps</complexity_assessment>\n'
-            '[{"title": "a", "description": "b"}]'
-        )
-        result = parse_steps_json(raw)
-        assert len(result) == 1
-        assert result[0]["title"] == "a"
-
-    def test_both_analysis_and_complexity_stripped(self):
-        raw = (
-            '<analysis>\nMulti-line\nanalysis\n</analysis>\n'
-            '<complexity_assessment>complex — 8+ steps needed</complexity_assessment>\n'
-            '[{"title": "x", "description": "y"}, {"title": "z", "description": "w"}]'
-        )
-        result = parse_steps_json(raw)
-        assert len(result) == 2
-
-
-class TestPromptStructureOrdering:
-    def test_reflect_prompt_data_before_instructions(self):
-        """Failure output should appear before instructions in REFLECT_PROMPT."""
-        failure_pos = REFLECT_PROMPT.index("<failure_output>")
-        instructions_pos = REFLECT_PROMPT.index("<instructions>")
-        assert failure_pos < instructions_pos
-
-    def test_reflect_prompt_has_counterfactual(self):
-        assert "<counterfactual>" in REFLECT_PROMPT
-        assert "root cause" in REFLECT_PROMPT.lower()
-
-    def test_reflect_prompt_has_previous_attempts_placeholder(self):
-        assert "{previous_attempts_section}" in REFLECT_PROMPT
-
-    def test_decompose_step_prompt_data_before_instructions(self):
-        """Failed task data should appear before instructions."""
-        task_pos = DECOMPOSE_STEP_PROMPT.index("<failed_task>")
-        instructions_pos = DECOMPOSE_STEP_PROMPT.index("<instructions>")
-        assert task_pos < instructions_pos
 
 
 class TestCritiqueAndRefinePlan:

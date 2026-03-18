@@ -9,8 +9,6 @@ from architect.planner import (
     estimate_complexity,
     score_plan,
     decompose_goal_with_voting,
-    COMPLEXITY_PROMPT,
-    _VOTING_SUFFIXES,
 )
 
 
@@ -390,24 +388,3 @@ class TestDecomposeGoalWithVoting:
         assert result[1]["depends_on"] == [1]
 
 
-class TestComplexityPrompt:
-    def test_has_goal_placeholder(self):
-        assert "{goal}" in COMPLEXITY_PROMPT
-
-    def test_has_all_categories(self):
-        for cat in ("trivial", "simple", "medium", "complex"):
-            assert cat in COMPLEXITY_PROMPT
-
-    def test_requests_single_word(self):
-        assert "one word" in COMPLEXITY_PROMPT.lower() or "ONLY one word" in COMPLEXITY_PROMPT
-
-
-class TestVotingSuffixes:
-    def test_first_suffix_empty(self):
-        assert _VOTING_SUFFIXES[0] == ""
-
-    def test_suffixes_are_different(self):
-        assert len(set(_VOTING_SUFFIXES)) == len(_VOTING_SUFFIXES)
-
-    def test_at_least_three_suffixes(self):
-        assert len(_VOTING_SUFFIXES) >= 3

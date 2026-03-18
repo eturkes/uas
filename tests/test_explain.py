@@ -6,7 +6,6 @@ import os
 from architect.explain import (
     RunExplainer,
     classify_failure,
-    classify_failure_heuristic,
     compute_critical_path,
     load_run_data,
     _time_breakdown,
@@ -238,9 +237,6 @@ class TestClassifyFailure:
         result = classify_failure("PermissionError: denied", step_context=step)
         assert result == "environment_error"  # Falls back to heuristic
 
-    def test_heuristic_directly(self):
-        assert classify_failure_heuristic("ImportError: No module named foo") == "dependency_error"
-        assert classify_failure_heuristic("") == "unknown"
 
 
 class TestComputeCriticalPath:

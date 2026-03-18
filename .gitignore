@@ -32,6 +32,9 @@ build/
 .env
 .venv/
 
+# Test project workspaces
+rehab/
+
 # OS
 .DS_Store
 Thumbs.db

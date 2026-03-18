@@ -17,8 +17,28 @@ logger = logging.getLogger(__name__)
 MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
 
+def _goal_is_specific(goal: str) -> bool:
+    """Return True if the goal is already detailed enough to skip expansion."""
+    if len(goal) > 500:
+        return True
+    # Numbered lists (e.g., "1.", "2.")
+    if re.search(r"(?m)^\s*\d+[\.\)]\s", goal):
+        return True
+    # Markdown headers
+    if re.search(r"(?m)^#{1,6}\s", goal):
+        return True
+    # Code blocks
+    if "```" in goal:
+        return True
+    return False
+
+
 def expand_goal(goal: str) -> str:
     """Expand a vague goal with reasonable defaults using LLM judgment."""
+    if _goal_is_specific(goal):
+        logger.debug("Goal already specific (%d chars), skipping expansion", len(goal))
+        return goal
+
     client = get_llm_client(role="planner")
     prompt = f"""The user wants to accomplish this goal:
 "{goal}"

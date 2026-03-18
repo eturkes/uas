@@ -9,7 +9,7 @@ after each section to verify no regressions.
 
 ---
 
-## Section 1: Disable goal expansion for specific goals `[TODO]`
+## Section 1: Disable goal expansion for specific goals `[DONE]`
 
 **Problem:** `expand_goal()` in `architect/main.py` compressed a detailed 5,511-char
 goal into a 1,759-char summary that read like a completion report ("All three phases

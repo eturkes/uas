@@ -28,7 +28,7 @@ and verifies the output preserves the original content (or is identical to it).
 
 ---
 
-## Section 2: Coder role emits tool calls instead of code blocks `[TODO]`
+## Section 2: Coder role emits tool calls instead of code blocks `[DONE]`
 
 **Problem:** The coder role passes `--tools ""` to Claude Code CLI to disable tools,
 but the LLM sometimes responds with `<tool_call>` XML anyway. This wastes retry

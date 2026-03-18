@@ -292,6 +292,11 @@ def _extract_header_context(code: str, max_lines: int = 40) -> str:
     return "\n".join(header_parts)
 
 
+def _contains_tool_calls(response: str) -> bool:
+    """Check if an LLM response contains tool call patterns instead of code."""
+    return bool(re.search(r"<tool_call>|<tool_name>|tool_name|</tool_call>", response))
+
+
 def _request_continuation(client, truncated_code: str) -> str | None:
     """Ask the LLM to finish a truncated code block.
 
@@ -1422,7 +1427,15 @@ def main():
                     code = _request_continuation(client, truncated)
 
             if not code:
-                previous_error = "Failed to extract code block from LLM response."
+                if _contains_tool_calls(response):
+                    previous_error = (
+                        "Your response contained tool calls (e.g. <tool_call> XML) "
+                        "but tools are disabled. You MUST respond with a single "
+                        "```python code fence containing your complete script. "
+                        "Do not use tool calls."
+                    )
+                else:
+                    previous_error = "Failed to extract code block from LLM response."
                 previous_code = None
                 logger.error("%s", previous_error)
                 logger.debug("Raw LLM response (%d chars):\n%s",

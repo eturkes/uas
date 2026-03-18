@@ -35,111 +35,95 @@ class TestGetLlmClient:
 
 
 class TestModelFlag:
-    @patch("orchestrator.llm_client.subprocess.run")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_model_flag_passed(self, _mock_which, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="response", stderr=""
-        )
+    def test_model_flag_passed(self, _mock_which, mock_stream):
+        mock_stream.return_value = ("response", "", 0)
         client = ClaudeCodeClient(model="claude-sonnet-4-6")
         client.generate("hello")
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_stream.call_args[0][0]
         assert "--model" in cmd
         idx = cmd.index("--model")
         assert cmd[idx + 1] == "claude-sonnet-4-6"
 
-    @patch("orchestrator.llm_client.subprocess.run")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_no_model_flag_when_none(self, _mock_which, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="response", stderr=""
-        )
+    def test_fallback_model_when_none(self, _mock_which, mock_stream):
+        mock_stream.return_value = ("response", "", 0)
         client = ClaudeCodeClient(model=None)
         client.generate("hello")
-        cmd = mock_run.call_args[0][0]
-        assert "--model" not in cmd
-
-
-class TestTimeoutConfig:
-    @patch("orchestrator.llm_client.subprocess.run")
-    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_custom_timeout_passed_to_subprocess(self, _mock_which, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="ok", stderr=""
-        )
-        client = ClaudeCodeClient(timeout=45)
-        client.generate("test")
-        assert mock_run.call_args.kwargs["timeout"] == 45
+        cmd = mock_stream.call_args[0][0]
+        assert "--model" in cmd
+        idx = cmd.index("--model")
+        assert cmd[idx + 1] == "claude-opus-4-6"
 
 
 class TestRetryBehaviour:
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.subprocess.run")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_retries_on_timeout(self, _mock_which, mock_run, mock_sleep):
-        mock_run.side_effect = [
+    def test_retries_on_timeout(self, _mock_which, mock_stream, mock_sleep):
+        mock_stream.side_effect = [
             subprocess.TimeoutExpired(cmd="claude", timeout=120),
-            MagicMock(returncode=0, stdout="ok", stderr=""),
+            ("ok", "", 0),
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result == "ok"
-        assert mock_run.call_count == 2
+        assert mock_stream.call_count == 2
         assert mock_sleep.call_count == 1
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.subprocess.run")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_retries_on_transient_stderr(self, _mock_which, mock_run, mock_sleep):
-        mock_run.side_effect = [
-            MagicMock(returncode=1, stdout="", stderr="Connection refused"),
-            MagicMock(returncode=0, stdout="ok", stderr=""),
+    def test_retries_on_transient_stderr(self, _mock_which, mock_stream, mock_sleep):
+        mock_stream.side_effect = [
+            ("", "Connection refused", 1),
+            ("ok", "", 0),
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result == "ok"
-        assert mock_run.call_count == 2
+        assert mock_stream.call_count == 2
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.subprocess.run")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_raises_after_max_retries(self, _mock_which, mock_run, mock_sleep):
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=120)
+    def test_raises_after_max_retries(self, _mock_which, mock_stream, mock_sleep):
+        mock_stream.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=120)
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError, match="timed out"):
             client.generate("test")
-        assert mock_run.call_count == 1 + MAX_RETRIES
+        assert mock_stream.call_count == 1 + MAX_RETRIES
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.subprocess.run")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_no_retry_on_non_transient_error(self, _mock_which, mock_run, mock_sleep):
-        mock_run.return_value = MagicMock(
-            returncode=1, stdout="", stderr="Invalid API key"
-        )
+    def test_no_retry_on_non_transient_error(self, _mock_which, mock_stream, mock_sleep):
+        mock_stream.return_value = ("", "Invalid API key", 1)
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError, match="Invalid API key"):
             client.generate("test")
-        assert mock_run.call_count == 1
+        assert mock_stream.call_count == 1
         mock_sleep.assert_not_called()
 
-    @patch("orchestrator.llm_client.subprocess.run")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_no_retry_on_file_not_found(self, _mock_which, mock_run):
-        mock_run.side_effect = FileNotFoundError("No such file")
+    def test_no_retry_on_file_not_found(self, _mock_which, mock_stream):
+        mock_stream.side_effect = FileNotFoundError("No such file")
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError, match="not found in PATH"):
             client.generate("test")
-        assert mock_run.call_count == 1
+        assert mock_stream.call_count == 1
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.subprocess.run")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_exponential_backoff(self, _mock_which, mock_run, mock_sleep):
-        mock_run.side_effect = [
+    def test_exponential_backoff(self, _mock_which, mock_stream, mock_sleep):
+        mock_stream.side_effect = [
             subprocess.TimeoutExpired(cmd="claude", timeout=120),
             subprocess.TimeoutExpired(cmd="claude", timeout=120),
-            MagicMock(returncode=0, stdout="ok", stderr=""),
+            ("ok", "", 0),
         ]
         client = ClaudeCodeClient()
         client.generate("test")

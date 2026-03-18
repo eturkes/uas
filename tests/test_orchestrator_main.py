@@ -9,6 +9,7 @@ import pytest
 
 from orchestrator.main import (
     _contains_tool_calls,
+    _task_mentions_file_modification,
     build_prompt, get_task, main, parse_uas_result, pre_execution_check,
     MAX_RETRIES,
 )
@@ -516,3 +517,41 @@ class TestToolCallDetection:
         second_call_prompt = mock_client.generate.call_args_list[1][0][0]
         assert "tool calls" in second_call_prompt.lower()
         assert "tools are disabled" in second_call_prompt
+
+
+class TestFileModificationDetection:
+    """Section 3: Detect file modification tasks and inject guidance."""
+
+    def test_detects_modify_keyword(self):
+        assert _task_mentions_file_modification("modify analysis.py to add MCID") is True
+
+    def test_detects_update_keyword(self):
+        assert _task_mentions_file_modification("update config.json with new settings") is True
+
+    def test_detects_add_to_keyword(self):
+        assert _task_mentions_file_modification("add to utils.py a helper function") is True
+
+    def test_detects_insert_keyword(self):
+        assert _task_mentions_file_modification("insert validation into forms.html") is True
+
+    def test_detects_extend_keyword(self):
+        assert _task_mentions_file_modification("extend models.py with a new class") is True
+
+    def test_detects_add_something_to(self):
+        assert _task_mentions_file_modification("add MCID scoring code to analysis.py") is True
+
+    def test_no_match_for_creation_task(self):
+        assert _task_mentions_file_modification("create a new Flask web application") is False
+
+    def test_no_match_for_plain_text(self):
+        assert _task_mentions_file_modification("build a REST API") is False
+
+    def test_guidance_appears_for_modification_task(self):
+        prompt = build_prompt("modify analysis.py to add MCID scoring", attempt=1)
+        assert "<file_modification_guidance>" in prompt
+        assert "Write the COMPLETE modified file" in prompt
+        assert "Never use string insertion by line number" in prompt
+
+    def test_guidance_absent_for_creation_task(self):
+        prompt = build_prompt("create a new REST API project", attempt=1)
+        assert "<file_modification_guidance>" not in prompt

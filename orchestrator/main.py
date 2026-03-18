@@ -85,6 +85,19 @@ _UAS_RESULT_PATTERN = re.compile(
 
 _INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
 
+# Section 3: Detect tasks that involve modifying existing files.
+# Matches modification verbs near a filename (word.ext pattern).
+_FILE_MODIFICATION_PATTERN = re.compile(
+    r"\b(?:modify|update|insert|extend|edit|change|add\s+(?:\w+\s+)*to)\b"
+    r".*?\b\w+\.\w{1,5}\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _task_mentions_file_modification(task: str) -> bool:
+    """Return True if the task description mentions modifying an existing file."""
+    return bool(_FILE_MODIFICATION_PATTERN.search(task))
+
 # Section 17: Module-level cache for resolved PyPI versions.
 _pypi_version_cache: dict[str, str] = {}
 
@@ -740,6 +753,20 @@ Files already present in the workspace from prior steps:
 Do not regenerate these files unless the task explicitly requires modifying them.
 Reference them by path using os.path.join(workspace, ...).
 </workspace_state>"""
+
+    # Section 3: File modification guidance.
+    # When the task involves modifying existing files, steer the LLM toward
+    # full-file rewrites instead of fragile surgical insertions.
+    if _task_mentions_file_modification(task):
+        prompt += """
+
+<file_modification_guidance>
+When modifying existing files:
+1. Read the entire file first to understand its structure
+2. Write the COMPLETE modified file, not just the diff or insertion
+3. Use a write-then-verify pattern: write the file, then compile-check it
+4. Never use string insertion by line number — it's fragile
+</file_modification_guidance>"""
 
     # Section 19: Truncation-aware code length guidance.
     # When prior attempts for this step produced code that was truncated,

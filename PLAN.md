@@ -50,7 +50,7 @@ the error message mentions tool calls specifically.
 
 ---
 
-## Section 3: File modification corruption `[TODO]`
+## Section 3: File modification corruption `[DONE]`
 
 **Problem:** When UAS needs to modify an existing file (e.g., insert MCID code into
 `analysis.py`), the generated script often corrupts the file by inserting at the wrong

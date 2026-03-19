@@ -80,7 +80,7 @@ doesn't appear for creation-only tasks.
 
 ---
 
-## Section 4: Commit hygiene `[TODO]`
+## Section 4: Commit hygiene `[DONE]`
 
 **Problem:** UAS creates messy git histories. The rehab MCID run produced 4 commits
 ("Step 1", "Step 2", "Step 3", then a summary) for what should have been 1 commit.

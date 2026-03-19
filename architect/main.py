@@ -163,6 +163,11 @@ node_modules/
 def ensure_git_repo(workspace: str) -> None:
     """Initialize a git repo in the workspace if it doesn't exist yet.
 
+    After initialization, creates and checks out a ``uas-wip`` branch so
+    that per-step checkpoint commits stay off ``main``.  The wip branch
+    is squash-merged back into ``main`` by :func:`finalize_git` at the
+    end of a successful run.
+
     Silently skips if git is unavailable, init fails, or the workspace
     has fewer than 2 files.
     """
@@ -203,13 +208,67 @@ def ensure_git_repo(workspace: str) -> None:
             capture_output=True,
             check=True,
         )
-        logger.debug("Git repo initialized in %s", workspace)
+        # Create a wip branch for checkpoint commits
+        subprocess.run(
+            ["git", "checkout", "-b", "uas-wip"],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+        logger.debug("Git repo initialized in %s (on uas-wip branch)", workspace)
     except Exception:
         logger.debug("Git init skipped/failed in %s", workspace, exc_info=True)
 
 
+def _ensure_wip_branch(workspace: str) -> bool:
+    """Ensure the current branch is ``uas-wip``, creating it if needed.
+
+    Returns True if we are on the wip branch, False on any failure.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        current = result.stdout.strip()
+        if current == "uas-wip":
+            return True
+
+        # Check if uas-wip already exists
+        result = subprocess.run(
+            ["git", "branch", "--list", "uas-wip"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if result.stdout.strip():
+            subprocess.run(
+                ["git", "checkout", "uas-wip"],
+                cwd=workspace,
+                capture_output=True,
+                check=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "checkout", "-b", "uas-wip"],
+                cwd=workspace,
+                capture_output=True,
+                check=True,
+            )
+        return True
+    except Exception:
+        return False
+
+
 def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
-    """Commit current workspace state as a checkpoint after a successful step.
+    """Commit current workspace state as a checkpoint on the ``uas-wip`` branch.
+
+    Checkpoint commits are kept off ``main`` so they can be squashed into
+    a single commit by :func:`finalize_git` at the end of a successful run.
 
     Silently skips if the workspace is not a git repo, there are no changes,
     or any git operation fails.
@@ -218,6 +277,9 @@ def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
         git_dir = os.path.join(workspace, ".git")
         if not os.path.isdir(git_dir):
             return
+
+        # Ensure we're on the wip branch
+        _ensure_wip_branch(workspace)
 
         subprocess.run(
             ["git", "add", "-A"],
@@ -243,10 +305,88 @@ def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
             capture_output=True,
             check=True,
         )
-        logger.debug("Git checkpoint: %s", msg)
+        logger.debug("Git checkpoint (uas-wip): %s", msg)
     except Exception:
         logger.debug(
             "Git checkpoint skipped/failed for step %s", step_id,
+            exc_info=True,
+        )
+
+
+def finalize_git(workspace: str, goal: str) -> None:
+    """Squash all ``uas-wip`` checkpoint commits into a single commit on ``main``.
+
+    Called at the end of a successful run.  Produces a clean single-commit
+    history on ``main`` with a message derived from *goal*.  If anything
+    fails, the wip branch is left intact for manual recovery.
+    """
+    try:
+        git_dir = os.path.join(workspace, ".git")
+        if not os.path.isdir(git_dir):
+            return
+
+        # Check if uas-wip branch exists
+        result = subprocess.run(
+            ["git", "branch", "--list", "uas-wip"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if not result.stdout.strip():
+            return  # No wip branch, nothing to squash
+
+        # Switch to main
+        subprocess.run(
+            ["git", "checkout", "main"],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+
+        # Squash merge uas-wip into main
+        merge_result = subprocess.run(
+            ["git", "merge", "--squash", "uas-wip"],
+            cwd=workspace,
+            capture_output=True,
+        )
+        if merge_result.returncode != 0:
+            logger.debug("Git squash merge failed, leaving wip branch intact")
+            return
+
+        # Check if there are staged changes to commit
+        diff = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=workspace,
+            capture_output=True,
+        )
+        if diff.returncode == 0:
+            # No changes (wip had no new commits beyond main)
+            return
+
+        # Build a meaningful commit message from the goal
+        summary = goal.strip()
+        if len(summary) > 72:
+            summary = summary[:69] + "..."
+        msg = f"UAS: {summary}"
+        subprocess.run(
+            ["git", "commit", "-m", msg],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+
+        # Clean up the wip branch
+        subprocess.run(
+            ["git", "branch", "-D", "uas-wip"],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+        logger.debug("Git finalized: squashed wip commits into main")
+    except Exception:
+        logger.debug(
+            "Git finalize skipped/failed in %s", workspace,
             exc_info=True,
         )
 
@@ -3279,6 +3419,10 @@ def main():
 
     if not MINIMAL_MODE:
         post_run_meta_learning(state)
+
+    # Squash wip checkpoint commits into a single commit on main
+    if not MINIMAL_MODE:
+        finalize_git(WORKSPACE, state.get("goal", ""))
 
     if output_path:
         write_json_output(state, output_path)

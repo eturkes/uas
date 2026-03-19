@@ -752,6 +752,10 @@ Files already present in the workspace from prior steps:
 {workspace_files}
 Do not regenerate these files unless the task explicitly requires modifying them.
 Reference them by path using os.path.join(workspace, ...).
+
+IMPORTANT: The workspace IS the project root. Do not create a subdirectory for the
+project. Write files directly to os.path.join(workspace, ...). For example, use
+os.path.join(workspace, "main.py"), NOT os.path.join(workspace, "myproject", "main.py").
 </workspace_state>"""
 
     # Section 3: File modification guidance.

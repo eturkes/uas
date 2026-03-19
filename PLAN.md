@@ -132,7 +132,7 @@ is made before decomposition, and its output appears in the decomposition prompt
 
 ---
 
-## Section 6: Workspace path confusion `[TODO]`
+## Section 6: Workspace path confusion `[DONE]`
 
 **Problem:** Generated scripts sometimes create a project subdirectory inside the
 workspace (`/workspace/rehab/`) rather than using the workspace root as the project

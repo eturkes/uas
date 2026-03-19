@@ -1,9 +1,11 @@
 """Tests for input validation and error standardization (Step 5)."""
 
 import logging
+import os
 
 import pytest
 
+from architect.main import validate_uas_result
 from architect.planner import validate_depends_on
 
 
@@ -103,6 +105,59 @@ class TestValidateDependsOn:
     def test_single_step_no_deps(self):
         steps = [{"title": "A", "description": "Do A", "depends_on": []}]
         validate_depends_on(steps)  # Should not raise
+
+
+class TestSubdirectoryWarning:
+    """Section 6: Warn when files are found in a subdirectory instead of workspace root."""
+
+    def test_warning_when_file_in_subdirectory(self, tmp_path, caplog):
+        # Create file in a subdirectory instead of workspace root
+        subdir = tmp_path / "myproject"
+        subdir.mkdir()
+        (subdir / "main.py").write_text("print('hello')")
+
+        step = {
+            "uas_result": {
+                "status": "ok",
+                "files_written": ["main.py"],
+            }
+        }
+        with caplog.at_level(logging.WARNING):
+            result = validate_uas_result(step, str(tmp_path))
+
+        # File was found so validation passes
+        assert result is None
+        # But a warning was logged about the subdirectory
+        assert any("subdirectory" in r.message for r in caplog.records)
+        assert any("myproject" in r.message for r in caplog.records)
+
+    def test_no_warning_when_file_at_root(self, tmp_path, caplog):
+        # File is at the workspace root — no warning
+        (tmp_path / "main.py").write_text("print('hello')")
+
+        step = {
+            "uas_result": {
+                "status": "ok",
+                "files_written": ["main.py"],
+            }
+        }
+        with caplog.at_level(logging.WARNING):
+            result = validate_uas_result(step, str(tmp_path))
+
+        assert result is None
+        assert not any("subdirectory" in r.message for r in caplog.records)
+
+    def test_no_warning_when_file_missing(self, tmp_path, caplog):
+        step = {
+            "uas_result": {
+                "status": "ok",
+                "files_written": ["nonexistent.py"],
+            }
+        }
+        result = validate_uas_result(step, str(tmp_path))
+        # Validation fails — file not found
+        assert result is not None
+        assert "does not exist" in result
 
 
 class TestMaxErrorLengthConfigurable:

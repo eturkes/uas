@@ -1448,12 +1448,14 @@ def validate_uas_result(step: dict, workspace: str) -> str | None:
         # Search subdirectories — scripts may report paths relative
         # to a project subdirectory rather than the workspace root.
         found = False
+        found_path = None
         search_name = os.path.basename(f)
         for root, _dirs, files in os.walk(workspace):
             if search_name in files:
                 candidate = os.path.join(root, search_name)
                 if candidate.endswith(f.lstrip("/")):
                     found = True
+                    found_path = candidate
                     break
             # Limit depth to avoid traversing .state, .git, etc.
             _dirs[:] = [
@@ -1462,6 +1464,20 @@ def validate_uas_result(step: dict, workspace: str) -> str | None:
             ]
         if not found:
             return f"UAS_RESULT claims file '{f}' was written but it does not exist"
+
+        # Section 6: Warn when a file was found in a subdirectory rather
+        # than at the workspace root — the script may have created an
+        # unnecessary project subdirectory (e.g. workspace/project/file
+        # instead of workspace/file).
+        if found_path:
+            rel = os.path.relpath(found_path, workspace)
+            if os.sep in rel:
+                logger.warning(
+                    "File '%s' was found at '%s' inside a subdirectory "
+                    "instead of the workspace root. The script may have "
+                    "created an unnecessary project subdirectory.",
+                    f, rel,
+                )
 
     return None
 

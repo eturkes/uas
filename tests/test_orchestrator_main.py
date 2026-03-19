@@ -519,6 +519,24 @@ class TestToolCallDetection:
         assert "tools are disabled" in second_call_prompt
 
 
+class TestWorkspacePathGuidance:
+    """Section 6: Workspace path confusion — guidance when files exist."""
+
+    def test_guidance_appears_when_workspace_files_present(self):
+        ws_files = "  main.py (200 bytes, Python):\n  data.json (500 bytes, JSON):"
+        prompt = build_prompt("add a new feature", attempt=1, workspace_files=ws_files)
+        assert "workspace IS the project root" in prompt
+        assert "Do not create a subdirectory" in prompt
+
+    def test_guidance_absent_when_no_workspace_files(self):
+        prompt = build_prompt("create a new project", attempt=1)
+        assert "workspace IS the project root" not in prompt
+
+    def test_guidance_absent_when_workspace_files_none(self):
+        prompt = build_prompt("create a new project", attempt=1, workspace_files=None)
+        assert "workspace IS the project root" not in prompt
+
+
 class TestFileModificationDetection:
     """Section 3: Detect file modification tasks and inject guidance."""
 

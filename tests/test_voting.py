@@ -208,7 +208,7 @@ class TestDecomposeGoalWithVoting:
         ]
 
         result = decompose_goal_with_voting("print hello")
-        mock_decompose.assert_called_once_with("print hello")
+        mock_decompose.assert_called_once_with("print hello", research_context="")
         assert len(result) == 1
 
     @patch("architect.planner.decompose_goal")

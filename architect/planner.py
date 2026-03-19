@@ -59,6 +59,52 @@ Return ONLY the goal text (expanded or unchanged). No explanation."""
         return goal
 
 
+RESEARCH_PROMPT = """\
+<goal>{goal}</goal>
+
+<instructions>
+Before planning implementation, research this domain. Use web search to find \
+current best practices, relevant standards, and authoritative sources.
+
+Return a structured research summary:
+1. **Key findings**: Current best practices, standards, or established \
+approaches for this type of task.
+2. **Recommended libraries/tools**: Libraries, frameworks, or tools commonly \
+used, with current version numbers if known.
+3. **Common pitfalls**: Known failure modes or anti-patterns to avoid.
+4. **Citations**: URLs or reference names for sources consulted.
+
+Be concise and actionable. Focus on information that directly informs \
+implementation decisions. If the domain is straightforward and well-understood, \
+say "No additional research needed" and briefly explain why.
+</instructions>
+"""
+
+
+def research_goal(goal: str) -> str:
+    """Perform domain research before planning implementation.
+
+    Sends the goal to the planner LLM with a research-specific prompt
+    to gather best practices, standards, and authoritative sources.
+    Returns a structured research summary, or empty string on failure.
+    """
+    client = get_llm_client(role="planner")
+    prompt = RESEARCH_PROMPT.format(goal=goal)
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START, data={"purpose": "research_goal"})
+    try:
+        result = client.generate(prompt, stream=True)
+        event_log.emit(
+            EventType.LLM_CALL_COMPLETE, data={"purpose": "research_goal"}
+        )
+        return result.strip() if result.strip() else ""
+    except Exception as e:
+        logger.warning(
+            "Research phase failed, continuing without research: %s", e
+        )
+        return ""
+
+
 DECOMPOSITION_PROMPT = """\
 <research>
 You have full network access. If the goal involves:
@@ -69,7 +115,7 @@ You have full network access. If the goal involves:
 Use what you learn to make your decomposition more specific and accurate.
 Don't guess at API formats or library capabilities — verify when uncertain.
 </research>
-
+{research_context}
 <goal>{goal}</goal>
 
 <examples>
@@ -365,9 +411,21 @@ def topological_sort(steps: list[dict]) -> list[list[int]]:
     return levels
 
 
-def decompose_goal(goal: str) -> list[dict]:
+def _format_research_context(research_context: str) -> str:
+    """Wrap research context in XML tags for the decomposition prompt."""
+    if not research_context:
+        return ""
+    return (
+        f"\n<research_findings>\n{research_context}\n</research_findings>\n"
+    )
+
+
+def decompose_goal(goal: str, research_context: str = "") -> list[dict]:
     client = get_llm_client(role="planner")
-    prompt = DECOMPOSITION_PROMPT.format(goal=goal)
+    prompt = DECOMPOSITION_PROMPT.format(
+        goal=goal,
+        research_context=_format_research_context(research_context),
+    )
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "decompose_goal"})
     response = client.generate(prompt, stream=True)
@@ -567,12 +625,23 @@ def score_plan(steps: list[dict]) -> float:
     return parallelism_ratio * 0.4 + specificity * 0.3 + compactness * 0.3
 
 
-def decompose_goal_with_voting(goal: str, n_samples: int = 3) -> list[dict]:
+def decompose_goal_with_voting(
+    goal: str,
+    n_samples: int = 3,
+    research_context: str = "",
+    complexity: str | None = None,
+) -> list[dict]:
     """Generate multiple decomposition plans and select the best one.
 
     Uses a complexity gate: trivial/simple goals skip voting entirely.
     Medium/complex goals generate n_samples plans in parallel and pick
     the highest-scoring one.
+
+    Args:
+        research_context: Pre-computed research findings to include in
+            the decomposition prompt. Empty string means no research.
+        complexity: Pre-computed complexity estimate. If None, will be
+            estimated via LLM call.
 
     Returns (steps, complexity) tuple-style via the steps list, with the
     estimated complexity stored in the module-level for the caller to read.
@@ -580,7 +649,8 @@ def decompose_goal_with_voting(goal: str, n_samples: int = 3) -> list[dict]:
     event_log = get_event_log()
 
     # 2c: Complexity estimation gate
-    complexity = estimate_complexity(goal)
+    if complexity is None:
+        complexity = estimate_complexity(goal)
     event_log.emit(EventType.COMPLEXITY_ESTIMATE, data={"complexity": complexity})
     logger.info("  Estimated complexity: %s", complexity)
 
@@ -589,17 +659,21 @@ def decompose_goal_with_voting(goal: str, n_samples: int = 3) -> list[dict]:
 
     if complexity in ("trivial", "simple"):
         logger.info("  Skipping voting for %s goal, using single decomposition.", complexity)
-        return decompose_goal(goal)
+        return decompose_goal(goal, research_context=research_context)
 
     # 2a: Generate N plans in parallel
     logger.info("  Generating %d plans for voting...", n_samples)
+
+    rc_formatted = _format_research_context(research_context)
 
     def _generate_plan(suffix_idx: int) -> list[dict] | None:
         """Generate a single plan variant. Returns None on failure."""
         try:
             client = get_llm_client(role="planner")
             suffix = _VOTING_SUFFIXES[suffix_idx] if suffix_idx < len(_VOTING_SUFFIXES) else ""
-            prompt = DECOMPOSITION_PROMPT.format(goal=goal) + suffix
+            prompt = DECOMPOSITION_PROMPT.format(
+                goal=goal, research_context=rc_formatted,
+            ) + suffix
             response = client.generate(prompt)
             steps = parse_steps_json(response)
             if not steps:
@@ -634,7 +708,7 @@ def decompose_goal_with_voting(goal: str, n_samples: int = 3) -> list[dict]:
 
     if not plans:
         logger.warning("  All voting plans failed, falling back to single decomposition.")
-        return decompose_goal(goal)
+        return decompose_goal(goal, research_context=research_context)
 
     if len(plans) == 1:
         logger.info("  Only 1 valid plan generated, using it directly.")

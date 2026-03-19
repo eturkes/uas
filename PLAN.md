@@ -102,7 +102,7 @@ end, with checkpoint commits on the wip branch.
 
 ---
 
-## Section 5: Add a research phase to the planner `[TODO]`
+## Section 5: Add a research phase to the planner `[DONE]`
 
 **Problem:** The decomposition prompt has a `<research>` section encouraging web
 research, but in practice no research happens. The rehab project embedded clinical

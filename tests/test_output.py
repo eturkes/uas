@@ -110,13 +110,15 @@ class TestWriteJsonOutput:
 
 
 class TestOutputIntegration:
+    @patch("architect.main.research_goal", return_value="")
+    @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
     @patch("architect.main.build_task_from_spec")
     def test_output_written_on_success(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
-        tmp_workspace, monkeypatch,
+        mock_complexity, mock_research, tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},
@@ -137,6 +139,8 @@ class TestOutputIntegration:
         assert len(data["steps"]) == 1
         assert data["steps"][0]["status"] == "completed"
 
+    @patch("architect.main.research_goal", return_value="")
+    @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
@@ -145,7 +149,8 @@ class TestOutputIntegration:
     @patch("architect.main.reflect_and_rewrite")
     def test_output_written_on_blocked(
         self, mock_reflect, mock_decompose_step, mock_build_task, mock_gen_spec,
-        mock_run_orch, mock_decompose, tmp_workspace, monkeypatch,
+        mock_run_orch, mock_decompose, mock_complexity, mock_research,
+        tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},
@@ -174,13 +179,15 @@ class TestOutputIntegration:
         assert data["status"] == "blocked"
         assert data["steps"][0]["status"] == "failed"
 
+    @patch("architect.main.research_goal", return_value="")
+    @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
     @patch("architect.main.build_task_from_spec")
     def test_output_env_var(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
-        tmp_workspace, monkeypatch,
+        mock_complexity, mock_research, tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},
@@ -200,13 +207,15 @@ class TestOutputIntegration:
             data = json.load(f)
         assert data["status"] == "completed"
 
+    @patch("architect.main.research_goal", return_value="")
+    @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
     @patch("architect.main.run_orchestrator")
     @patch("architect.main.generate_spec")
     @patch("architect.main.build_task_from_spec")
     def test_no_output_when_not_requested(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
-        tmp_workspace, monkeypatch,
+        mock_complexity, mock_research, tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},

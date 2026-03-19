@@ -72,8 +72,11 @@ class TestPrintPlan:
 
 
 class TestDryRunMode:
+    @patch("architect.main.research_goal", return_value="")
+    @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
-    def test_dry_run_skips_executor(self, mock_decompose, tmp_workspace, monkeypatch):
+    def test_dry_run_skips_executor(self, mock_decompose, mock_complexity,
+                                    mock_research, tmp_workspace, monkeypatch):
         """Dry-run should decompose but not call run_orchestrator."""
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},
@@ -90,8 +93,11 @@ class TestDryRunMode:
         mock_decompose.assert_called_once()
         mock_orch.assert_not_called()
 
+    @patch("architect.main.research_goal", return_value="")
+    @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
-    def test_dry_run_env_var_skips_executor(self, mock_decompose, tmp_workspace, monkeypatch):
+    def test_dry_run_env_var_skips_executor(self, mock_decompose, mock_complexity,
+                                            mock_research, tmp_workspace, monkeypatch):
         """UAS_DRY_RUN=1 should also trigger dry-run mode."""
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},

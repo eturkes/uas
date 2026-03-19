@@ -27,6 +27,8 @@ from .planner import (
     decompose_goal,
     decompose_goal_with_voting,
     expand_goal,
+    estimate_complexity,
+    research_goal,
     reflect_and_rewrite,
     decompose_failing_step,
     generate_reflection,
@@ -3017,14 +3019,39 @@ def main():
         goal_entity = prov.add_entity("goal", content=goal)
         planner_agent = prov.add_agent("planner_llm")
 
+        # Research phase: estimate complexity, then research for
+        # medium/complex goals before decomposition.
+        research_context = ""
+        complexity = None
+        if not MINIMAL_MODE:
+            complexity = estimate_complexity(goal)
+            if complexity in ("medium", "complex"):
+                logger.info("Researching domain before planning...")
+                event_log.emit(EventType.RESEARCH_START)
+                research_context = research_goal(goal)
+                event_log.emit(
+                    EventType.RESEARCH_COMPLETE,
+                    data={"length": len(research_context)},
+                )
+                if research_context:
+                    logger.info(
+                        "  Research complete (%d chars)", len(research_context)
+                    )
+
         # Phase 1: Decompose (with multi-plan voting for complex goals)
         logger.info("Phase 1: Decomposing goal into atomic steps...")
         event_log.emit(EventType.DECOMPOSITION_START)
         decompose_start = time.monotonic()
         state = init_state(goal, run_id=run_id)
         state["original_goal"] = original_goal
+        if research_context:
+            state["research_context"] = research_context
         try:
-            steps = decompose_goal_with_voting(goal)
+            steps = decompose_goal_with_voting(
+                goal,
+                research_context=research_context,
+                complexity=complexity,
+            )
         except Exception as e:
             logger.error("Failed to decompose goal: %s", e)
             state["status"] = "failed"

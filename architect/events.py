@@ -39,6 +39,8 @@ class EventType(Enum):
     REPLAN_TRIGGERED = "replan_triggered"
     REPLAN_COMPLETE = "replan_complete"
     STEP_ENRICHED = "step_enriched"
+    RESEARCH_START = "research_start"
+    RESEARCH_COMPLETE = "research_complete"
     RUN_COMPLETE = "run_complete"
 
 

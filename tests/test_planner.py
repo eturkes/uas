@@ -1,7 +1,7 @@
 """Tests for architect.planner: parse_steps_json, prompt content, and critique."""
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 
 import pytest
 
@@ -10,6 +10,9 @@ from architect.planner import (
     critique_and_refine_plan,
     reflect_and_rewrite,
     decompose_failing_step,
+    research_goal,
+    decompose_goal,
+    decompose_goal_with_voting,
     _is_confused_output,
 )
 
@@ -349,3 +352,144 @@ class TestDecomposeFailingStep:
         assert "my task" in prompt
         assert "out_data" in prompt
         assert "err_data" in prompt
+
+
+class TestResearchGoal:
+    @patch("architect.planner.get_llm_client")
+    def test_returns_research_summary(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = (
+            "1. Key findings: Use ISNCSCI standards.\n"
+            "2. Recommended: pandas 2.1.0\n"
+            "3. Pitfalls: Avoid manual scoring.\n"
+        )
+        mock_get_client.return_value = client
+
+        result = research_goal("Build a SCI rehab analytics tool")
+        assert "ISNCSCI" in result
+        assert "pandas" in result
+        client.generate.assert_called_once()
+        prompt = client.generate.call_args[0][0]
+        assert "SCI rehab analytics" in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_returns_empty_on_exception(self, mock_get_client):
+        client = MagicMock()
+        client.generate.side_effect = RuntimeError("API down")
+        mock_get_client.return_value = client
+
+        result = research_goal("some goal")
+        assert result == ""
+
+    @patch("architect.planner.get_llm_client")
+    def test_returns_empty_on_blank_response(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "   "
+        mock_get_client.return_value = client
+
+        result = research_goal("some goal")
+        assert result == ""
+
+    @patch("architect.planner.get_llm_client")
+    def test_prompt_contains_research_instructions(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = "No additional research needed"
+        mock_get_client.return_value = client
+
+        research_goal("Print hello world")
+        prompt = client.generate.call_args[0][0]
+        assert "best practices" in prompt.lower()
+        assert "citations" in prompt.lower()
+
+
+class TestResearchInDecomposition:
+    @patch("architect.planner.get_llm_client")
+    def test_research_context_appears_in_decompose_prompt(self, mock_get_client):
+        """Research context is injected into decompose_goal's prompt."""
+        steps_json = json.dumps([
+            {"title": "step1", "description": "do X", "depends_on": []}
+        ])
+        client = MagicMock()
+        client.generate.return_value = steps_json
+        mock_get_client.return_value = client
+
+        research = "Use ISNCSCI scoring standards v2023."
+        decompose_goal("Build rehab tool", research_context=research)
+        prompt = client.generate.call_args[0][0]
+        assert "<research_findings>" in prompt
+        assert "ISNCSCI scoring standards v2023" in prompt
+        assert "</research_findings>" in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_no_research_context_no_tags(self, mock_get_client):
+        """When research_context is empty, no research_findings tags appear."""
+        steps_json = json.dumps([
+            {"title": "step1", "description": "do X", "depends_on": []}
+        ])
+        client = MagicMock()
+        client.generate.return_value = steps_json
+        mock_get_client.return_value = client
+
+        decompose_goal("Print hello", research_context="")
+        prompt = client.generate.call_args[0][0]
+        assert "<research_findings>" not in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_voting_passes_research_to_all_plans(self, mock_get_client):
+        """decompose_goal_with_voting passes research_context to plan generation."""
+        steps_json = json.dumps([
+            {"title": "s1", "description": "d1", "depends_on": []},
+            {"title": "s2", "description": "d2", "depends_on": [1]},
+        ])
+        client = MagicMock()
+        # Return valid steps for all generate calls (plan generation + selection)
+        client.generate.return_value = steps_json
+        mock_get_client.return_value = client
+
+        research = "Use library X v3.0 for best results."
+        decompose_goal_with_voting(
+            "Complex analytics project",
+            research_context=research,
+            complexity="complex",
+        )
+        # At least one generate call should contain the research context
+        prompts = [c.args[0] for c in client.generate.call_args_list]
+        assert any("library X v3.0" in p for p in prompts)
+        assert any("<research_findings>" in p for p in prompts)
+
+    @patch("architect.planner.get_llm_client")
+    def test_trivial_goal_passes_research_to_single_decompose(self, mock_get_client):
+        """Even trivial goals pass through research_context if provided."""
+        steps_json = json.dumps([
+            {"title": "s1", "description": "d1", "depends_on": []}
+        ])
+        client = MagicMock()
+        client.generate.return_value = steps_json
+        mock_get_client.return_value = client
+
+        research = "Relevant finding here."
+        decompose_goal_with_voting(
+            "Simple task",
+            research_context=research,
+            complexity="trivial",
+        )
+        # The decompose call should include research context
+        prompts = [c.args[0] for c in client.generate.call_args_list]
+        assert any("Relevant finding here" in p for p in prompts)
+
+    @patch("architect.planner.get_llm_client")
+    def test_precomputed_complexity_skips_estimation(self, mock_get_client):
+        """When complexity is pre-computed, estimate_complexity is not called."""
+        steps_json = json.dumps([
+            {"title": "s1", "description": "d1", "depends_on": []}
+        ])
+        client = MagicMock()
+        client.generate.return_value = steps_json
+        mock_get_client.return_value = client
+
+        decompose_goal_with_voting(
+            "A task", complexity="simple",
+        )
+        # Only one generate call (decompose), not two (complexity + decompose)
+        prompts = [c.args[0] for c in client.generate.call_args_list]
+        assert not any("Rate the complexity" in p for p in prompts)

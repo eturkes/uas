@@ -159,7 +159,7 @@ validation warning triggers when files are in a subdirectory.
 
 ---
 
-## Section 7: Leftover script artifacts `[TODO]`
+## Section 7: Leftover script artifacts `[DONE]`
 
 **Problem:** UAS leaves behind script artifacts like `fix_git_structure.py` in the
 workspace. These are the generated Python scripts that the sandbox runs, but sometimes

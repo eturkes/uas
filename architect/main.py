@@ -1550,8 +1550,23 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
     return issues
 
 
-def cleanup_workspace_artifacts(workspace: str) -> None:
-    """Remove __pycache__ directories and .pyc files from workspace."""
+def cleanup_workspace_artifacts(
+    workspace: str,
+    pre_step_files: set[str] | None = None,
+) -> list[str]:
+    """Remove __pycache__ directories, .pyc files, and UAS script artifacts.
+
+    Args:
+        workspace: Path to the workspace directory.
+        pre_step_files: Set of filenames that existed in the workspace root
+            before the current step. When provided, new ``.py`` files whose
+            content contains the ``UAS_RESULT`` marker are treated as
+            leftover script artifacts and removed.
+
+    Returns:
+        List of artifact filenames that were removed.
+    """
+    removed: list[str] = []
     try:
         for root, dirs, files in os.walk(workspace):
             # Remove .pyc files
@@ -1577,6 +1592,33 @@ def cleanup_workspace_artifacts(workspace: str) -> None:
             ]
     except OSError:
         pass
+
+    # Section 7: Remove leftover UAS script artifacts from workspace root.
+    if pre_step_files is not None:
+        try:
+            for fname in os.listdir(workspace):
+                if not fname.endswith(".py"):
+                    continue
+                if fname in pre_step_files:
+                    continue  # existed before this step — leave it alone
+                fpath = os.path.join(workspace, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                except OSError:
+                    continue
+                if "UAS_RESULT" in content:
+                    try:
+                        os.remove(fpath)
+                        removed.append(fname)
+                        logger.info("  Removed UAS script artifact: %s", fname)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return removed
 
 
 import re as _re
@@ -2391,6 +2433,13 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         # so build_prompt() can include explicit pip install instructions.
         if step.get("environment"):
             extra_env["UAS_STEP_ENVIRONMENT"] = json.dumps(step["environment"])
+        # Section 7: Capture pre-step workspace root files for artifact cleanup
+        try:
+            pre_step_files = {
+                f for f in os.listdir(WORKSPACE) if os.path.isfile(os.path.join(WORKSPACE, f))
+            }
+        except OSError:
+            pre_step_files = set()
         # Scan workspace files for orchestrator prompt context (Section 1a)
         ws_files = scan_workspace_files(WORKSPACE)
         if ws_files:
@@ -2462,7 +2511,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     )
 
             # Section 16: Cleanup build artifacts
-            cleanup_workspace_artifacts(WORKSPACE)
+            # Section 7: Pass pre-step file set to remove script artifacts
+            cleanup_workspace_artifacts(WORKSPACE, pre_step_files=pre_step_files)
 
             if failure_reason is None and step.get("verify"):
                 logger.info("  Verifying step output...")

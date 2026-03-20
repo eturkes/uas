@@ -2526,6 +2526,9 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     step_id=step["id"],
                     data={"passed": failure_reason is None},
                 )
+                # Section 7: Cleanup again after verification orchestrator
+                # which may have created new script artifacts.
+                cleanup_workspace_artifacts(WORKSPACE, pre_step_files=pre_step_files)
 
             # Guardrail scan on workspace Python files
             if failure_reason is None:

@@ -270,6 +270,12 @@ aliases. If a data-loading/preprocessing step sits between a producer and consum
 its description must specify the exact mapping (e.g., "rename column SEX to Sex"). \
 Instruct consumer steps to read the actual file headers at runtime rather than \
 hardcoding assumed column names.
+14. Use consistent directory names across ALL steps. When a step creates a subdirectory \
+(e.g., "outputs/"), every subsequent step that reads or writes output files MUST use \
+the exact same directory name — never introduce synonyms like "output/", "results/", \
+or "out/". Specify the directory name explicitly in step descriptions so the code \
+generator uses the same path. Prefer a single well-named directory for each purpose \
+(e.g., "data/" for datasets, "models/" for trained models, "outputs/" for results).
 </rules>
 
 <output_format>
@@ -1653,6 +1659,8 @@ Rules:
 6. Maintain valid depends_on references (1-based step numbers).
 7. Do not re-number completed steps — new/modified steps should start numbering \
 after the last completed step.
+8. Use the EXACT same directory names that completed steps created (e.g., if step 1 \
+used "outputs/", do NOT switch to "output/" or "results/" in later steps).
 
 Respond with ONLY a JSON array of the REMAINING steps (not completed ones). \
 Each element:

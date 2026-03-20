@@ -527,7 +527,24 @@ def scan_workspace(workspace_path: str, max_chars: int = 8000) -> str:
     for d in sorted(dirs):
         if total >= max_chars:
             break
-        line = f"{d}/ (directory)"
+        # List subdirectory contents (one level deep) so later steps
+        # can see existing directory names and reuse them consistently.
+        subdir = os.path.join(workspace_path, d)
+        try:
+            sub_entries = [
+                e for e in os.listdir(subdir)
+                if not e.startswith(".") and e not in _SKIP_DIRS
+            ]
+        except OSError:
+            sub_entries = []
+        if sub_entries:
+            sub_entries.sort()
+            sub_list = ", ".join(sub_entries[:15])
+            if len(sub_entries) > 15:
+                sub_list += f", ... ({len(sub_entries)} total)"
+            line = f"{d}/ (directory: {sub_list})"
+        else:
+            line = f"{d}/ (empty directory)"
         lines.append(line)
         total += len(line) + 1
 
@@ -752,10 +769,7 @@ Files already present in the workspace from prior steps:
 {workspace_files}
 Do not regenerate these files unless the task explicitly requires modifying them.
 Reference them by path using os.path.join(workspace, ...).
-
-IMPORTANT: The workspace IS the project root. Do not create a subdirectory for the
-project. Write files directly to os.path.join(workspace, ...). For example, use
-os.path.join(workspace, "main.py"), NOT os.path.join(workspace, "myproject", "main.py").
+Reuse any existing subdirectory names exactly as shown above.
 </workspace_state>"""
 
     # Section 3: File modification guidance.
@@ -828,6 +842,11 @@ Do NOT use any XML tags, tool_call blocks, or analysis sections.
 - Specify encoding="utf-8" when opening text files.
 - Do NOT run git init or any git commands -- version control is managed by the framework.
 - Pin dependency versions in pip install commands.
+- The workspace IS the project root. Write files directly to os.path.join(workspace, ...).
+  Do NOT create a project subdirectory (e.g., os.path.join(workspace, "myproject", "main.py")).
+- When the workspace already contains subdirectories (e.g., "outputs/", "data/", "models/"),
+  reuse those exact names. NEVER create synonyms like "output/" vs "outputs/" vs "results/".
+  Check the workspace listing and match existing directory names exactly.
 </constraints>
 
 <output_contract>

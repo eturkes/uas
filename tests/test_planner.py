@@ -365,12 +365,12 @@ class TestResearchGoal:
         )
         mock_get_client.return_value = client
 
-        result = research_goal("Build a SCI rehab analytics tool")
+        result = research_goal("Build a clinical analytics tool")
         assert "ISNCSCI" in result
         assert "pandas" in result
         client.generate.assert_called_once()
         prompt = client.generate.call_args[0][0]
-        assert "SCI rehab analytics" in prompt
+        assert "clinical analytics" in prompt
 
     @patch("architect.planner.get_llm_client")
     def test_returns_empty_on_exception(self, mock_get_client):
@@ -414,7 +414,7 @@ class TestResearchInDecomposition:
         mock_get_client.return_value = client
 
         research = "Use ISNCSCI scoring standards v2023."
-        decompose_goal("Build rehab tool", research_context=research)
+        decompose_goal("Build analytics tool", research_context=research)
         prompt = client.generate.call_args[0][0]
         assert "<research_findings>" in prompt
         assert "ISNCSCI scoring standards v2023" in prompt

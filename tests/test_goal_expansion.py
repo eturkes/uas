@@ -113,7 +113,7 @@ class TestExpandGoalSkipsSpecific:
     def test_long_detailed_goal_skips_llm(self, mock_get_client):
         """A detailed multi-paragraph goal should not be sent to the LLM."""
         goal = (
-            "Build a comprehensive SCI rehabilitation analytics dashboard.\n"
+            "Build a comprehensive clinical analytics dashboard.\n"
             "## Phase 1: Data Ingestion\n"
             "1. Parse ISNCSCI motor and sensory scores from CSV\n"
             "2. Validate AIS grade classification\n"

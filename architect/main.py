@@ -1639,10 +1639,10 @@ _GUARDRAIL_CHECKS = [
      "subprocess with shell=True is a security risk", "warning"),
     (_re.compile(r'''http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])'''),
      "plain HTTP URL detected (use HTTPS)", "warning"),
-    (_re.compile(r'\bgit\s+init\b(?!.*-b\s)'),
-     "git init without -b flag (should use git init -b main)", "warning"),
-    (_re.compile(r'''["']git["']\s*,\s*["']init["'](?!.*["']-b["'])'''),
-     "git init without -b flag (should use git init -b main)", "warning"),
+    (_re.compile(r'\bgit\s+init\b'),
+     "git init in generated script (version control is managed by the framework)", "warning"),
+    (_re.compile(r'''["']git["']\s*,\s*["']init["']'''),
+     "git init in generated script (version control is managed by the framework)", "warning"),
 ]
 
 

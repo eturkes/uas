@@ -104,10 +104,10 @@ if __name__ == "__main__":
         violations = check_guardrails(code)
         assert any("git init" in v["description"] for v in violations)
 
-    def test_git_init_with_branch_ok(self):
+    def test_git_init_with_branch_also_detected(self):
         code = 'subprocess.run(["git", "init", "-b", "main"])\n'
         violations = check_guardrails(code)
-        assert not any("git init" in v["description"] for v in violations)
+        assert any("git init" in v["description"] for v in violations)
 
     def test_violations_include_line_numbers(self):
         code = "line1\nline2\ntry:\n    pass\nexcept:\n    pass\n"

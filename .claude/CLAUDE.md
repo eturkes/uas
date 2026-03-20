@@ -33,9 +33,7 @@ Your script will run inside an isolated workspace directory.
   `UAS_RESULT: {"status": "error", "error": "description of what went wrong"}`
 
 ## Version Control
-- If the task involves creating a project, initialize it as a Git repository using `git init -b main` (use "main" as the default branch, NOT "master")
-- Add a `.gitignore` appropriate for the project language before the first commit (for Python: `__pycache__/`, `*.py[cod]`, `*.so`, `.env`, `venv/`, `dist/`, `*.egg-info/`, `.mypy_cache/`, `.pytest_cache/`)
-- Make an initial commit with a descriptive message after setting up the project structure
+- Do NOT run `git init` or any git commands -- version control is managed automatically by the framework
 - Never commit secrets, `.env` files, credentials, or API keys
 
 ## Security

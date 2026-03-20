@@ -257,9 +257,8 @@ autonomy. Install any packages needed (pip, apt-get, etc.) without hesitation.
 7. Each step must produce observable output to stdout so downstream steps \
 can use the results.
 8. Do NOT create steps that require user interaction.
-9. When creating any project, the FIRST step must initialize a Git repository \
-using `git init -b main` (use "main" as the default branch), add an appropriate \
-`.gitignore`, and make an initial commit.
+9. Do NOT include any steps that run `git init` or other git commands — version \
+control is managed automatically by the framework. Focus steps on the actual work.
 10. All projects must include a README.md and requirements.txt with pinned versions.
 11. Never hardcode secrets or API keys in step descriptions — instruct the code \
 to read them from environment variables.
@@ -762,7 +761,7 @@ artifacts via the shared workspace.
 4. Are there missing error handling considerations for external resources (network, files)?
 5. Are the verify fields specific enough to catch subtle failures?
 6. Are environment/package requirements complete?
-7. If the goal involves creating a project, does the plan include initializing a Git repo with `git init -b main`, adding a `.gitignore`, and making an initial commit?
+7. Does the plan correctly avoid git commands (version control is managed by the framework)?
 8. Does the plan ensure a README.md and requirements.txt (with pinned versions) are created for any multi-file project?
 9. Do step descriptions avoid hardcoding secrets and instead instruct reading from environment variables?
 10. Do steps use HTTPS URLs, not plain HTTP?
@@ -856,7 +855,7 @@ that this step consumes, identify which step and what output is wrong.
 3. In <strategies> tags, propose 2-3 alternative strategies to solve the task. \
 Select the best one with justification. Ensure the chosen strategy follows best \
 practices: use HTTPS URLs, pin dependency versions, use context managers for I/O, \
-catch specific exceptions, use git init -b main for repos, and never hardcode secrets.
+catch specific exceptions, and never hardcode secrets. Do NOT include git commands — version control is managed by the framework.
 
 4. After the tags, provide ONLY the improved task description. Be more specific and \
 explicit about what the Python code should do. Do not include any explanation.

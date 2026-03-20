@@ -826,7 +826,7 @@ Do NOT use any XML tags, tool_call blocks, or analysis sections.
 - Catch specific exceptions -- never use bare except:.
 - Use context managers (with statements) for file I/O.
 - Specify encoding="utf-8" when opening text files.
-- If creating a project, use git init -b main (not master).
+- Do NOT run git init or any git commands -- version control is managed by the framework.
 - Pin dependency versions in pip install commands.
 </constraints>
 

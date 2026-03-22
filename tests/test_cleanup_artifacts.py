@@ -87,3 +87,48 @@ class TestCleanupWorkspaceArtifacts:
         assert not (tmp_path / "setup_env.py").exists()
         assert (tmp_path / "main.py").exists()
         assert sorted(removed) == ["fix_git.py", "setup_env.py"]
+
+    def test_preserves_step_output_files(self, tmp_path):
+        """A new .py file with UAS_RESULT that is a claimed step output should be kept."""
+        output_file = tmp_path / "run_pipeline.py"
+        output_file.write_text(
+            'def main():\n    pass\n'
+            'print(\'UAS_RESULT: {"status": "ok", "files_written": [], "summary": "done"}\')\n',
+            encoding="utf-8",
+        )
+        pre_step_files: set[str] = set()
+        step_output_files = {"run_pipeline.py"}
+
+        removed = cleanup_workspace_artifacts(
+            str(tmp_path),
+            pre_step_files=pre_step_files,
+            step_output_files=step_output_files,
+        )
+
+        assert output_file.exists()
+        assert removed == []
+
+    def test_removes_artifact_but_keeps_step_output(self, tmp_path):
+        """Artifacts are removed but claimed step outputs are preserved."""
+        artifact = tmp_path / "fix_stuff.py"
+        artifact.write_text(
+            'print(\'UAS_RESULT: {"status": "ok"}\')\n',
+            encoding="utf-8",
+        )
+        output_file = tmp_path / "run_pipeline.py"
+        output_file.write_text(
+            'print(\'UAS_RESULT: {"status": "ok"}\')\n',
+            encoding="utf-8",
+        )
+        pre_step_files: set[str] = set()
+        step_output_files = {"run_pipeline.py"}
+
+        removed = cleanup_workspace_artifacts(
+            str(tmp_path),
+            pre_step_files=pre_step_files,
+            step_output_files=step_output_files,
+        )
+
+        assert not artifact.exists()
+        assert output_file.exists()
+        assert removed == ["fix_stuff.py"]

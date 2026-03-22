@@ -1911,6 +1911,113 @@ def check_project_guardrails(workspace: str) -> list[str]:
     return warnings
 
 
+def check_cross_module_imports(workspace: str) -> list[dict]:
+    """Validate that cross-module imports between generated Python files resolve.
+
+    Finds all .py files in the workspace, parses ImportFrom nodes, and checks
+    that each imported name actually exists in the target module's top-level
+    namespace.
+
+    Returns a list of dicts with keys: file, line, imports, from_module,
+    severity, description.
+    """
+    skip_dirs = {".state", ".git", "__pycache__", "venv", ".venv",
+                 "node_modules", ".tox", ".eggs"}
+    py_files = []
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for fname in files:
+            if fname.endswith(".py"):
+                py_files.append(os.path.join(root, fname))
+
+    errors = []
+    for fpath in py_files:
+        try:
+            with open(fpath, encoding="utf-8", errors="replace") as f:
+                source = f.read()
+            tree = ast.parse(source, filename=fpath)
+        except Exception:
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module is None:
+                continue
+
+            # Resolve the target module file
+            target_path = _resolve_import_module(
+                workspace, fpath, node.module, node.level or 0
+            )
+            if target_path is None:
+                continue
+
+            # Extract the target module's public API
+            target_api = extract_module_api(target_path)
+            if not target_api:
+                # Module exists but has no extractable API (empty or parse
+                # error) -- skip rather than false-positive.
+                continue
+
+            all_names = set()
+            for names in target_api.values():
+                all_names.update(names)
+
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                if alias.name not in all_names:
+                    rel_file = os.path.relpath(fpath, workspace)
+                    rel_target = os.path.relpath(target_path, workspace)
+                    available = sorted(all_names)
+                    errors.append({
+                        "file": rel_file,
+                        "line": node.lineno,
+                        "imports": alias.name,
+                        "from_module": node.module,
+                        "severity": "error",
+                        "description": (
+                            f"name '{alias.name}' not found in "
+                            f"{rel_target}; available: "
+                            f"{', '.join(available)}"
+                        ),
+                    })
+
+    return errors
+
+
+def _resolve_import_module(
+    workspace: str, importing_file: str, module: str, level: int
+) -> str | None:
+    """Resolve a module name to a .py file path in the workspace.
+
+    Handles both relative imports (level > 0) and absolute imports that
+    correspond to local workspace files/packages.
+
+    Returns the resolved file path, or None if the module is not local.
+    """
+    if level > 0:
+        # Relative import: resolve from the importing file's directory
+        base_dir = os.path.dirname(importing_file)
+        for _ in range(level - 1):
+            base_dir = os.path.dirname(base_dir)
+        parts = module.split(".") if module else []
+    else:
+        # Absolute import: resolve from workspace root
+        base_dir = workspace
+        parts = module.split(".")
+
+    # Try <base>/<parts>.py
+    candidate = os.path.join(base_dir, *parts) + ".py"
+    if os.path.isfile(candidate):
+        return candidate
+
+    # Try <base>/<parts>/__init__.py (package)
+    candidate = os.path.join(base_dir, *parts, "__init__.py")
+    if os.path.isfile(candidate):
+        return candidate
+
+    return None
+
+
 PROJECT_STRUCTURE_PROMPT = """\
 You are reviewing a project workspace to assess whether the right project \
 artifacts are present.
@@ -2224,6 +2331,18 @@ def validate_workspace(state: dict, workspace: str) -> dict:
             lines.append(f"- {w}\n")
         lines.append("\n")
 
+    # Cross-module import validation
+    cross_module_errors = check_cross_module_imports(workspace)
+    if cross_module_errors:
+        lines.append("## Cross-Module Import Errors\n\n")
+        for err in cross_module_errors:
+            lines.append(
+                f"- `{err['file']}` line {err['line']}: "
+                f"`from {err['from_module']} import {err['imports']}` — "
+                f"{err['description']}\n"
+            )
+        lines.append("\n")
+
     llm_validation = None
     if not MINIMAL_MODE:
         llm_validation = validate_workspace_llm(state, workspace)
@@ -2259,6 +2378,7 @@ def validate_workspace(state: dict, workspace: str) -> dict:
         "missing_files": missing_files,
         "workspace_empty": len(ws_entries) == 0,
         "best_practice_warnings": bp_warnings,
+        "cross_module_errors": cross_module_errors,
     }
     if llm_validation:
         validation_data["llm_assessment"] = llm_validation
@@ -2664,6 +2784,30 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     step.setdefault("guardrail_warnings", []).extend(
                         guardrail_warnings
                     )
+
+            # Cross-module import check after per-file guardrails
+            if failure_reason is None:
+                try:
+                    import_errors = check_cross_module_imports(WORKSPACE)
+                    for err in import_errors:
+                        if err["severity"] == "error":
+                            failure_reason = (
+                                f"Cross-module import error in {err['file']} "
+                                f"line {err['line']}: {err['description']}"
+                            )
+                            break
+                        guardrail_warnings.append(
+                            f"{err['file']}:{err['line']}: "
+                            f"{err['description']}"
+                        )
+                    if import_errors and failure_reason is None:
+                        for w in guardrail_warnings:
+                            logger.warning("  Import: %s", w)
+                        step.setdefault("guardrail_warnings", []).extend(
+                            guardrail_warnings
+                        )
+                except Exception as exc:
+                    logger.debug("Cross-module import check failed: %s", exc)
 
             if failure_reason is None:
                 # All validation passed

@@ -75,7 +75,7 @@ names, and guesses wrong.
 
 ---
 
-## [ ] Section 2: Cross-module import resolution guardrail
+## [x] Section 2: Cross-module import resolution guardrail
 
 ### Problem
 The rehab project ships with broken imports (`from src.layout_components import

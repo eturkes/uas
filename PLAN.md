@@ -135,7 +135,7 @@ only checks for presence of `.gitignore`, `README`, and dependency files.
 
 ---
 
-## [ ] Section 3: Application entry-point smoke test in final validation
+## [x] Section 3: Application entry-point smoke test in final validation
 
 ### Problem
 The rehab project's final "smoke test" step (step 13) checked syntax and ran

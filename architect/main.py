@@ -2264,6 +2264,113 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
     return error[:MAX_ERROR_LENGTH or None]
 
 
+# ---------------------------------------------------------------------------
+# Entry-point smoke test
+# ---------------------------------------------------------------------------
+
+_ENTRY_POINT_NAMES = {"app.py", "main.py", "run.py", "server.py", "dashboard.py"}
+_LAUNCHER_SCRIPTS = {"run.sh", "start.sh", "launch.sh"}
+_SKIP_DIRS = {".state", ".git", "__pycache__", "venv", ".venv", "node_modules",
+              ".tox", ".eggs"}
+
+
+def _find_entry_points(workspace: str) -> list[str]:
+    """Identify likely application entry-point files in *workspace*.
+
+    Detection order (first match wins within each category):
+    1. File referenced in a launcher script (``run.sh`` etc.)
+    2. Files with a ``if __name__ == "__main__"`` guard
+    3. Well-known filenames (``app.py``, ``main.py``, …)
+    """
+    candidates: list[str] = []
+
+    # 1. Check launcher scripts for referenced Python files
+    for launcher in _LAUNCHER_SCRIPTS:
+        launcher_path = os.path.join(workspace, launcher)
+        if os.path.isfile(launcher_path):
+            try:
+                with open(launcher_path, encoding="utf-8", errors="replace") as fh:
+                    content = fh.read()
+                for match in re.finditer(r'python[3]?\s+["\']?(\S+\.py)', content):
+                    py_file = match.group(1)
+                    full = os.path.join(workspace, py_file)
+                    if os.path.isfile(full) and py_file not in candidates:
+                        candidates.append(py_file)
+            except OSError:
+                pass
+
+    # 2. Walk workspace looking for __main__ guards and well-known names
+    main_guard_files: list[str] = []
+    well_known_files: list[str] = []
+
+    for dirpath, dirnames, filenames in os.walk(workspace):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for fname in filenames:
+            if not fname.endswith(".py"):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fname), workspace)
+            # Check for __main__ guard
+            full = os.path.join(dirpath, fname)
+            try:
+                with open(full, encoding="utf-8", errors="replace") as fh:
+                    source = fh.read()
+                if re.search(r'''if\s+__name__\s*==\s*['"]__main__['"]''', source):
+                    if rel not in candidates:
+                        main_guard_files.append(rel)
+            except OSError:
+                pass
+            # Check well-known names
+            if fname in _ENTRY_POINT_NAMES and rel not in candidates:
+                well_known_files.append(rel)
+
+    candidates.extend(main_guard_files)
+    for wk in well_known_files:
+        if wk not in candidates:
+            candidates.append(wk)
+
+    return candidates
+
+
+def smoke_test_entry_point(workspace: str, state: dict) -> str | None:
+    """Attempt a dry import of the project's entry point(s).
+
+    Returns ``None`` if all entry points import successfully, or a string
+    describing the first import failure encountered.
+    """
+    entry_points = _find_entry_points(workspace)
+    if not entry_points:
+        logger.debug("smoke_test_entry_point: no entry points found, skipping")
+        return None
+
+    for ep in entry_points:
+        # Convert file path to module name (e.g. "src/app.py" → "src.app")
+        module = ep.replace(os.sep, ".").replace("/", ".")
+        if module.endswith(".py"):
+            module = module[:-3]
+
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable, "-c",
+                    f"import sys; sys.path.insert(0, {workspace!r}); import {module}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                cwd=workspace,
+            )
+        except subprocess.TimeoutExpired:
+            return f"Smoke test timed out importing {ep}"
+        except OSError as exc:
+            return f"Smoke test could not run for {ep}: {exc}"
+
+        if result.returncode != 0:
+            tb = (result.stderr or result.stdout or "unknown error").strip()
+            return f"Failed to import {ep} (module '{module}'):\n{tb}"
+
+    return None
+
+
 def validate_workspace(state: dict, workspace: str) -> dict:
     """Final validation after all steps complete.
 
@@ -2343,6 +2450,43 @@ def validate_workspace(state: dict, workspace: str) -> dict:
             )
         lines.append("\n")
 
+    # Entry-point smoke test — attempt a dry import of the application
+    launch_test_error = smoke_test_entry_point(workspace, state)
+    if launch_test_error:
+        lines.append("## Launch Test\n\n")
+        lines.append(f"Entry-point import failed:\n\n```\n{launch_test_error}\n```\n\n")
+        logger.warning("Smoke test failed: %s", launch_test_error.splitlines()[0])
+
+        # Remediation: if the failure is an ImportError, identify the step
+        # that produced the broken module and flag it for re-execution.
+        if "ImportError" in launch_test_error or "ModuleNotFoundError" in launch_test_error:
+            # Extract the failing module from the traceback
+            failing_module = None
+            for tb_line in reversed(launch_test_error.splitlines()):
+                m = re.search(r'File "([^"]+)"', tb_line)
+                if m:
+                    fpath = m.group(1)
+                    try:
+                        failing_module = os.path.relpath(fpath, workspace)
+                    except ValueError:
+                        failing_module = fpath
+                    break
+
+            if failing_module:
+                for step in state.get("steps", []):
+                    if failing_module in step.get("files_written", []):
+                        lines.append(
+                            f"**Remediation:** Step {step['id']} "
+                            f"(\"{step['title']}\") produced `{failing_module}` "
+                            f"which has a broken import. Consider re-running "
+                            f"this step with the import error as context.\n\n"
+                        )
+                        logger.warning(
+                            "  Broken module '%s' was produced by step %d (%s)",
+                            failing_module, step["id"], step["title"],
+                        )
+                        break
+
     llm_validation = None
     if not MINIMAL_MODE:
         llm_validation = validate_workspace_llm(state, workspace)
@@ -2379,6 +2523,7 @@ def validate_workspace(state: dict, workspace: str) -> dict:
         "workspace_empty": len(ws_entries) == 0,
         "best_practice_warnings": bp_warnings,
         "cross_module_errors": cross_module_errors,
+        "launch_test_error": launch_test_error,
     }
     if llm_validation:
         validation_data["llm_assessment"] = llm_validation

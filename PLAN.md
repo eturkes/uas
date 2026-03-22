@@ -320,7 +320,7 @@ and logged at DEBUG level, making failures invisible.
 
 ---
 
-## [ ] Section 6: Orphaned module detection in project guardrails
+## [x] Section 6: Orphaned module detection in project guardrails
 
 ### Problem
 The rehab project contains `tab_simulator.py` which is generated but never

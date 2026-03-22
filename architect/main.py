@@ -2013,7 +2013,128 @@ def check_project_guardrails(workspace: str) -> list[str]:
             "(requirements.txt or pyproject.toml)"
         )
 
+    # Check for orphaned modules
+    orphaned = detect_orphaned_modules(workspace)
+    for orph in orphaned:
+        warnings.append(
+            f"Module `{orph}` is never imported by any other module "
+            f"in the project (orphaned code)"
+        )
+
     return warnings
+
+
+def detect_orphaned_modules(workspace: str) -> list[str]:
+    """Detect Python modules that are never imported by any other module.
+
+    Finds all ``.py`` files in *workspace* (skipping ``__init__.py``, test
+    files, ``conftest.py``, and entry-point files) and checks whether each
+    is referenced by at least one ``import`` or ``from … import`` statement
+    in another ``.py`` file in the workspace.
+
+    Returns a list of relative paths for orphaned (never-imported) modules.
+    """
+    skip_dirs = {".state", ".git", "__pycache__", "venv", ".venv",
+                 "node_modules", ".tox", ".eggs"}
+
+    # Collect all .py files
+    py_files: list[str] = []  # relative paths
+    for dirpath, dirnames, filenames in os.walk(workspace):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for fname in filenames:
+            if fname.endswith(".py"):
+                rel = os.path.relpath(os.path.join(dirpath, fname), workspace)
+                py_files.append(rel)
+
+    if not py_files:
+        return []
+
+    # Identify entry points (well-known names + __main__ guard)
+    entry_points: set[str] = set()
+    for rel in py_files:
+        basename = os.path.basename(rel)
+        if basename in _ENTRY_POINT_NAMES:
+            entry_points.add(rel)
+            continue
+        full = os.path.join(workspace, rel)
+        try:
+            with open(full, encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
+            if re.search(r'''if\s+__name__\s*==\s*['"]__main__['"]''', source):
+                entry_points.add(rel)
+        except OSError:
+            pass
+
+    # Files to exclude from orphan detection
+    _exclude_basenames = {"__init__.py", "conftest.py", "setup.py"}
+
+    candidates: list[str] = []
+    for rel in py_files:
+        basename = os.path.basename(rel)
+        if basename in _exclude_basenames:
+            continue
+        if basename.startswith("test_") or basename.endswith("_test.py"):
+            continue
+        if rel in entry_points:
+            continue
+        candidates.append(rel)
+
+    if not candidates:
+        return []
+
+    # Build the set of module names that are imported from all .py files
+    imported_modules: set[str] = set()
+    for rel in py_files:
+        full = os.path.join(workspace, rel)
+        try:
+            with open(full, encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
+            tree = ast.parse(source, filename=full)
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported_modules.add(node.module)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_modules.add(alias.name)
+
+    # For each candidate, check if any import could refer to it
+    orphaned: list[str] = []
+    for rel in candidates:
+        # Build possible module names for this file
+        # e.g. "src/utils.py" -> {"src.utils", "utils"}
+        module_names: set[str] = set()
+        no_ext = rel.rsplit(".py", 1)[0]  # strip .py
+        dotted = no_ext.replace(os.sep, ".").replace("/", ".")
+        module_names.add(dotted)
+        # Also add just the basename without extension
+        basename_no_ext = os.path.basename(no_ext)
+        module_names.add(basename_no_ext)
+        # Add all suffix segments: "a.b.c" -> {"a.b.c", "b.c", "c"}
+        parts = dotted.split(".")
+        for i in range(len(parts)):
+            module_names.add(".".join(parts[i:]))
+
+        is_imported = False
+        for mod in imported_modules:
+            # Check if any imported module matches or is a prefix of this file
+            if mod in module_names:
+                is_imported = True
+                break
+            # Also check if this file's dotted path starts with the import
+            # (handles "from src import utils" where src.utils is the file)
+            for mn in module_names:
+                if mn.startswith(mod + ".") or mod.startswith(mn + "."):
+                    is_imported = True
+                    break
+            if is_imported:
+                break
+
+        if not is_imported:
+            orphaned.append(rel)
+
+    return orphaned
 
 
 def check_cross_module_imports(workspace: str) -> list[dict]:
@@ -3058,6 +3179,35 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                         )
                 except Exception as exc:
                     logger.debug("Cross-module import check failed: %s", exc)
+
+            # Orphaned module check after cross-module import check
+            if failure_reason is None:
+                try:
+                    orphaned = detect_orphaned_modules(WORKSPACE)
+                    step_files = set(step.get("files_written", []))
+                    for orph in orphaned:
+                        if orph in step_files:
+                            api = extract_module_api(
+                                os.path.join(WORKSPACE, orph)
+                            )
+                            exports = []
+                            for kind in ("functions", "classes", "constants"):
+                                exports.extend(api.get(kind, []))
+                            export_str = (
+                                ", ".join(exports) if exports else "(none)"
+                            )
+                            msg = (
+                                f"Orphaned module `{orph}` produced by step "
+                                f"{step['id']} (\"{step['title']}\") is not "
+                                f"imported by any other module; "
+                                f"exports: {export_str}"
+                            )
+                            logger.warning("  Orphan: %s", msg)
+                            step.setdefault("guardrail_warnings", []).append(
+                                msg
+                            )
+                except Exception as exc:
+                    logger.debug("Orphaned module check failed: %s", exc)
 
             if failure_reason is None:
                 # All validation passed

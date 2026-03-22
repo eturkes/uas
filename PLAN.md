@@ -193,7 +193,7 @@ specifies, and no step required a full transitive import test.
 
 ---
 
-## [ ] Section 4: CLAUDE.md import consistency guidance
+## [x] Section 4: CLAUDE.md import consistency guidance
 
 ### Problem
 `tab_trajectory.py` contains fragile multi-level fallback imports:

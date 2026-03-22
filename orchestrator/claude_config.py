@@ -29,6 +29,17 @@ Your script will run inside an isolated workspace directory.
 - Always print results and progress to stdout so the caller can track execution
 - Handle errors with informative messages -- include what failed and why
 
+## Import Conventions
+When generating modules that are part of a multi-file project:
+- Use consistent package-relative imports throughout the project
+  (e.g., always `from src.module import name`, never bare `from module import name`)
+- NEVER use try/except ImportError fallback chains to handle different import paths
+  -- this masks real errors. Pick one correct import path and use it.
+- When importing from a sibling module produced by a prior step, use the EXACT
+  names listed in the dependency context. Do not rename, alias, or guess.
+- If the dependency context lists `functions: make_card`, import `make_card`,
+  not `create_card` or any other variation.
+
 ## Output Requirements
 - Print a machine-readable summary as the last line of stdout in this exact format:
   `UAS_RESULT: {"status": "ok", "files_written": ["file1.txt", ...], "summary": "brief description"}`
@@ -73,6 +84,21 @@ When the task involves creating a project or application (not a simple one-off s
 """
 
 
+def _collect_module_apis(prior_steps: list) -> list[tuple[str, dict]]:
+    """Collect module API info from prior steps that produced .py files.
+
+    Returns a list of (filepath, api_dict) tuples where api_dict has keys
+    'functions', 'classes', 'constants'.
+    """
+    result = []
+    for ps in prior_steps:
+        module_apis = ps.get("module_apis", {})
+        for filepath, api in module_apis.items():
+            if api.get("functions") or api.get("classes") or api.get("constants"):
+                result.append((filepath, api))
+    return result
+
+
 def _format_step_context(ctx: dict) -> str:
     """Format step-specific context as a CLAUDE.md section."""
     lines = [
@@ -97,6 +123,22 @@ def _format_step_context(ctx: dict) -> str:
             lines.append(entry)
             if ps.get("files"):
                 lines.append(f"  Files: {', '.join(ps['files'][:5])}")
+
+    # Include module API information for .py files from prior steps
+    module_apis = _collect_module_apis(prior_steps)
+    if module_apis:
+        lines.append("")
+        lines.append("### Available Module APIs")
+        for filepath, api in module_apis:
+            parts = []
+            if api.get("functions"):
+                parts.append(f"functions=[{', '.join(api['functions'])}]")
+            if api.get("classes"):
+                parts.append(f"classes=[{', '.join(api['classes'])}]")
+            if api.get("constants"):
+                parts.append(f"constants=[{', '.join(api['constants'])}]")
+            if parts:
+                lines.append(f"- `{filepath}`: {', '.join(parts)}")
 
     return "\n".join(lines) + "\n"
 

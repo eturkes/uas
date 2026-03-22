@@ -157,6 +157,11 @@ dist/
 # Node
 node_modules/
 
+# Data artifacts
+*.csv
+*.joblib
+*.npz
+
 # UAS internal
 .state/
 .claude/
@@ -171,21 +176,30 @@ def ensure_git_repo(workspace: str) -> None:
     is squash-merged back into ``main`` by :func:`finalize_git` at the
     end of a successful run.
 
-    Silently skips if git is unavailable, init fails, or the workspace
-    has fewer than 2 files.
+    Initializes when the workspace has at least one non-dot entry, or
+    when any subdirectory contains ``.py`` files.  Logs a warning if
+    initialization fails.
     """
     try:
         git_dir = os.path.join(workspace, ".git")
         if os.path.isdir(git_dir):
             return
 
-        # Only init if workspace has >1 file
+        # Init if workspace has any non-dot entry
         entries = [
             e for e in os.listdir(workspace)
             if not e.startswith(".")
         ]
-        if len(entries) <= 1:
-            return
+        if len(entries) < 1:
+            # Check subdirectories for .py files as a fallback
+            has_py = False
+            for root, dirs, files in os.walk(workspace):
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                if any(f.endswith(".py") for f in files):
+                    has_py = True
+                    break
+            if not has_py:
+                return
 
         # Write .gitignore
         gitignore_path = os.path.join(workspace, ".gitignore")
@@ -220,7 +234,7 @@ def ensure_git_repo(workspace: str) -> None:
         )
         logger.debug("Git repo initialized in %s (on uas-wip branch)", workspace)
     except Exception:
-        logger.debug("Git init skipped/failed in %s", workspace, exc_info=True)
+        logger.warning("Git init failed in %s", workspace, exc_info=True)
 
 
 def _ensure_wip_branch(workspace: str) -> bool:
@@ -316,17 +330,69 @@ def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
         )
 
 
+def _ensure_gitignore_data_patterns(workspace: str) -> None:
+    """Ensure ``.gitignore`` covers common data file patterns."""
+    gitignore_path = os.path.join(workspace, ".gitignore")
+    required_patterns = ["*.csv", "*.joblib", "*.npz"]
+
+    existing = ""
+    if os.path.exists(gitignore_path):
+        with open(gitignore_path, "r", encoding="utf-8") as f:
+            existing = f.read()
+
+    missing = [p for p in required_patterns if p not in existing]
+    if not missing:
+        return
+
+    with open(gitignore_path, "a", encoding="utf-8") as f:
+        f.write("\n# Data artifacts\n")
+        for pattern in missing:
+            f.write(f"{pattern}\n")
+
+
+def _commit_all_on_main(workspace: str, msg: str) -> None:
+    """Stage all files and commit on the current branch."""
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=workspace,
+        capture_output=True,
+        check=True,
+    )
+    diff = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=workspace,
+        capture_output=True,
+    )
+    if diff.returncode == 0:
+        return  # Nothing to commit
+    subprocess.run(
+        ["git", "commit", "-m", msg],
+        cwd=workspace,
+        capture_output=True,
+        check=True,
+    )
+    logger.debug("Committed on main: %s", msg)
+
+
 def finalize_git(workspace: str, goal: str) -> None:
     """Squash all ``uas-wip`` checkpoint commits into a single commit on ``main``.
 
     Called at the end of a successful run.  Produces a clean single-commit
-    history on ``main`` with a message derived from *goal*.  If anything
-    fails, the wip branch is left intact for manual recovery.
+    history on ``main`` with a message derived from *goal*.  If the squash
+    merge fails, falls back to a regular commit of all changes on ``main``.
+    When no ``uas-wip`` branch exists, commits any uncommitted changes
+    directly on ``main``.
     """
     try:
         git_dir = os.path.join(workspace, ".git")
         if not os.path.isdir(git_dir):
             return
+
+        # Build a meaningful commit message from the goal
+        summary = goal.strip()
+        if len(summary) > 72:
+            summary = summary[:69] + "..."
+        msg = f"UAS: {summary}"
 
         # Check if uas-wip branch exists
         result = subprocess.run(
@@ -337,7 +403,29 @@ def finalize_git(workspace: str, goal: str) -> None:
             check=True,
         )
         if not result.stdout.strip():
-            return  # No wip branch, nothing to squash
+            # No wip branch -- commit any uncommitted changes on main
+            _ensure_gitignore_data_patterns(workspace)
+            _commit_all_on_main(workspace, msg)
+            return
+
+        # Ensure .gitignore covers data artifacts and commit on current branch
+        _ensure_gitignore_data_patterns(workspace)
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=workspace,
+            capture_output=True,
+        )
+        pre_diff = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=workspace,
+            capture_output=True,
+        )
+        if pre_diff.returncode != 0:
+            subprocess.run(
+                ["git", "commit", "-m", "Update .gitignore for data artifacts"],
+                cwd=workspace,
+                capture_output=True,
+            )
 
         # Switch to main
         subprocess.run(
@@ -354,7 +442,29 @@ def finalize_git(workspace: str, goal: str) -> None:
             capture_output=True,
         )
         if merge_result.returncode != 0:
-            logger.debug("Git squash merge failed, leaving wip branch intact")
+            logger.warning(
+                "Git squash merge failed in %s: %s",
+                workspace,
+                merge_result.stderr.decode("utf-8", errors="replace")
+                if merge_result.stderr else "unknown error",
+            )
+            # Abort the failed merge and fall back to regular commit
+            subprocess.run(
+                ["git", "reset", "--merge"],
+                cwd=workspace,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "checkout", "uas-wip", "--", "."],
+                cwd=workspace,
+                capture_output=True,
+            )
+            _commit_all_on_main(workspace, msg)
+            subprocess.run(
+                ["git", "branch", "-D", "uas-wip"],
+                cwd=workspace,
+                capture_output=True,
+            )
             return
 
         # Check if there are staged changes to commit
@@ -367,11 +477,6 @@ def finalize_git(workspace: str, goal: str) -> None:
             # No changes (wip had no new commits beyond main)
             return
 
-        # Build a meaningful commit message from the goal
-        summary = goal.strip()
-        if len(summary) > 72:
-            summary = summary[:69] + "..."
-        msg = f"UAS: {summary}"
         subprocess.run(
             ["git", "commit", "-m", msg],
             cwd=workspace,
@@ -388,8 +493,8 @@ def finalize_git(workspace: str, goal: str) -> None:
         )
         logger.debug("Git finalized: squashed wip commits into main")
     except Exception:
-        logger.debug(
-            "Git finalize skipped/failed in %s", workspace,
+        logger.warning(
+            "Git finalize failed in %s", workspace,
             exc_info=True,
         )
 

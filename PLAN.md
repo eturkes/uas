@@ -10,7 +10,7 @@ fresh session. Mark a section complete by changing `[ ]` to `[x]`.
 
 ---
 
-## [ ] Section 1: Propagate module public API in dependency context
+## [x] Section 1: Propagate module public API in dependency context
 
 ### Problem
 The rehab project's `tab_cohort.py` imports `create_card` from

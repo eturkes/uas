@@ -5,6 +5,7 @@ generates UAS-compliant specs, and drives the Orchestrator to execute them.
 """
 
 import argparse
+import ast
 import concurrent.futures
 import json
 import logging
@@ -795,6 +796,49 @@ def compress_context(context: str, max_length: int,
     return context[:max_length] + f"\n... [truncated, {len(context)} chars total]"
 
 
+def extract_module_api(filepath: str) -> dict:
+    """Extract public API from a Python module file.
+
+    Parses the file with ast and returns top-level function names,
+    class names, and module-level uppercase constant assignments.
+    Returns empty dict on parse errors.
+    """
+    try:
+        with open(filepath, encoding="utf-8") as f:
+            source = f.read()
+        tree = ast.parse(source, filename=filepath)
+    except Exception:
+        return {}
+
+    functions = []
+    classes = []
+    constants = []
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            if not node.name.startswith("_"):
+                functions.append(node.name)
+        elif isinstance(node, ast.ClassDef):
+            if not node.name.startswith("_"):
+                classes.append(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.isupper():
+                    constants.append(target.id)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id.isupper():
+                constants.append(node.target.id)
+
+    result = {}
+    if functions:
+        result["functions"] = functions
+    if classes:
+        result["classes"] = classes
+    if constants:
+        result["constants"] = constants
+    return result
+
+
 def _distill_dependency_output(dep_id: int, dep_step: dict,
                                output: str | dict) -> str:
     """Distill a dependency's output into structured XML (Section 4d).
@@ -831,6 +875,23 @@ def _distill_dependency_output(dep_id: int, dep_step: dict,
         # Only include raw output as fallback when no structured summary
         relevant_data = output
 
+    # Extract module APIs for .py files
+    module_api_parts = []
+    for fpath in files_written:
+        if fpath.endswith(".py") and os.path.isfile(fpath):
+            api = extract_module_api(fpath)
+            if api:
+                lines = []
+                for kind in ("functions", "classes", "constants"):
+                    if kind in api:
+                        lines.append(f"      {kind}: {', '.join(api[kind])}")
+                if lines:
+                    module_api_parts.append(
+                        f'    <module_api file="{fpath}">\n'
+                        + "\n".join(lines)
+                        + "\n    </module_api>"
+                    )
+
     parts = [f'<dependency step="{dep_id}" title="{title}">']
     if files_str:
         parts.append(f"  <files_produced>{files_str}</files_produced>")
@@ -838,6 +899,8 @@ def _distill_dependency_output(dep_id: int, dep_step: dict,
         parts.append(f"  <key_outputs>{key_outputs}</key_outputs>")
     if relevant_data:
         parts.append(f"  <relevant_data>{relevant_data}</relevant_data>")
+    if module_api_parts:
+        parts.extend(module_api_parts)
     if verify:
         parts.append(f"  <verification>{verify}</verification>")
     parts.append("</dependency>")
@@ -881,6 +944,7 @@ Output:
 {output_preview}
 </completed_step>
 
+{module_apis}
 <consuming_step>
 {consumer_desc}
 </consuming_step>
@@ -890,6 +954,10 @@ Return a concise summary containing ONLY:
 - Data schemas, column names, or key structures if the consuming step processes data
 - API responses, configuration values, or computed results the consuming step depends on
 - Any error or warning information relevant to the consuming step
+
+Module APIs (exact exported names — downstream steps MUST use these):
+Preserve all module API information exactly as provided above. \
+Downstream steps must use these exact names when importing.
 
 Do NOT include generic status information or redundant details. Be as brief as possible."""
 
@@ -921,12 +989,35 @@ def _distill_dependency_output_llm(dep_id: int, dep_step: dict,
         if summary:
             output_preview = f"{summary}\n{output_preview}"
 
+        # Build module API info for .py files
+        api_lines = []
+        for fpath in files_written:
+            if fpath.endswith(".py") and os.path.isfile(fpath):
+                api = extract_module_api(fpath)
+                if api:
+                    parts_api = []
+                    for kind in ("functions", "classes", "constants"):
+                        if kind in api:
+                            parts_api.append(
+                                f"  {kind}: {', '.join(api[kind])}")
+                    if parts_api:
+                        api_lines.append(f"- {fpath}:")
+                        api_lines.extend(parts_api)
+        module_apis = ""
+        if api_lines:
+            module_apis = (
+                "<module_apis>\n"
+                + "\n".join(api_lines)
+                + "\n</module_apis>"
+            )
+
         prompt = TARGETED_DISTILL_PROMPT.format(
             dep_id=dep_id,
             dep_title=title,
             files=", ".join(files_written) if files_written else "(none)",
             output_preview=output_preview or "(no output)",
             consumer_desc=consumer_desc or "(no description)",
+            module_apis=module_apis,
         )
 
         response = client.generate(prompt)

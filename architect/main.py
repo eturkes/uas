@@ -1615,6 +1615,25 @@ def _probe_environment(run_id: str = ""):
     append_scratchpad("\n".join(lines), run_id=run_id)
 
 
+_TRAILING_ANNOTATION_RE = re.compile(r'\s+\([^)]+\)\s*$')
+
+
+def _sanitize_files_written(files: list[str]) -> list[str]:
+    """Strip trailing parenthesized annotations from file paths.
+
+    LLMs sometimes annotate entries like ``"data/file.csv (symlink)"``
+    or ``"output/ (directory)"``.  Strip those annotations so downstream
+    validation and path lookups use the real filesystem path.
+    """
+    cleaned: list[str] = []
+    for f in files:
+        f = _TRAILING_ANNOTATION_RE.sub('', f)
+        f = f.strip()
+        if f:
+            cleaned.append(f)
+    return cleaned
+
+
 def validate_uas_result(step: dict, workspace: str) -> str | None:
     """Validate a parsed UAS_RESULT against reality.
 
@@ -3074,6 +3093,10 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             # Parse structured UAS_RESULT if present
             uas_result = parse_uas_result(result["stderr"])
             if uas_result:
+                if uas_result.get("files_written"):
+                    uas_result["files_written"] = _sanitize_files_written(
+                        uas_result["files_written"]
+                    )
                 step["uas_result"] = uas_result
                 if uas_result.get("files_written"):
                     step["files_written"] = list(set(

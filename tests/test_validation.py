@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from architect.main import validate_uas_result
+from architect.main import validate_uas_result, _sanitize_files_written
 from architect.planner import validate_depends_on
 
 
@@ -146,6 +146,53 @@ class TestSubdirectorySearch:
         result = validate_uas_result(step, str(tmp_path))
         assert result is not None
         assert "does not exist" in result
+
+
+class TestSanitizeFilesWritten:
+    """LLM-annotated file paths are cleaned before validation."""
+
+    def test_strips_symlink_annotation(self):
+        result = _sanitize_files_written(["data/ALL_SCIDATA.csv (symlink)"])
+        assert result == ["data/ALL_SCIDATA.csv"]
+
+    def test_strips_directory_annotation(self):
+        result = _sanitize_files_written(["output/ (directory)"])
+        assert result == ["output/"]
+
+    def test_leaves_clean_paths_unchanged(self):
+        paths = ["src/main.py", "data/file.csv", "README.md"]
+        assert _sanitize_files_written(paths) == paths
+
+    def test_strips_multiple_annotations(self):
+        result = _sanitize_files_written([
+            "a.py (created)",
+            "b.csv (symlink)",
+            "c.txt",
+        ])
+        assert result == ["a.py", "b.csv", "c.txt"]
+
+    def test_preserves_parens_without_leading_space(self):
+        result = _sanitize_files_written(["(not-an-annotation)"])
+        assert result == ["(not-an-annotation)"]
+
+    def test_symlink_file_passes_validation(self, tmp_path):
+        """End-to-end: annotated symlink path passes validate_uas_result."""
+        real_file = tmp_path / "real.csv"
+        real_file.write_text("data")
+        link = tmp_path / "data"
+        link.mkdir()
+        (link / "ALL_SCIDATA.csv").symlink_to(real_file)
+
+        step = {
+            "uas_result": {
+                "status": "ok",
+                "files_written": _sanitize_files_written(
+                    ["data/ALL_SCIDATA.csv (symlink)"]
+                ),
+            }
+        }
+        result = validate_uas_result(step, str(tmp_path))
+        assert result is None
 
 
 class TestMaxErrorLengthConfigurable:

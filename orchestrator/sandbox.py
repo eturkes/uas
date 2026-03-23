@@ -16,7 +16,13 @@ SANDBOX_IMAGE = os.environ.get(
 _sandbox_timeout_str = os.environ.get("UAS_SANDBOX_TIMEOUT")
 SANDBOX_TIMEOUT = int(_sandbox_timeout_str) if _sandbox_timeout_str else None
 SANDBOX_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
-WORKSPACE_PATH = os.environ.get("UAS_WORKSPACE", "/workspace")
+_uas_workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
+_project_name = os.environ.get("UAS_PROJECT_NAME", "")
+WORKSPACE_PATH = (
+    os.path.join(_uas_workspace, _project_name)
+    if _project_name
+    else _uas_workspace
+)
 
 
 def run_in_sandbox(code: str, timeout: int | None = None) -> dict:

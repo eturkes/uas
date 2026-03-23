@@ -107,11 +107,10 @@ class TestValidateDependsOn:
         validate_depends_on(steps)  # Should not raise
 
 
-class TestSubdirectoryWarning:
-    """Section 6: Warn when files are found in a subdirectory instead of workspace root."""
+class TestSubdirectorySearch:
+    """Files in subdirectories are found without warnings (project subdir convention)."""
 
-    def test_warning_when_file_in_subdirectory(self, tmp_path, caplog):
-        # Create file in a subdirectory instead of workspace root
+    def test_file_found_in_subdirectory(self, tmp_path):
         subdir = tmp_path / "myproject"
         subdir.mkdir()
         (subdir / "main.py").write_text("print('hello')")
@@ -122,17 +121,10 @@ class TestSubdirectoryWarning:
                 "files_written": ["main.py"],
             }
         }
-        with caplog.at_level(logging.WARNING):
-            result = validate_uas_result(step, str(tmp_path))
-
-        # File was found so validation passes
+        result = validate_uas_result(step, str(tmp_path))
         assert result is None
-        # But a warning was logged about the subdirectory
-        assert any("subdirectory" in r.message for r in caplog.records)
-        assert any("myproject" in r.message for r in caplog.records)
 
-    def test_no_warning_when_file_at_root(self, tmp_path, caplog):
-        # File is at the workspace root — no warning
+    def test_file_at_root(self, tmp_path):
         (tmp_path / "main.py").write_text("print('hello')")
 
         step = {
@@ -141,13 +133,10 @@ class TestSubdirectoryWarning:
                 "files_written": ["main.py"],
             }
         }
-        with caplog.at_level(logging.WARNING):
-            result = validate_uas_result(step, str(tmp_path))
-
+        result = validate_uas_result(step, str(tmp_path))
         assert result is None
-        assert not any("subdirectory" in r.message for r in caplog.records)
 
-    def test_no_warning_when_file_missing(self, tmp_path, caplog):
+    def test_file_missing(self, tmp_path):
         step = {
             "uas_result": {
                 "status": "ok",
@@ -155,7 +144,6 @@ class TestSubdirectoryWarning:
             }
         }
         result = validate_uas_result(step, str(tmp_path))
-        # Validation fails — file not found
         assert result is not None
         assert "does not exist" in result
 

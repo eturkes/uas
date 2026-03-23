@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -63,6 +64,8 @@ from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
+PROJECT_NAME = os.path.basename(os.path.realpath(WORKSPACE))
+PROJECT_DIR = os.path.join(WORKSPACE, PROJECT_NAME)
 MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
@@ -158,7 +161,6 @@ dist/
 node_modules/
 
 # Data artifacts
-*.csv
 *.joblib
 *.npz
 
@@ -333,7 +335,7 @@ def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
 def _ensure_gitignore_data_patterns(workspace: str) -> None:
     """Ensure ``.gitignore`` covers common data file patterns."""
     gitignore_path = os.path.join(workspace, ".gitignore")
-    required_patterns = ["*.csv", "*.joblib", "*.npz"]
+    required_patterns = ["*.joblib", "*.npz"]
 
     existing = ""
     if os.path.exists(gitignore_path):
@@ -1661,20 +1663,6 @@ def validate_uas_result(step: dict, workspace: str) -> str | None:
         if not found:
             return f"UAS_RESULT claims file '{f}' was written but it does not exist"
 
-        # Section 6: Warn when a file was found in a subdirectory rather
-        # than at the workspace root — the script may have created an
-        # unnecessary project subdirectory (e.g. workspace/project/file
-        # instead of workspace/file).
-        if found_path:
-            rel = os.path.relpath(found_path, workspace)
-            if os.sep in rel:
-                logger.warning(
-                    "File '%s' was found at '%s' inside a subdirectory "
-                    "instead of the workspace root. The script may have "
-                    "created an unnecessary project subdirectory.",
-                    f, rel,
-                )
-
     return None
 
 
@@ -2605,11 +2593,17 @@ def smoke_test_entry_point(workspace: str, state: dict) -> str | None:
     return None
 
 
-def validate_workspace(state: dict, workspace: str) -> dict:
+def validate_workspace(state: dict, workspace: str, *,
+                       state_root: str = "") -> dict:
     """Final validation after all steps complete.
 
     Checks that claimed files exist and workspace isn't empty.
     Writes VALIDATION.md to the workspace summarizing what was produced.
+
+    Args:
+        state: Run state dict.
+        workspace: Path to inspect for project files.
+        state_root: Path where ``.state/`` lives.  Defaults to *workspace*.
     """
     all_files = []
     missing_files = []
@@ -2742,10 +2736,11 @@ def validate_workspace(state: dict, workspace: str) -> dict:
                     lines.append(f"  - {issue}\n")
             lines.append("\n")
 
-    state_dir = os.path.join(workspace, ".state")
+    _val_state_root = state_root or workspace
+    _val_state_dir = os.path.join(_val_state_root, ".state")
     try:
-        os.makedirs(state_dir, exist_ok=True)
-        validation_path = os.path.join(state_dir, "validation.md")
+        os.makedirs(_val_state_dir, exist_ok=True)
+        validation_path = os.path.join(_val_state_dir, "validation.md")
         with open(validation_path, "w") as f:
             f.writelines(lines)
         logger.info("Validation report written to %s", validation_path)
@@ -2934,7 +2929,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
     run_id = state.get("run_id", "")
     _probe_environment(run_id=run_id)
     context = build_context(step, completed_outputs, state=state,
-                            workspace_path=WORKSPACE)
+                            workspace_path=PROJECT_DIR)
     counts = progress_counts or {"completed": 0, "failed": 0}
     step_start = time.monotonic()
     if backtracked_steps is None:
@@ -3026,18 +3021,21 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         # Section 7: Capture pre-step workspace root files for artifact cleanup
         try:
             pre_step_files = {
-                f for f in os.listdir(WORKSPACE) if os.path.isfile(os.path.join(WORKSPACE, f))
+                f for f in os.listdir(PROJECT_DIR)
+                if os.path.isfile(os.path.join(PROJECT_DIR, f))
             }
         except OSError:
             pre_step_files = set()
         # Scan workspace files for orchestrator prompt context (Section 1a)
-        ws_files = scan_workspace_files(WORKSPACE)
+        ws_files = scan_workspace_files(PROJECT_DIR)
         if ws_files:
             ws_listing = "\n".join(
                 f"  {fname} ({info['size']} bytes, {info['type']})"
                 for fname, info in sorted(ws_files.items())
             )
             extra_env["UAS_WORKSPACE_FILES"] = ws_listing
+        # Tell the orchestrator/sandbox to use the project subdirectory.
+        extra_env["UAS_PROJECT_NAME"] = PROJECT_NAME
         output_cb = None
         if dashboard and dashboard.use_rich:
             output_cb = lambda line: dashboard.add_output_line(line)
@@ -3085,11 +3083,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     step["summary"] = uas_result["summary"]
 
             # Post-execution validation
-            failure_reason = validate_uas_result(step, WORKSPACE)
+            failure_reason = validate_uas_result(step, PROJECT_DIR)
 
             # Section 16: Output quality checks
             if failure_reason is None:
-                quality_issues = check_output_quality(step, WORKSPACE)
+                quality_issues = check_output_quality(step, PROJECT_DIR)
                 if quality_issues:
                     for qi in quality_issues:
                         logger.info("  Output quality issue: %s", qi)
@@ -3108,7 +3106,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 os.path.basename(f) for f in step.get("files_written", [])
             }
             cleanup_workspace_artifacts(
-                WORKSPACE,
+                PROJECT_DIR,
                 pre_step_files=pre_step_files,
                 step_output_files=_output_basenames,
             )
@@ -3119,7 +3117,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     dashboard.set_step_activity(step["id"], "Verifying output...")
                 event_log.emit(EventType.VERIFICATION_START,
                                step_id=step["id"])
-                failure_reason = verify_step_output(step, WORKSPACE)
+                failure_reason = verify_step_output(step, PROJECT_DIR)
                 event_log.emit(
                     EventType.VERIFICATION_COMPLETE,
                     step_id=step["id"],
@@ -3128,7 +3126,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 # Section 7: Cleanup again after verification orchestrator
                 # which may have created new script artifacts.
                 cleanup_workspace_artifacts(
-                    WORKSPACE,
+                    PROJECT_DIR,
                     pre_step_files=pre_step_files,
                     step_output_files=_output_basenames,
                 )
@@ -3141,9 +3139,9 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     and os.environ.get("UAS_NO_LLM_GUARDRAILS", "") != "1"
                 )
                 try:
-                    for entry in os.listdir(WORKSPACE):
+                    for entry in os.listdir(PROJECT_DIR):
                         if entry.endswith(".py") and not entry.startswith("."):
-                            fpath = os.path.join(WORKSPACE, entry)
+                            fpath = os.path.join(PROJECT_DIR, entry)
                             if os.path.isfile(fpath):
                                 with open(fpath, "r", errors="replace") as gf:
                                     code_content = gf.read()
@@ -3180,7 +3178,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             # Cross-module import check after per-file guardrails
             if failure_reason is None:
                 try:
-                    import_errors = check_cross_module_imports(WORKSPACE)
+                    import_errors = check_cross_module_imports(PROJECT_DIR)
                     for err in import_errors:
                         if err["severity"] == "error":
                             failure_reason = (
@@ -3204,12 +3202,12 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             # Orphaned module check after cross-module import check
             if failure_reason is None:
                 try:
-                    orphaned = detect_orphaned_modules(WORKSPACE)
+                    orphaned = detect_orphaned_modules(PROJECT_DIR)
                     step_files = set(step.get("files_written", []))
                     for orph in orphaned:
                         if orph in step_files:
                             api = extract_module_api(
-                                os.path.join(WORKSPACE, orph)
+                                os.path.join(PROJECT_DIR, orph)
                             )
                             exports = []
                             for kind in ("functions", "classes", "constants"):
@@ -3539,7 +3537,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                             context = build_context(
                                 step, completed_outputs,
                                 state=state,
-                                workspace_path=WORKSPACE,
+                                workspace_path=PROJECT_DIR,
                             )
                             did_backtrack = True
                             logger.info(
@@ -3722,6 +3720,9 @@ def main():
     event_log = get_event_log(events_path=events_path)
     prov = get_provenance_graph(output_path=provenance_path)
 
+    # Always ensure the project subdirectory exists (including resume).
+    os.makedirs(PROJECT_DIR, exist_ok=True)
+
     if state is not None:
         logger.info("Resuming goal: %s\n", state["goal"])
         _write_latest_run(run_id)
@@ -3731,6 +3732,26 @@ def main():
         if not goal:
             logger.error("No goal provided.")
             sys.exit(1)
+
+        # Copy/persist the goal file at the workspace root so it is
+        # committed to Git and serves as the canonical project brief.
+        _goal_file_src = (
+            getattr(args, "goal_file", None)
+            or os.environ.get("UAS_GOAL_FILE")
+        )
+        if _goal_file_src:
+            _goal_file_src = os.path.expanduser(_goal_file_src)
+            if not os.path.isabs(_goal_file_src):
+                _goal_file_src = os.path.join(WORKSPACE, _goal_file_src)
+            _goal_dest = os.path.join(WORKSPACE, os.path.basename(_goal_file_src))
+            if os.path.realpath(_goal_file_src) != os.path.realpath(_goal_dest):
+                shutil.copy2(_goal_file_src, _goal_dest)
+        else:
+            # Goal was provided via CLI args or stdin — write it to a file.
+            _goal_dest = os.path.join(WORKSPACE, "GOAL.txt")
+            if not os.path.exists(_goal_dest):
+                with open(_goal_dest, "w", encoding="utf-8") as _gf:
+                    _gf.write(goal + "\n")
 
         original_goal = goal
         # Section 18: Skip goal expansion in minimal mode.
@@ -3877,7 +3898,7 @@ def main():
             enriched, enrichments = enrich_step_descriptions(
                 completed_step, dependents,
                 existing_enrichments=state.get("enrichment_context"),
-                workspace=WORKSPACE,
+                workspace=PROJECT_DIR,
             )
             if enriched:
                 ec = state.setdefault("enrichment_context", {})
@@ -4158,7 +4179,7 @@ def main():
     save_state(state)
 
     # Final workspace validation
-    validation = validate_workspace(state, WORKSPACE)
+    validation = validate_workspace(state, PROJECT_DIR, state_root=WORKSPACE)
     if validation["missing_files"]:
         logger.warning(
             "  Some referenced files are missing: %s",

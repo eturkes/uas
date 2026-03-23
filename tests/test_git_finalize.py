@@ -200,7 +200,6 @@ class TestEnsureGitignoreDataPatterns:
         _ensure_gitignore_data_patterns(str(tmp_path))
 
         content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
-        assert "*.csv" in content
         assert "*.joblib" in content
         assert "*.npz" in content
 
@@ -209,13 +208,13 @@ class TestEnsureGitignoreDataPatterns:
 
         assert (tmp_path / ".gitignore").exists()
         content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
-        assert "*.csv" in content
+        assert "*.joblib" in content
 
     def test_no_duplicates_when_present(self, tmp_path):
         (tmp_path / ".gitignore").write_text(
-            "*.csv\n*.joblib\n*.npz\n", encoding="utf-8",
+            "*.joblib\n*.npz\n", encoding="utf-8",
         )
         _ensure_gitignore_data_patterns(str(tmp_path))
 
         content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
-        assert content.count("*.csv") == 1
+        assert content.count("*.joblib") == 1

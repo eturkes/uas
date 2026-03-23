@@ -241,6 +241,9 @@ def _run_local(task: str, extra_env: dict | None = None,
         os.path.join(os.path.dirname(__file__), "..")
     )
     workspace = os.environ.get("UAS_WORKSPACE", os.getcwd())
+    # Use the project subdirectory as cwd when UAS_PROJECT_NAME is set.
+    project_name = (extra_env or {}).get("UAS_PROJECT_NAME", "")
+    cwd = os.path.join(workspace, project_name) if project_name else workspace
     env = os.environ.copy()
     env["PYTHONPATH"] = framework_root
     env["IS_SANDBOX"] = "1"
@@ -251,7 +254,7 @@ def _run_local(task: str, extra_env: dict | None = None,
     if output_callback:
         return _run_streaming(
             [sys.executable, "-m", "orchestrator.main"],
-            env=env, cwd=workspace, callback=output_callback,
+            env=env, cwd=cwd, callback=output_callback,
         )
 
     try:
@@ -260,7 +263,7 @@ def _run_local(task: str, extra_env: dict | None = None,
             capture_output=True,
             text=True,
             timeout=RUN_TIMEOUT,
-            cwd=workspace,
+            cwd=cwd,
             env=env,
             stdin=subprocess.DEVNULL,
         )
@@ -468,6 +471,8 @@ def _run_container(task: str, extra_env: dict | None = None,
         "UAS_MODEL_PLANNER", "UAS_MODEL_CODER",
         # Package requirements and best-of-N for orchestrator
         "UAS_BEST_OF_N", "UAS_STEP_ENVIRONMENT",
+        # Project directory convention
+        "UAS_PROJECT_NAME",
     ]:
         val = os.environ.get(var)
         if val:

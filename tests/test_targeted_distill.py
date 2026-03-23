@@ -24,6 +24,7 @@ class TestTargetedDistillPrompt:
             files="data.csv",
             output_preview="Downloaded 100 rows",
             consumer_desc="Analyze the CSV data",
+            module_apis="",
         )
         assert "Download data" in result
         assert "Analyze the CSV data" in result

@@ -150,7 +150,9 @@ class TestValidateWorkspace:
         # validation.md should be written inside .state/
         assert (tmp_path / ".state" / "validation.md").exists()
 
-    def test_workspace_with_files(self, tmp_path):
+    @patch("architect.main.validate_workspace_llm", return_value=None)
+    @patch("architect.main.check_project_guardrails_llm", return_value=[])
+    def test_workspace_with_files(self, _mock_guardrails, _mock_llm, tmp_path):
         (tmp_path / "output.txt").write_text("hello")
         (tmp_path / "data.json").write_text("{}")
         state = {
@@ -173,7 +175,9 @@ class TestValidateWorkspace:
         result = validate_workspace(state, str(tmp_path))
         assert "/nonexistent/file.txt" in result["missing_files"]
 
-    def test_validation_md_content(self, tmp_path):
+    @patch("architect.main.validate_workspace_llm", return_value=None)
+    @patch("architect.main.check_project_guardrails_llm", return_value=[])
+    def test_validation_md_content(self, _mock_guardrails, _mock_llm, tmp_path):
         (tmp_path / "result.txt").write_text("data")
         state = {
             "goal": "analyze data",

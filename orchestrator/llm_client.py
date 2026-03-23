@@ -194,7 +194,8 @@ class ClaudeCodeClient:
                 error = RuntimeError(
                     f"Claude Code CLI exited with code {returncode}: {stderr_s}"
                 )
-                if _is_transient(combined) and attempt < MAX_RETRIES:
+                is_transient = _is_transient(combined)
+                if is_transient and attempt < MAX_RETRIES:
                     wait = INITIAL_BACKOFF * (2 ** attempt)
                     logger.warning(
                         "Transient error (attempt %d/%d), retrying in %ds: %s",
@@ -207,8 +208,10 @@ class ClaudeCodeClient:
                 # (e.g. truncated due to output token limit), return what
                 # we have so downstream truncation handling can attempt
                 # a continuation rather than wasting the partial output.
-                # Only do this for non-transient failures.
-                if stdout_s:
+                # Only do this for non-transient failures — a rate-limit
+                # or network error message must never be returned as
+                # valid LLM content.
+                if stdout_s and not is_transient:
                     logger.warning(
                         "Claude Code CLI exited with code %d but produced "
                         "output (%d chars); returning partial output for "

@@ -643,6 +643,9 @@ but `UAS_MINIMAL` is the simplest single switch to disable everything.
 | `UAS_MAX_PARALLEL` | Max concurrent orchestrator invocations per level | *(unlimited)* |
 | `UAS_MAX_CONTEXT_LENGTH` | Max chars of inter-step context to propagate | *(unlimited)* |
 | `UAS_MAX_ERROR_LENGTH` | Max chars of error output to include in rewrites | `3000` |
+| `UAS_RATE_LIMIT_WAIT` | Base wait (seconds) for rate-limit backoff at the Architect level | `120` |
+| `UAS_RATE_LIMIT_MAX_WAIT` | Maximum wait (seconds) per rate-limit retry | `600` |
+| `UAS_RATE_LIMIT_RETRIES` | Max rate-limit retries per step before failing | `3` |
 | `UAS_MINIMAL` | Disable all optional enhancements (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_NO_LLM_GUARDRAILS` | Skip LLM-based guardrail review (`1`) | *(off)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |

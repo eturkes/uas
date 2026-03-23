@@ -187,6 +187,19 @@ class TestRateLimitInStdout:
         assert result == "valid response"
         assert mock_stream.call_count == 2
 
+    @patch("orchestrator.llm_client.time.sleep")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_rate_limit_exhausted_raises_not_returns(self, _mock_which, mock_stream, mock_sleep):
+        """When all transient retries are exhausted, raise instead of returning
+        the rate limit message as valid LLM content."""
+        mock_stream.return_value = ("You've hit your limit · resets 6pm (UTC)", "", 1)
+        client = ClaudeCodeClient()
+        with pytest.raises(RuntimeError):
+            client.generate("test")
+        # Should have attempted initial + MAX_RETRIES = 3 calls
+        assert mock_stream.call_count == 3
+
     @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
     def test_non_transient_stdout_still_returned(self, _mock_which, mock_stream):

@@ -70,6 +70,23 @@ MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
 
+# Rate limit detection patterns and backoff configuration.
+_RATE_LIMIT_PATTERNS = [
+    "rate limit", "rate_limit", "hit your limit", "too many requests",
+    "429", "overloaded", "capacity",
+]
+_RATE_LIMIT_RESET_RE = re.compile(r"resets?\s+(\d{1,2})(?::(\d{2}))?\s*(?:am|pm)?\s*\(?utc\)?", re.IGNORECASE)
+RATE_LIMIT_BASE_WAIT = int(os.environ.get("UAS_RATE_LIMIT_WAIT", "120"))
+RATE_LIMIT_MAX_WAIT = int(os.environ.get("UAS_RATE_LIMIT_MAX_WAIT", "600"))
+MAX_RATE_LIMIT_RETRIES = int(os.environ.get("UAS_RATE_LIMIT_RETRIES", "3"))
+
+
+def _is_rate_limited(error_text: str) -> bool:
+    """Return True if the error text indicates an API rate limit."""
+    lower = error_text.lower()
+    return any(pat in lower for pat in _RATE_LIMIT_PATTERNS)
+
+
 # Section 8: Regex to extract package versions from pip install output.
 # Matches lines like "Successfully installed requests-2.31.0 pandas-2.1.4"
 _PIP_INSTALLED_RE = re.compile(
@@ -3103,6 +3120,45 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 f"Step {step['id']} orchestrator {status} "
                 f"(exit {result['exit_code']}, {orch_elapsed:.1f}s)"
             )
+
+        # Rate-limit detection: if the orchestrator failed due to rate
+        # limiting, wait and retry without burning a spec rewrite attempt.
+        # Uses an inner retry loop so rate-limit waits don't consume the
+        # outer spec_attempt budget.
+        rate_limit_retries = 0
+        while result["exit_code"] != 0 and rate_limit_retries < MAX_RATE_LIMIT_RETRIES:
+            combined_output = (
+                (result.get("stderr") or "") + " " + (result.get("stdout") or "")
+            )
+            if not _is_rate_limited(combined_output):
+                break
+            rate_limit_retries += 1
+            wait = min(
+                RATE_LIMIT_BASE_WAIT * (2 ** (rate_limit_retries - 1)),
+                RATE_LIMIT_MAX_WAIT,
+            )
+            logger.warning(
+                "  Rate limit detected for step %s. "
+                "Waiting %ds before retry %d/%d...",
+                step["id"], wait, rate_limit_retries, MAX_RATE_LIMIT_RETRIES,
+            )
+            if dashboard:
+                dashboard.set_step_activity(
+                    step["id"],
+                    f"Rate limited — waiting {wait}s...",
+                )
+            step["status"] = "pending"
+            _save_state_threadsafe(state)
+            time.sleep(wait)
+            # Re-run the orchestrator with the same spec
+            logger.info("  Retrying orchestrator after rate limit wait...")
+            if dashboard:
+                dashboard.set_step_activity(step["id"], "Running orchestrator...")
+            step["status"] = "executing"
+            _save_state_threadsafe(state)
+            result = run_orchestrator(task, extra_env=extra_env,
+                                      output_callback=output_cb,
+                                      step_context=step_context)
 
         if result["exit_code"] == 0:
             step["output"] = extract_sandbox_stdout(result["stderr"])

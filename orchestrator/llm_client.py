@@ -23,6 +23,14 @@ TRANSIENT_PATTERNS = [
     "connection reset",
     "network is unreachable",
     "temporary failure",
+    "rate limit",
+    "rate_limit",
+    "hit your limit",
+    "too many requests",
+    "429",
+    "overloaded",
+    "503",
+    "capacity",
 ]
 
 
@@ -177,22 +185,16 @@ class ClaudeCodeClient:
 
             if returncode != 0:
                 stderr_s = stderr.strip()
-                # If the CLI produced substantial output before failing
-                # (e.g. truncated due to output token limit), return what
-                # we have so downstream truncation handling can attempt
-                # a continuation rather than wasting the partial output.
-                if stdout.strip():
-                    logger.warning(
-                        "Claude Code CLI exited with code %d but produced "
-                        "output (%d chars); returning partial output for "
-                        "truncation recovery.",
-                        returncode, len(stdout),
-                    )
-                    return stdout.strip()
+                stdout_s = stdout.strip()
+                # Check both stdout and stderr for transient errors
+                # (rate limits, network issues, etc.) BEFORE attempting
+                # to salvage partial output — a rate-limit message in
+                # stdout must not be returned as valid LLM content.
+                combined = f"{stderr_s} {stdout_s}"
                 error = RuntimeError(
                     f"Claude Code CLI exited with code {returncode}: {stderr_s}"
                 )
-                if _is_transient(stderr_s) and attempt < MAX_RETRIES:
+                if _is_transient(combined) and attempt < MAX_RETRIES:
                     wait = INITIAL_BACKOFF * (2 ** attempt)
                     logger.warning(
                         "Transient error (attempt %d/%d), retrying in %ds: %s",
@@ -201,6 +203,19 @@ class ClaudeCodeClient:
                     time.sleep(wait)
                     last_error = error
                     continue
+                # If the CLI produced substantial output before failing
+                # (e.g. truncated due to output token limit), return what
+                # we have so downstream truncation handling can attempt
+                # a continuation rather than wasting the partial output.
+                # Only do this for non-transient failures.
+                if stdout_s:
+                    logger.warning(
+                        "Claude Code CLI exited with code %d but produced "
+                        "output (%d chars); returning partial output for "
+                        "truncation recovery.",
+                        returncode, len(stdout_s),
+                    )
+                    return stdout_s
                 raise error
 
             return stdout.strip()

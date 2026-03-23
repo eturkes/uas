@@ -145,3 +145,54 @@ class TestIsTransient:
 
     def test_empty_string_not_transient(self):
         assert _is_transient("") is False
+
+    def test_rate_limit_is_transient(self):
+        assert _is_transient("You've hit your limit · resets 1pm (UTC)") is True
+
+    def test_too_many_requests_is_transient(self):
+        assert _is_transient("Too many requests, please slow down") is True
+
+    def test_overloaded_is_transient(self):
+        assert _is_transient("API is overloaded") is True
+
+
+class TestRateLimitInStdout:
+    """Regression tests: rate limit text in stdout must not be returned as
+    valid LLM content — it should be retried as a transient error."""
+
+    @patch("orchestrator.llm_client.time.sleep")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_rate_limit_in_stdout_retried(self, _mock_which, mock_stream, mock_sleep):
+        mock_stream.side_effect = [
+            ("You've hit your limit · resets 1pm (UTC)", "", 1),
+            ("valid response", "", 0),
+        ]
+        client = ClaudeCodeClient()
+        result = client.generate("test")
+        assert result == "valid response"
+        assert mock_stream.call_count == 2
+
+    @patch("orchestrator.llm_client.time.sleep")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_rate_limit_in_stderr_with_stdout_retried(self, _mock_which, mock_stream, mock_sleep):
+        """Even if stdout has content, a rate-limit in stderr should trigger retry."""
+        mock_stream.side_effect = [
+            ("partial output", "rate limit exceeded", 1),
+            ("valid response", "", 0),
+        ]
+        client = ClaudeCodeClient()
+        result = client.generate("test")
+        assert result == "valid response"
+        assert mock_stream.call_count == 2
+
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_non_transient_stdout_still_returned(self, _mock_which, mock_stream):
+        """Non-transient failures with stdout should still return partial output
+        for truncation recovery."""
+        mock_stream.return_value = ("partial valid code output", "some non-transient error", 1)
+        client = ClaudeCodeClient()
+        result = client.generate("test")
+        assert result == "partial valid code output"

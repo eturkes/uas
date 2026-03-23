@@ -15,6 +15,7 @@ from architect.main import should_replan_heuristic, should_replan_llm
 from architect.planner import (
     replan_remaining_steps,
     enrich_step_descriptions,
+    topological_sort,
 )
 from architect.state import add_steps, init_state
 
@@ -545,6 +546,149 @@ class TestReplanRemainingSteps:
         )
         assert result is None
 
+
+
+# ---------------------------------------------------------------------------
+# Regression: re-plan backward-level bug
+# ---------------------------------------------------------------------------
+
+class TestReplanBackwardLevel:
+    """Verify that re-planned steps whose deps are already completed
+    cause level_idx to jump back so they actually get executed."""
+
+    @patch("architect.planner.get_llm_client")
+    def test_replan_step_placed_before_current_level(self, mock_get_client):
+        """A re-planned step depending only on completed steps must land
+        at an earlier level than the current one, and the loop logic must
+        reset level_idx to that earlier level."""
+        client = MagicMock()
+        # Re-plan returns a new step that depends only on step 1 (completed)
+        # and a second step that depends on the new step
+        client.generate.return_value = json.dumps([
+            {"title": "New analysis", "description": "Analyze data.csv",
+             "depends_on": [1], "verify": "", "environment": []},
+            {"title": "Generate report", "description": "Build report",
+             "depends_on": [3], "verify": "", "environment": []},
+        ])
+        mock_get_client.return_value = client
+
+        # Steps 1 and 2 completed; step 3 is pending (current execution level)
+        state = {
+            "goal": "Analyze data",
+            "steps": [
+                {"id": 1, "title": "Download", "status": "completed",
+                 "files_written": ["data.csv"], "summary": "Got data",
+                 "depends_on": []},
+                {"id": 2, "title": "Transform", "status": "completed",
+                 "files_written": ["clean.csv"], "summary": "Cleaned",
+                 "depends_on": [1]},
+                {"id": 3, "title": "Model", "status": "pending",
+                 "description": "Build model from results.csv",
+                 "depends_on": [2], "verify": "", "environment": []},
+            ],
+        }
+        # Original levels: [[1], [2], [3]] — we're at level_idx=2
+        original_levels = topological_sort(state["steps"])
+        assert len(original_levels) == 3
+        current_level_idx = 2  # executing step 3's level
+
+        # Trigger re-plan
+        result = replan_remaining_steps(
+            "Analyze data", state, state["steps"][1],
+            "Step 3 expects results.csv but got clean.csv",
+        )
+        assert result is not None
+        assert len(result) == 2
+
+        # Simulate what _post_step_replan_and_enrich does: merge steps
+        completed_steps = [s for s in state["steps"]
+                          if s["status"] == "completed"]
+        completed_ids_set = {s["id"] for s in completed_steps}
+        max_completed_id = max(completed_ids_set)
+
+        for i, new_step in enumerate(result):
+            new_step["id"] = max_completed_id + i + 1
+            new_step.setdefault("status", "pending")
+
+        # Remap inter-new-step deps
+        dep_remap = {}
+        for i, new_step in enumerate(result):
+            dep_remap.setdefault(i + 1, max_completed_id + i + 1)
+            dep_remap.setdefault(max_completed_id + i + 1,
+                                 max_completed_id + i + 1)
+
+        for new_step in result:
+            new_step["depends_on"] = [
+                d if d in completed_ids_set
+                else dep_remap.get(d, d)
+                for d in new_step.get("depends_on", [])
+            ]
+
+        merged = completed_steps + result
+        levels = topological_sort(merged)
+
+        # Find earliest pending level
+        for i, lvl in enumerate(levels):
+            if any(sid not in completed_ids_set for sid in lvl):
+                earliest_pending_level = i
+                break
+        else:
+            earliest_pending_level = len(levels)
+
+        # Key assertion: the new step lands BEFORE the old current level
+        assert earliest_pending_level < current_level_idx, (
+            f"Earliest pending level {earliest_pending_level} should be < "
+            f"current level {current_level_idx}"
+        )
+
+        # The new step with deps=[1] should be in an early level
+        new_step_3 = next(s for s in result if s["depends_on"] == [1])
+        found_in_level = None
+        for i, lvl in enumerate(levels):
+            if new_step_3["id"] in lvl:
+                found_in_level = i
+                break
+        assert found_in_level is not None
+        assert found_in_level < current_level_idx
+
+    def test_earliest_pending_level_skips_completed(self):
+        """When all steps in early levels are completed, earliest_pending_level
+        should point to the first level with a non-completed step."""
+        steps = [
+            {"id": 1, "status": "completed", "depends_on": []},
+            {"id": 2, "status": "completed", "depends_on": [1]},
+            {"id": 3, "status": "pending", "depends_on": [1]},
+            {"id": 4, "status": "pending", "depends_on": [2, 3]},
+        ]
+        levels = topological_sort(steps)
+        completed_ids = {s["id"] for s in steps if s["status"] == "completed"}
+
+        earliest = len(levels)
+        for i, lvl in enumerate(levels):
+            if any(sid not in completed_ids for sid in lvl):
+                earliest = i
+                break
+
+        # Step 3 depends on 1, step 2 depends on 1 — both in level 1
+        # Step 3 is pending, so earliest should be level 1
+        assert earliest == 1
+
+    def test_all_completed_returns_past_end(self):
+        """If every step is completed, earliest_pending_level == len(levels)."""
+        steps = [
+            {"id": 1, "status": "completed", "depends_on": []},
+            {"id": 2, "status": "completed", "depends_on": [1]},
+        ]
+        levels = topological_sort(steps)
+        completed_ids = {s["id"] for s in steps if s["status"] == "completed"}
+
+        earliest = len(levels)
+        for i, lvl in enumerate(levels):
+            if any(sid not in completed_ids for sid in lvl):
+                earliest = i
+                break
+
+        assert earliest == len(levels)
 
 
 # ---------------------------------------------------------------------------

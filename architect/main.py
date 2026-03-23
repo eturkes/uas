@@ -3902,7 +3902,8 @@ def main():
 
         Called after each successful step completion. Enriches dependent step
         descriptions (6c) and checks if re-planning is needed (6a/6b).
-        Returns True if re-planning was performed and levels need re-sorting.
+        Returns the earliest pending level index if re-planning was performed,
+        or False if no re-planning occurred.
         """
         nonlocal levels, step_by_id
 
@@ -4045,7 +4046,19 @@ def main():
             levels = topological_sort(state["steps"])
             return False
 
-        replanned_levels.add(level_idx)
+        # Find earliest level with a pending step so the loop can
+        # jump back and execute steps placed before the current level.
+        completed_ids = {s["id"] for s in state["steps"]
+                         if s["status"] == "completed"}
+        earliest_pending_level = len(levels)
+        for i, lvl in enumerate(levels):
+            if any(sid not in completed_ids for sid in lvl):
+                earliest_pending_level = i
+                break
+
+        # Level indices changed after re-sort — clear stale tracking.
+        replanned_levels.clear()
+        replanned_levels.add(earliest_pending_level)
         _save_state_threadsafe(state)
 
         logger.info(
@@ -4061,7 +4074,7 @@ def main():
                 f"Re-plan complete: {len(new_remaining)} steps remaining"
             )
             dashboard.update(state)
-        return True
+        return earliest_pending_level
 
     level_idx = 0
     while level_idx < len(levels):
@@ -4119,9 +4132,10 @@ def main():
 
             # Section 6: Post-step re-planning and enrichment
             did_replan = _post_step_replan_and_enrich(step, level_idx)
-            if did_replan:
-                # Levels were re-sorted; restart from current position
+            if did_replan is not False:
+                # Levels were re-sorted; jump to earliest pending level
                 # (completed steps will be skipped automatically)
+                level_idx = did_replan
                 continue
         else:
             # Multiple independent steps — run in parallel
@@ -4189,10 +4203,11 @@ def main():
             did_replan = False
             for cstep in completed_in_level:
                 did_replan = _post_step_replan_and_enrich(cstep, level_idx)
-                if did_replan:
+                if did_replan is not False:
                     break  # Re-plan once per level
-            if did_replan:
-                continue  # Re-sorted levels; restart iteration
+            if did_replan is not False:
+                level_idx = did_replan
+                continue  # Re-sorted levels; jump to earliest pending
 
         level_idx += 1
 

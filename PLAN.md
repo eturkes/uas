@@ -7,7 +7,7 @@ Each section is a self-contained task for a coding agent to execute independentl
 
 ## Section 1: Fix re-plan backward-level bug
 
-**Status: TODO**
+**Status: DONE**
 
 **Problem:** When `_post_step_replan_and_enrich` triggers a re-plan, newly added steps
 whose dependencies are all already completed get placed in earlier topological levels

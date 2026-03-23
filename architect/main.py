@@ -335,7 +335,12 @@ def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
 def _ensure_gitignore_data_patterns(workspace: str) -> None:
     """Ensure ``.gitignore`` covers common data file patterns."""
     gitignore_path = os.path.join(workspace, ".gitignore")
-    required_patterns = ["*.joblib", "*.npz"]
+    required_patterns = [
+        "*.csv", "*.pkl", "*.parquet", "*.joblib", "*.npz",
+        "*.h5", "*.hdf5", "*.feather", "*.arrow",
+        "*.sqlite", "*.db",
+        "models/",
+    ]
 
     existing = ""
     if os.path.exists(gitignore_path):
@@ -494,6 +499,19 @@ def finalize_git(workspace: str, goal: str) -> None:
             check=True,
         )
         logger.debug("Git finalized: squashed wip commits into main")
+
+        # Verify repository is clean
+        porcelain = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+        )
+        if porcelain.stdout.strip():
+            logger.warning(
+                "Git repo still dirty after finalize:\n%s",
+                porcelain.stdout[:500],
+            )
     except Exception:
         logger.warning(
             "Git finalize failed in %s", workspace,

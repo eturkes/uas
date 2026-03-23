@@ -120,7 +120,10 @@ class TestFinalizeGitNoWipWithChanges:
         """No wip branch, no uncommitted changes, gitignore present -> no new commit."""
         (tmp_path / "file1.txt").write_text("hello", encoding="utf-8")
         (tmp_path / ".gitignore").write_text(
-            "*.csv\n*.joblib\n*.npz\n", encoding="utf-8",
+            "*.csv\n*.pkl\n*.parquet\n*.joblib\n*.npz\n"
+            "*.h5\n*.hdf5\n*.feather\n*.arrow\n"
+            "*.sqlite\n*.db\nmodels/\n",
+            encoding="utf-8",
         )
         subprocess.run(
             ["git", "init", "-b", "main"],
@@ -195,26 +198,77 @@ class TestFinalizeGitSquashFallback:
 class TestEnsureGitignoreDataPatterns:
     """_ensure_gitignore_data_patterns adds missing data artifact patterns."""
 
+    EXPECTED_PATTERNS = [
+        "*.csv", "*.pkl", "*.parquet", "*.joblib", "*.npz",
+        "*.h5", "*.hdf5", "*.feather", "*.arrow",
+        "*.sqlite", "*.db",
+        "models/",
+    ]
+
     def test_adds_patterns_to_existing(self, tmp_path):
         (tmp_path / ".gitignore").write_text("# empty\n", encoding="utf-8")
         _ensure_gitignore_data_patterns(str(tmp_path))
 
         content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
-        assert "*.joblib" in content
-        assert "*.npz" in content
+        for pattern in self.EXPECTED_PATTERNS:
+            assert pattern in content, f"Missing pattern: {pattern}"
 
     def test_creates_gitignore_if_missing(self, tmp_path):
         _ensure_gitignore_data_patterns(str(tmp_path))
 
         assert (tmp_path / ".gitignore").exists()
         content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
-        assert "*.joblib" in content
+        for pattern in self.EXPECTED_PATTERNS:
+            assert pattern in content, f"Missing pattern: {pattern}"
 
     def test_no_duplicates_when_present(self, tmp_path):
         (tmp_path / ".gitignore").write_text(
-            "*.joblib\n*.npz\n", encoding="utf-8",
+            "*.joblib\n*.npz\n*.csv\n", encoding="utf-8",
         )
         _ensure_gitignore_data_patterns(str(tmp_path))
 
         content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
         assert content.count("*.joblib") == 1
+        assert content.count("*.csv") == 1
+
+
+class TestFinalizeGitCleanRepo:
+    """finalize_git leaves a clean repo when data files are covered by gitignore."""
+
+    def test_data_files_not_untracked_after_finalize(self, tmp_path):
+        """Data files matching gitignore patterns are not left untracked."""
+        # Set up a git repo with an initial commit
+        (tmp_path / "app.py").write_text("print('hi')", encoding="utf-8")
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=str(tmp_path), capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=str(tmp_path), capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Init"],
+            cwd=str(tmp_path), capture_output=True, check=True,
+        )
+
+        # Create data files that should be ignored
+        (tmp_path / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+        (tmp_path / "model.pkl").write_bytes(b"\x80\x04\x95")
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        (models_dir / "best.h5").write_bytes(b"\x00")
+
+        finalize_git(str(tmp_path), "Test clean repo")
+
+        # Repo should be clean — all data files covered by gitignore
+        porcelain = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert porcelain.stdout.strip() == "", (
+            f"Repo not clean after finalize:\n{porcelain.stdout}"
+        )

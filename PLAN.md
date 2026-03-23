@@ -110,7 +110,7 @@ is discovered, then run it.
 
 ## Section 3: Expand gitignore data patterns and verify clean repo
 
-**Status: TODO**
+**Status: DONE**
 
 **Problem:** `_ensure_gitignore_data_patterns` only covers `*.joblib` and `*.npz`.
 Common data artifacts like `*.csv`, `*.pkl`, `*.parquet`, and `models/` are not

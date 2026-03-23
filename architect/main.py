@@ -3105,8 +3105,8 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         if result["exit_code"] == 0:
             step["output"] = extract_sandbox_stdout(result["stderr"])
             step["stderr_output"] = extract_sandbox_stderr(result["stderr"])
-            step["files_written"] = extract_workspace_files(
-                result["stderr"]
+            step["files_written"] = _sanitize_files_written(
+                extract_workspace_files(result["stderr"])
             )
             # Parse structured UAS_RESULT if present
             uas_result = parse_uas_result(result["stderr"])

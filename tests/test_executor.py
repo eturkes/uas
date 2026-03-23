@@ -15,6 +15,7 @@ from architect.executor import (
     find_engine,
     RUN_TIMEOUT,
 )
+from architect.main import _sanitize_files_written
 
 
 class TestRunOrchestratorLocal:
@@ -248,6 +249,30 @@ class TestExtractWorkspaceFiles:
         files = extract_workspace_files(log)
         assert "/workspace/analysis.json" in files
         assert "/workspace/summary.txt" in files
+
+
+class TestSanitizeExtractedFiles:
+    def test_annotated_paths_stripped(self):
+        log = (
+            "stdout:\n"
+            "Saved /workspace/data/file.csv (symlink)\n"
+            "Created /workspace/output/ (directory)\n"
+            "Wrote /workspace/model.pkl (overwritten)\n"
+        )
+        raw = extract_workspace_files(log)
+        sanitized = _sanitize_files_written(raw)
+        assert "/workspace/data/file.csv" in sanitized
+        assert "/workspace/output/" in sanitized
+        assert "/workspace/model.pkl" in sanitized
+        for path in sanitized:
+            assert "(" not in path
+            assert ")" not in path
+
+    def test_unannotated_paths_unchanged(self):
+        log = "Written to /workspace/clean.txt\n"
+        raw = extract_workspace_files(log)
+        sanitized = _sanitize_files_written(raw)
+        assert sanitized == ["/workspace/clean.txt"]
 
 
 class TestParseUasResult:

@@ -167,7 +167,7 @@ gitignore.
 
 ## Section 4: Sanitize files from `extract_workspace_files`
 
-**Status: TODO**
+**Status: DONE**
 
 **Problem:** `_sanitize_files_written` (strips trailing parenthesized annotations like
 `(symlink)`) is only applied to files from the UAS_RESULT JSON. Files extracted via

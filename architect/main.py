@@ -2511,7 +2511,9 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
         f"- Be thorough but concise\n"
     )
 
-    result = run_orchestrator(task)
+    result = run_orchestrator(
+        task, extra_env={"UAS_PROJECT_NAME": PROJECT_NAME}
+    )
 
     stdout = extract_sandbox_stdout(result.get("stderr", ""))
     all_output = (stdout or "") + (result.get("stdout", "") or "")
@@ -3771,6 +3773,24 @@ def main():
 
     # Always ensure the project subdirectory exists (including resume).
     os.makedirs(PROJECT_DIR, exist_ok=True)
+
+    # Symlink user data files from WORKSPACE root into PROJECT_DIR so that
+    # generated scripts (which run with WORKSPACE=PROJECT_DIR) can find them.
+    _FRAMEWORK_ENTRIES = {
+        ".state", ".claude", ".git", ".gitignore", ".uas_auth",
+        PROJECT_NAME,  # the project subdir itself
+    }
+    try:
+        for entry in os.listdir(WORKSPACE):
+            if entry.startswith(".") or entry in _FRAMEWORK_ENTRIES:
+                continue
+            src = os.path.join(WORKSPACE, entry)
+            dst = os.path.join(PROJECT_DIR, entry)
+            if not os.path.exists(dst):
+                os.symlink(src, dst)
+    except OSError as exc:
+        logger.debug("Could not symlink workspace files into project dir: %s",
+                     exc)
 
     if state is not None:
         logger.info("Resuming goal: %s\n", state["goal"])

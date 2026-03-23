@@ -103,6 +103,19 @@ class TestVerifyStepOutput:
         assert "verification" in task_arg.lower() or "verify" in task_arg.lower()
 
     @patch("architect.main.run_orchestrator")
+    def test_verification_passes_project_name(self, mock_orch):
+        """Verify that UAS_PROJECT_NAME is forwarded to the orchestrator."""
+        mock_orch.return_value = {
+            "exit_code": 0,
+            "stdout": "",
+            "stderr": "stdout:\nVERIFICATION PASSED\nExit code: 0",
+        }
+        step = {"id": 1, "verify": "check something"}
+        verify_step_output(step, "/workspace")
+        extra_env = mock_orch.call_args[1].get("extra_env") or {}
+        assert "UAS_PROJECT_NAME" in extra_env
+
+    @patch("architect.main.run_orchestrator")
     def test_verification_fails(self, mock_orch):
         mock_orch.return_value = {
             "exit_code": 1,

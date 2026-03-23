@@ -262,7 +262,7 @@ inconsistent patterns.
 
 ---
 
-## [ ] Section 5: Harden git finalization
+## [x] Section 5: Harden git finalization
 
 ### Problem
 The rehab project's git repo has no commits despite `ensure_git_repo()` and

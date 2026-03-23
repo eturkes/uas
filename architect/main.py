@@ -1749,6 +1749,7 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
 def cleanup_workspace_artifacts(
     workspace: str,
     pre_step_files: set[str] | None = None,
+    step_output_files: set[str] | None = None,
 ) -> list[str]:
     """Remove __pycache__ directories, .pyc files, and UAS script artifacts.
 
@@ -1758,11 +1759,16 @@ def cleanup_workspace_artifacts(
             before the current step. When provided, new ``.py`` files whose
             content contains the ``UAS_RESULT`` marker are treated as
             leftover script artifacts and removed.
+        step_output_files: Set of filenames that the current step claims to
+            have written (from UAS_RESULT ``files_written``). These are
+            protected from artifact cleanup even if they are new ``.py``
+            files containing ``UAS_RESULT``.
 
     Returns:
         List of artifact filenames that were removed.
     """
     removed: list[str] = []
+    protected = step_output_files or set()
     try:
         for root, dirs, files in os.walk(workspace):
             # Remove .pyc files
@@ -1797,6 +1803,8 @@ def cleanup_workspace_artifacts(
                     continue
                 if fname in pre_step_files:
                     continue  # existed before this step — leave it alone
+                if fname in protected:
+                    continue  # claimed step output — leave it alone
                 fpath = os.path.join(workspace, fname)
                 if not os.path.isfile(fpath):
                     continue
@@ -3093,8 +3101,17 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     )
 
             # Section 16: Cleanup build artifacts
-            # Section 7: Pass pre-step file set to remove script artifacts
-            cleanup_workspace_artifacts(WORKSPACE, pre_step_files=pre_step_files)
+            # Section 7: Pass pre-step file set to remove script artifacts.
+            # Protect files claimed as step outputs so intentional .py files
+            # (e.g. run_pipeline.py) are not mistaken for sandbox artifacts.
+            _output_basenames = {
+                os.path.basename(f) for f in step.get("files_written", [])
+            }
+            cleanup_workspace_artifacts(
+                WORKSPACE,
+                pre_step_files=pre_step_files,
+                step_output_files=_output_basenames,
+            )
 
             if failure_reason is None and step.get("verify"):
                 logger.info("  Verifying step output...")
@@ -3110,7 +3127,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 )
                 # Section 7: Cleanup again after verification orchestrator
                 # which may have created new script artifacts.
-                cleanup_workspace_artifacts(WORKSPACE, pre_step_files=pre_step_files)
+                cleanup_workspace_artifacts(
+                    WORKSPACE,
+                    pre_step_files=pre_step_files,
+                    step_output_files=_output_basenames,
+                )
 
             # Guardrail scan on workspace Python files
             if failure_reason is None:

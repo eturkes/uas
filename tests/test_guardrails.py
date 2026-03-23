@@ -151,7 +151,7 @@ class TestCheckProjectGuardrails:
         assert any("Git repository" in w for w in warnings)
 
     def test_project_with_git_main_branch(self, tmp_path):
-        (tmp_path / "main.py").write_text("print('hello')")
+        (tmp_path / "main.py").write_text("from utils import helper\nhelper()")
         (tmp_path / "utils.py").write_text("def helper(): pass")
         (tmp_path / ".gitignore").write_text("__pycache__/\n")
         (tmp_path / "README.md").write_text("# Project\n")

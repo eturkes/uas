@@ -64,7 +64,7 @@ execution loop logic).
 
 ## Section 2: Validate all steps completed before marking run done
 
-**Status: TODO**
+**Status: DONE**
 
 **Problem:** At ~line 4199-4202, the run is marked `"completed"` simply because the
 level loop finished iterating. It never checks whether every step actually reached

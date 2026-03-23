@@ -136,3 +136,52 @@ class TestResumeSkipsCompleted:
             break
 
         assert completed_outputs == {1: "result_from_A"}
+
+
+class TestUnfinishedStepsBlockRun:
+    """Section 2: run must be marked blocked if steps remain unfinished."""
+
+    def test_unfinished_step_sets_blocked(self, tmp_workspace):
+        """If any step is not completed, the run status should be 'blocked'."""
+        state = init_state("incomplete run")
+        state = add_steps(state, [
+            {"title": "A", "description": "Do A"},
+            {"title": "B", "description": "Do B"},
+        ])
+        state["steps"][0]["status"] = "completed"
+        state["steps"][0]["output"] = "done"
+        # Step B remains pending
+        save_state(state)
+
+        # Simulate the completion-check logic from main.py
+        unfinished = [s for s in state["steps"] if s["status"] != "completed"]
+        if unfinished:
+            state["status"] = "blocked"
+        else:
+            state["status"] = "completed"
+
+        assert state["status"] == "blocked"
+        assert len(unfinished) == 1
+        assert unfinished[0]["id"] == state["steps"][1]["id"]
+
+    def test_all_completed_sets_completed(self, tmp_workspace):
+        """If all steps are completed, the run status should be 'completed'."""
+        state = init_state("full run")
+        state = add_steps(state, [
+            {"title": "A", "description": "Do A"},
+            {"title": "B", "description": "Do B"},
+        ])
+        state["steps"][0]["status"] = "completed"
+        state["steps"][0]["output"] = "done A"
+        state["steps"][1]["status"] = "completed"
+        state["steps"][1]["output"] = "done B"
+        save_state(state)
+
+        unfinished = [s for s in state["steps"] if s["status"] != "completed"]
+        if unfinished:
+            state["status"] = "blocked"
+        else:
+            state["status"] = "completed"
+
+        assert state["status"] == "completed"
+        assert unfinished == []

@@ -4213,6 +4213,21 @@ def main():
 
     # All done
     state["total_elapsed"] = time.monotonic() - run_start
+
+    unfinished = [s for s in state["steps"] if s["status"] != "completed"]
+    if unfinished:
+        ids = [s["id"] for s in unfinished]
+        logger.error(
+            "Execution loop finished but %d step(s) not completed: %s",
+            len(unfinished), ids,
+        )
+        state["status"] = "blocked"
+        save_state(state)
+        if output_path:
+            write_json_output(state, output_path)
+        dashboard.finish(state)
+        sys.exit(1)
+
     state["status"] = "completed"
     save_state(state)
 

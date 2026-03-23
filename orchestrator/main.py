@@ -1315,7 +1315,7 @@ def generate_and_vote(client, prompt: str, n: int,
 def _record_code_version(step_id, spec_attempt, orch_attempt, code, prompt,
                          exit_code=-1, error_summary=""):
     """Record a code version to disk for the architect's code tracker."""
-    workspace = os.environ.get("UAS_WORKSPACE", os.getcwd())
+    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
     run_id = os.environ.get("UAS_RUN_ID", "")
     if run_id:
         versions_dir = os.path.join(workspace, ".state", "runs", run_id,

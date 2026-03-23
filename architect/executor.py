@@ -151,7 +151,7 @@ def run_orchestrator(task: str, extra_env: dict | None = None,
 
     Returns dict with exit_code, stdout, stderr.
     """
-    workspace = os.environ.get("UAS_WORKSPACE", os.getcwd())
+    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
     try:
         ensure_claude_md(workspace, step_context=step_context)
     except OSError as e:
@@ -240,7 +240,7 @@ def _run_local(task: str, extra_env: dict | None = None,
     framework_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
     )
-    workspace = os.environ.get("UAS_WORKSPACE", os.getcwd())
+    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
     # Use the project subdirectory as cwd when UAS_PROJECT_NAME is set.
     project_name = (extra_env or {}).get("UAS_PROJECT_NAME", "")
     cwd = os.path.join(workspace, project_name) if project_name else workspace

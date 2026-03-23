@@ -240,7 +240,7 @@ that a resume is happening.
 
 ## Section 6: Run full test suite and fix regressions
 
-**Status: TODO**
+**Status: DONE**
 
 **Problem:** Sections 1-5 touch core execution logic. A full test suite run is needed
 to catch any regressions.

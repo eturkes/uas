@@ -26,6 +26,17 @@ Your script will run inside an isolated workspace directory.
 - Always print results and progress to stdout so the caller can track execution
 - Handle errors with informative messages -- include what failed and why
 
+## Import Conventions
+When generating modules that are part of a multi-file project:
+- Use consistent package-relative imports throughout the project
+  (e.g., always `from src.module import name`, never bare `from module import name`)
+- NEVER use try/except ImportError fallback chains to handle different import paths
+  -- this masks real errors. Pick one correct import path and use it.
+- When importing from a sibling module produced by a prior step, use the EXACT
+  names listed in the dependency context. Do not rename, alias, or guess.
+- If the dependency context lists `functions: make_card`, import `make_card`,
+  not `create_card` or any other variation.
+
 ## Output Requirements
 - Print a machine-readable summary as the last line of stdout in this exact format:
   `UAS_RESULT: {"status": "ok", "files_written": ["file1.txt", ...], "summary": "brief description"}`

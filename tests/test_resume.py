@@ -112,6 +112,50 @@ class TestTryResume:
         assert try_resume() is None
 
 
+class TestResumeResetsExecutingSteps:
+    """Section 5: executing steps should be reset to pending on resume."""
+
+    def test_executing_step_reset_to_pending(self, tmp_workspace):
+        """A step left in 'executing' status should be reset to 'pending'."""
+        state = init_state("interrupted run")
+        state = add_steps(state, [
+            {"title": "A", "description": "Do A"},
+            {"title": "B", "description": "Do B"},
+            {"title": "C", "description": "Do C"},
+        ])
+        state["steps"][0]["status"] = "completed"
+        state["steps"][0]["output"] = "done A"
+        state["steps"][1]["status"] = "executing"
+        state["steps"][1]["started_at"] = "2026-01-01T00:00:00"
+        # Step C remains pending
+        save_state(state)
+
+        result = try_resume()
+        assert result is not None
+        assert result["steps"][0]["status"] == "completed"
+        assert result["steps"][1]["status"] == "pending"
+        assert result["steps"][1]["started_at"] is None
+        assert result["steps"][2]["status"] == "pending"
+
+    def test_multiple_executing_steps_all_reset(self, tmp_workspace):
+        """Multiple executing steps should all be reset."""
+        state = init_state("multi interrupted")
+        state = add_steps(state, [
+            {"title": "A", "description": "Do A"},
+            {"title": "B", "description": "Do B"},
+        ])
+        state["steps"][0]["status"] = "executing"
+        state["steps"][0]["started_at"] = "2026-01-01T00:00:00"
+        state["steps"][1]["status"] = "executing"
+        state["steps"][1]["started_at"] = "2026-01-01T00:01:00"
+        save_state(state)
+
+        result = try_resume()
+        assert result is not None
+        assert all(s["status"] == "pending" for s in result["steps"])
+        assert all(s["started_at"] is None for s in result["steps"])
+
+
 class TestResumeSkipsCompleted:
     """Test that the execution loop correctly skips completed steps."""
 

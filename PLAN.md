@@ -201,7 +201,7 @@ tests pass.
 
 ## Section 5: Reset `executing` steps to `pending` on resume
 
-**Status: TODO**
+**Status: DONE**
 
 **Problem:** When UAS is interrupted mid-step, that step's status is `"executing"`.
 On resume, the execution loop only special-cases `"completed"` steps (skips them);

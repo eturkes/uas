@@ -3691,6 +3691,14 @@ def try_resume() -> dict | None:
     if not state.get("steps"):
         logger.info("Saved state has no steps, starting fresh.")
         return None
+    for step in state.get("steps", []):
+        if step["status"] == "executing":
+            logger.info(
+                "Resetting interrupted step %s (%s) to pending.",
+                step["id"], step["title"],
+            )
+            step["status"] = "pending"
+            step["started_at"] = None
     return state
 
 

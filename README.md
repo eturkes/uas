@@ -482,11 +482,16 @@ waits, so the user always knows the system is still working.
 
 **Terminal dashboard:** During execution, a Rich Live dashboard shows
 the DAG structure with step statuses (pending/executing/completed/failed),
-active step details, and a timing breakdown. Press `P` at any time to
-pause execution — the current step(s) will finish, then the Architect
-waits before starting the next level. Press `P` again to resume. When
-stdout is not a TTY or `rich` is not installed, it falls back to the
-original print-based progress reporting.
+active step details, and a timing breakdown. All panels support
+scrolling: use `↑`/`↓` or `j`/`k` to scroll, `Tab` to cycle the
+focused panel (DAG, Activity Log, Claude Code Output), `g`/`G` or
+`Home`/`End` to jump to the top or bottom, and `PgUp`/`PgDn` for
+larger jumps. The focused panel is highlighted with a bold border and
+shows a scroll position indicator when content overflows. Press `P`
+at any time to pause execution — the current step(s) will finish,
+then the Architect waits before starting the next level. Press `P`
+again to resume. When stdout is not a TTY or `rich` is not installed,
+it falls back to the original print-based progress reporting.
 
 **Event log & provenance:** When `--events` is passed (or `UAS_EVENTS`
 is set), every significant action is recorded as a typed event in

@@ -3,7 +3,7 @@
 import io
 import threading
 
-from architect.dashboard import Dashboard, STATUS_ICONS, _RICH_AVAILABLE
+from architect.dashboard import Dashboard, STATUS_ICONS, _RICH_AVAILABLE, LOG_PANEL_HEIGHT
 
 
 def _make_state(steps=None, goal="Test goal", status="executing", total_elapsed=0.0):
@@ -292,3 +292,189 @@ class TestDashboardEmptyState:
         dash._use_rich = True
         panel = dash._render_dag()
         assert panel is not None
+
+
+class TestDashboardScroll:
+    """Test scrolling and panel focus."""
+
+    def test_initial_scroll_state(self):
+        buf = io.StringIO()
+        state = _make_state()
+        dash = Dashboard(state, file=buf)
+        assert dash._focused_panel == "dag"
+        assert dash._scroll_offsets == {"dag": 0, "log": 0, "output": 0}
+        assert all(dash._auto_scroll.values())
+
+    def test_scroll_changes_offset(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._scroll(5)
+        assert dash._scroll_offsets["dag"] == 5
+        assert not dash._auto_scroll["dag"]
+
+    def test_scroll_clamps_to_zero(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._scroll(-100)
+        assert dash._scroll_offsets["dag"] == 0
+
+    def test_scroll_to_top(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._scroll(10)
+        dash._scroll_to_top()
+        assert dash._scroll_offsets["dag"] == 0
+        assert not dash._auto_scroll["dag"]
+
+    def test_scroll_to_bottom_enables_auto_scroll(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._scroll(5)
+        assert not dash._auto_scroll["dag"]
+        dash._scroll_to_bottom()
+        assert dash._auto_scroll["dag"]
+
+    def test_cycle_focus_dag_log(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        assert dash._focused_panel == "dag"
+        dash._cycle_focus()
+        assert dash._focused_panel == "log"
+        dash._cycle_focus()
+        assert dash._focused_panel == "dag"
+
+    def test_cycle_focus_includes_output(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash.add_output_line("test output")
+        assert dash._focused_panel == "dag"
+        dash._cycle_focus()
+        assert dash._focused_panel == "log"
+        dash._cycle_focus()
+        assert dash._focused_panel == "output"
+        dash._cycle_focus()
+        assert dash._focused_panel == "dag"
+
+    def test_scroll_respects_focused_panel(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._focused_panel = "log"
+        dash._scroll(5)
+        assert dash._scroll_offsets["log"] == 5
+        assert dash._scroll_offsets["dag"] == 0
+
+    def test_apply_scroll_all_visible(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        lines = ["a", "b", "c"]
+        visible, offset, total = dash._apply_scroll(lines, "dag", 10)
+        assert visible == lines
+        assert offset == 0
+        assert total == 3
+
+    def test_apply_scroll_auto_scroll(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        lines = list(range(20))
+        visible, offset, total = dash._apply_scroll(lines, "dag", 5)
+        assert len(visible) == 5
+        assert visible == list(range(15, 20))
+        assert offset == 15
+        assert total == 20
+
+    def test_apply_scroll_manual_offset(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._auto_scroll["dag"] = False
+        dash._scroll_offsets["dag"] = 3
+        lines = list(range(20))
+        visible, offset, total = dash._apply_scroll(lines, "dag", 5)
+        assert visible == list(range(3, 8))
+        assert offset == 3
+
+    def test_apply_scroll_clamps_manual_offset(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._auto_scroll["dag"] = False
+        dash._scroll_offsets["dag"] = 999
+        lines = list(range(10))
+        visible, offset, total = dash._apply_scroll(lines, "dag", 5)
+        # Max offset is 10-5=5
+        assert offset == 5
+        assert visible == list(range(5, 10))
+
+    def test_large_log_buffer_preserved(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        for i in range(100):
+            dash.log(f"msg {i}")
+        with dash._lock:
+            assert len(dash._log_lines) == 100
+
+    def test_render_dag_with_scroll(self):
+        from rich.panel import Panel
+
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._use_rich = True
+        panel = dash._render_dag()
+        assert isinstance(panel, Panel)
+
+    def test_render_log_with_many_lines(self):
+        from rich.panel import Panel
+
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._use_rich = True
+        for i in range(50):
+            dash.log(f"message {i}")
+        panel = dash._render_log()
+        assert isinstance(panel, Panel)
+
+    def test_render_output_with_many_lines(self):
+        from rich.panel import Panel
+
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        dash._use_rich = True
+        for i in range(50):
+            dash.add_output_line(f"output {i}")
+        panel = dash._render_output()
+        assert isinstance(panel, Panel)
+
+    def test_focused_panel_bold_border(self):
+        from rich.console import Console
+
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=True, width=80)
+        dash = Dashboard(_make_state(), file=buf)
+        dash._use_rich = True
+        dash._console = console
+
+        dash._focused_panel = "dag"
+        dag_panel = dash._render_dag()
+        assert dag_panel.border_style == "bold green"
+
+        dash._focused_panel = "log"
+        dag_panel = dash._render_dag()
+        assert dag_panel.border_style == "green"
+
+    def test_concurrent_scroll(self):
+        buf = io.StringIO()
+        dash = Dashboard(_make_state(), file=buf)
+        errors = []
+
+        def scroller():
+            try:
+                for _ in range(50):
+                    dash._scroll(1)
+                    dash._scroll(-1)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=scroller) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors

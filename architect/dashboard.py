@@ -39,8 +39,10 @@ STATUS_ICONS = {
     "failed": ("[x]", "red"),
 }
 
-MAX_LOG_LINES = 12
-MAX_OUTPUT_LINES = 20
+MAX_LOG_LINES = 500
+MAX_OUTPUT_LINES = 500
+LOG_PANEL_HEIGHT = 8
+SCROLL_STEP = 3
 
 
 class Dashboard:
@@ -70,6 +72,11 @@ class Dashboard:
         self._resume_event.set()  # Start in running state
         self._stop_listener = threading.Event()
         self._key_thread = None
+
+        # Scroll state
+        self._focused_panel = "dag"
+        self._scroll_offsets = {"dag": 0, "log": 0, "output": 0}
+        self._auto_scroll = {"dag": True, "log": True, "output": True}
 
         if self._use_rich:
             self._console = Console(file=self._file)
@@ -124,12 +131,12 @@ class Dashboard:
         if not _TERMIOS_AVAILABLE:
             return
         self._key_thread = threading.Thread(
-            target=self._key_listener, daemon=True, name="pause-listener",
+            target=self._key_listener, daemon=True, name="key-listener",
         )
         self._key_thread.start()
 
     def _key_listener(self):
-        """Background thread: read stdin in cbreak mode for pause toggle."""
+        """Background thread: read stdin in cbreak mode for key bindings."""
         fd = sys.stdin.fileno()
         try:
             old_settings = termios.tcgetattr(fd)
@@ -142,6 +149,42 @@ class Dashboard:
                     ch = os.read(fd, 1)
                     if ch in (b'p', b'P'):
                         self.toggle_pause()
+                    elif ch == b'\t':
+                        self._cycle_focus()
+                    elif ch in (b'k', b'K'):
+                        self._scroll(-SCROLL_STEP)
+                    elif ch in (b'j', b'J'):
+                        self._scroll(SCROLL_STEP)
+                    elif ch == b'g':
+                        self._scroll_to_top()
+                    elif ch == b'G':
+                        self._scroll_to_bottom()
+                    elif ch == b'\x1b':
+                        # Parse escape sequences (arrow keys, page up/down)
+                        buf = b''
+                        for _ in range(4):
+                            if select.select([fd], [], [], 0.05)[0]:
+                                buf += os.read(fd, 1)
+                                if buf == b'[A':
+                                    self._scroll(-1)
+                                    break
+                                elif buf == b'[B':
+                                    self._scroll(1)
+                                    break
+                                elif buf == b'[5~':
+                                    self._scroll(-10)
+                                    break
+                                elif buf == b'[6~':
+                                    self._scroll(10)
+                                    break
+                                elif buf == b'[H':
+                                    self._scroll_to_top()
+                                    break
+                                elif buf == b'[F':
+                                    self._scroll_to_bottom()
+                                    break
+                            else:
+                                break
         except Exception:
             pass
         finally:
@@ -149,6 +192,86 @@ class Dashboard:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             except Exception:
                 pass
+
+    def _scroll(self, delta: int):
+        """Scroll the focused panel by *delta* lines (negative=up, positive=down)."""
+        with self._lock:
+            panel = self._focused_panel
+            self._auto_scroll[panel] = False
+            new_offset = self._scroll_offsets[panel] + delta
+            self._scroll_offsets[panel] = max(0, new_offset)
+        self._refresh()
+
+    def _scroll_to_top(self):
+        """Scroll the focused panel to the top."""
+        with self._lock:
+            panel = self._focused_panel
+            self._auto_scroll[panel] = False
+            self._scroll_offsets[panel] = 0
+        self._refresh()
+
+    def _scroll_to_bottom(self):
+        """Scroll the focused panel to the bottom and re-enable auto-scroll."""
+        with self._lock:
+            panel = self._focused_panel
+            self._auto_scroll[panel] = True
+        self._refresh()
+
+    def _cycle_focus(self):
+        """Cycle keyboard focus to the next panel."""
+        with self._lock:
+            has_output = len(self._output_lines) > 0
+            panels = ["dag", "log"]
+            if has_output:
+                panels.append("output")
+            try:
+                idx = panels.index(self._focused_panel)
+            except ValueError:
+                idx = -1
+            self._focused_panel = panels[(idx + 1) % len(panels)]
+        self._refresh()
+
+    def _refresh(self):
+        """Push a re-render to the Live display."""
+        if self._live:
+            try:
+                self._live.update(self._render())
+            except Exception:
+                pass
+
+    def _panel_visible_height(self, panel: str) -> int:
+        """Estimate the number of visible content lines for a panel."""
+        try:
+            term_h = self._console.height if self._console else os.get_terminal_size().lines
+        except Exception:
+            term_h = 40
+        # Layout: header(3) + middle(flex) + log(LOG_PANEL_HEIGHT) + footer(8)
+        middle_h = max(3, term_h - 3 - LOG_PANEL_HEIGHT - 8)
+        if panel == "dag":
+            return max(1, middle_h - 2)  # -2 for panel borders
+        elif panel == "log":
+            return max(1, LOG_PANEL_HEIGHT - 2)
+        elif panel == "output":
+            return max(1, middle_h - 2)
+        return 10
+
+    def _apply_scroll(self, all_lines: list, panel: str, visible_height: int) -> tuple:
+        """Return *(visible_lines, offset, total)* for the given panel."""
+        total = len(all_lines)
+        if total <= visible_height:
+            with self._lock:
+                self._scroll_offsets[panel] = 0
+            return all_lines, 0, total
+        with self._lock:
+            if self._auto_scroll[panel]:
+                offset = max(0, total - visible_height)
+                self._scroll_offsets[panel] = offset
+            else:
+                offset = self._scroll_offsets[panel]
+                max_offset = max(0, total - visible_height)
+                offset = min(offset, max_offset)
+                self._scroll_offsets[panel] = offset
+        return all_lines[offset:offset + visible_height], offset, total
 
     def set_phase(self, phase: str):
         with self._lock:
@@ -362,7 +485,7 @@ class Dashboard:
             layout.split_column(
                 Layout(name="header", size=3),
                 Layout(name="middle"),
-                Layout(name="log", size=min(MAX_LOG_LINES + 2, 8)),
+                Layout(name="log", size=LOG_PANEL_HEIGHT),
                 Layout(name="footer", size=8),
             )
             layout["middle"].split_row(
@@ -374,7 +497,7 @@ class Dashboard:
             layout.split_column(
                 Layout(name="header", size=3),
                 Layout(name="middle"),
-                Layout(name="log", size=min(MAX_LOG_LINES + 2, 8)),
+                Layout(name="log", size=LOG_PANEL_HEIGHT),
                 Layout(name="footer", size=8),
             )
             layout["middle"].update(self._render_dag())
@@ -420,7 +543,7 @@ class Dashboard:
 
         if paused:
             parts.extend([("  |  ", "dim"), ("[PAUSED]", "bold red")])
-        parts.extend([("  |  ", "dim"), ("[P] Pause", "dim")])
+        parts.extend([("  |  ", "dim"), ("[P]ause [↑↓/jk]Scroll [Tab]Focus", "dim")])
 
         text = Text.assemble(*parts)
         return Panel(text, style="red" if paused else "blue")
@@ -429,84 +552,119 @@ class Dashboard:
         with self._lock:
             state = self._state
             step_activities = dict(self._step_activities)
+            focused = self._focused_panel == "dag"
         steps = state.get("steps", [])
         if not steps:
-            return Panel("[dim]No steps yet[/dim]", title="DAG")
+            border = "bold green" if focused else "green"
+            return Panel("[dim]No steps yet[/dim]", title="DAG", border_style=border)
 
         step_by_id = {s["id"]: s for s in steps}
         try:
             levels = topological_sort(steps)
         except ValueError:
-            return Panel("[red]Invalid DAG[/red]", title="DAG")
+            border = "bold green" if focused else "green"
+            return Panel("[red]Invalid DAG[/red]", title="DAG", border_style=border)
 
-        tree = Tree("[bold]Execution DAG[/bold]")
+        all_lines = []
         for level_idx, level in enumerate(levels, 1):
-            level_branch = tree.add(f"[bold]Level {level_idx}[/bold]")
+            all_lines.append(f"[bold]Level {level_idx}[/bold]")
             for sid in level:
                 step = step_by_id[sid]
                 icon, style = STATUS_ICONS.get(step["status"], ("?", ""))
                 elapsed = step.get("elapsed", 0.0)
                 elapsed_str = f" ({elapsed:.1f}s)" if elapsed > 0 else ""
-
-                label = f"[{style}]{icon}[/{style}] Step {sid}: \"{step['title']}\"{elapsed_str}"
-
-                step_node = level_branch.add(label)
+                all_lines.append(
+                    f"  [{style}]{icon}[/{style}] Step {sid}: "
+                    f"\"{step['title']}\"{elapsed_str}"
+                )
 
                 if step["status"] == "executing":
                     rewrites = step.get("rewrites", 0)
                     attempt = rewrites + 1
                     activity = step_activities.get(sid, "")
                     activity_str = f" - {activity}" if activity else ""
-                    step_node.add(f"[cyan]Attempt {attempt}{activity_str}[/cyan]")
+                    all_lines.append(f"    [cyan]Attempt {attempt}{activity_str}[/cyan]")
                     if step.get("error"):
                         err_preview = step["error"][:120]
-                        step_node.add(f"[dim red]Last error: {err_preview}[/dim red]")
+                        all_lines.append(f"    [dim red]Last error: {err_preview}[/dim red]")
 
                 elif step["status"] == "completed":
                     summary = step.get("summary") or (step.get("output") or "")[:100]
                     if summary:
-                        step_node.add(f"[dim green]{summary[:120]}[/dim green]")
+                        all_lines.append(f"    [dim green]{summary[:120]}[/dim green]")
                     files = step.get("files_written", [])
                     if files:
-                        step_node.add(f"[dim]Files: {', '.join(files[:5])}"
-                                      f"{'...' if len(files) > 5 else ''}[/dim]")
+                        files_str = ", ".join(files[:5])
+                        if len(files) > 5:
+                            files_str += "..."
+                        all_lines.append(f"    [dim]Files: {files_str}[/dim]")
 
                 elif step["status"] == "failed":
                     if step.get("error"):
                         err_preview = step["error"][:120]
-                        step_node.add(f"[dim red]{err_preview}[/dim red]")
+                        all_lines.append(f"    [dim red]{err_preview}[/dim red]")
 
-        return Panel(tree, title="DAG", border_style="green")
+        visible_height = self._panel_visible_height("dag")
+        visible, offset, total = self._apply_scroll(all_lines, "dag", visible_height)
+        text = Text.from_markup("\n".join(visible))
+
+        scroll_info = ""
+        if total > visible_height:
+            scroll_info = f" [{offset + 1}-{min(offset + visible_height, total)}/{total}]"
+        border = "bold green" if focused else "green"
+        return Panel(text, title=f"DAG{scroll_info}", border_style=border)
 
     def _render_log(self) -> Panel:
         """Build the activity log panel."""
         with self._lock:
-            lines = list(self._log_lines)
-        if not lines:
+            all_lines = list(self._log_lines)
+            focused = self._focused_panel == "log"
+        if not all_lines:
+            border = "bold dim" if focused else "dim"
             return Panel("[dim]Waiting for activity...[/dim]", title="Activity Log",
-                         border_style="dim")
+                         border_style=border)
+
+        visible_height = self._panel_visible_height("log")
+        visible, offset, total = self._apply_scroll(all_lines, "log", visible_height)
+
         text = Text()
-        for i, line in enumerate(lines):
+        for i, line in enumerate(visible):
             if i > 0:
                 text.append("\n")
-            text.append(line, style="dim" if i < len(lines) - 1 else "")
-        return Panel(text, title="Activity Log", border_style="dim")
+            is_latest = (offset + i == total - 1)
+            text.append(line, style="" if is_latest else "dim")
+
+        scroll_info = ""
+        if total > visible_height:
+            scroll_info = f" [{offset + 1}-{min(offset + visible_height, total)}/{total}]"
+        border = "bold dim" if focused else "dim"
+        return Panel(text, title=f"Activity Log{scroll_info}", border_style=border)
 
     def _render_output(self) -> Panel:
         """Build the live LLM/orchestrator output panel."""
         with self._lock:
-            lines = list(self._output_lines)
-        if not lines:
+            all_lines = list(self._output_lines)
+            focused = self._focused_panel == "output"
+        if not all_lines:
+            border = "bold magenta" if focused else "magenta"
             return Panel("[dim]Waiting for output...[/dim]", title="Claude Code Output",
-                         border_style="magenta")
+                         border_style=border)
+
+        visible_height = self._panel_visible_height("output")
+        visible, offset, total = self._apply_scroll(all_lines, "output", visible_height)
+
         text = Text()
-        for i, line in enumerate(lines):
+        for i, line in enumerate(visible):
             if i > 0:
                 text.append("\n")
-            # Dim older lines, highlight the latest
-            style = "dim" if i < len(lines) - 1 else ""
-            text.append(line[:200], style=style)
-        return Panel(text, title="Claude Code Output", border_style="magenta")
+            is_latest = (offset + i == total - 1)
+            text.append(line[:200], style="" if is_latest else "dim")
+
+        scroll_info = ""
+        if total > visible_height:
+            scroll_info = f" [{offset + 1}-{min(offset + visible_height, total)}/{total}]"
+        border = "bold magenta" if focused else "magenta"
+        return Panel(text, title=f"Claude Code Output{scroll_info}", border_style=border)
 
     def _render_timing(self) -> Table:
         with self._lock:

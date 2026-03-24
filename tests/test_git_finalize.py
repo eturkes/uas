@@ -36,16 +36,12 @@ def _current_branch(workspace):
 
 
 @pytest.fixture(autouse=True)
-def _git_identity():
-    """Set git identity for commits in temp repos."""
-    subprocess.run(
-        ["git", "config", "--global", "user.email", "test@test.com"],
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "--global", "user.name", "Test"],
-        capture_output=True,
-    )
+def _git_identity(monkeypatch):
+    """Set git identity for commits in temp repos via env vars (not global config)."""
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@test.com")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@test.com")
 
 
 class TestEnsureGitRepoSingleFile:

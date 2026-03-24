@@ -30,19 +30,19 @@ def _current_branch(workspace):
     return _git(workspace, "branch", "--show-current")
 
 
+@pytest.fixture(autouse=True)
+def _git_identity(monkeypatch):
+    """Set git identity for commits in temp repos via env vars (not global config)."""
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@test.com")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@test.com")
+
+
 def _init_workspace(tmp_path):
     """Create a workspace with two files so ensure_git_repo will init."""
     (tmp_path / "file1.txt").write_text("hello", encoding="utf-8")
     (tmp_path / "file2.txt").write_text("world", encoding="utf-8")
-    # Set git identity for commits in this temp repo
-    subprocess.run(
-        ["git", "config", "--global", "user.email", "test@test.com"],
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "--global", "user.name", "Test"],
-        capture_output=True,
-    )
 
 
 class TestEnsureGitRepoCreatesWipBranch:

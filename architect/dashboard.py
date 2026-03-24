@@ -1,9 +1,20 @@
 """Rich terminal dashboard for real-time UAS execution visualization."""
 
 import collections
+import os
+import select
 import sys
 import threading
 import time
+
+_TERMIOS_AVAILABLE = False
+try:
+    import termios
+    import tty
+
+    _TERMIOS_AVAILABLE = True
+except ImportError:
+    pass
 
 from .planner import topological_sort
 
@@ -53,6 +64,13 @@ class Dashboard:
         self._live = None
         self._console = None
 
+        # Pause/resume state
+        self._paused = False
+        self._resume_event = threading.Event()
+        self._resume_event.set()  # Start in running state
+        self._stop_listener = threading.Event()
+        self._key_thread = None
+
         if self._use_rich:
             self._console = Console(file=self._file)
             self._live = Live(
@@ -69,10 +87,68 @@ class Dashboard:
     def start(self):
         if self._live:
             self._live.start()
+        self._start_key_listener()
 
     def stop(self):
+        self._stop_listener.set()
+        if self._key_thread:
+            self._key_thread.join(timeout=1)
         if self._live:
             self._live.stop()
+
+    @property
+    def paused(self) -> bool:
+        """Whether execution is currently paused."""
+        with self._lock:
+            return self._paused
+
+    def toggle_pause(self):
+        """Toggle the pause state. When paused, wait_if_paused() will block."""
+        with self._lock:
+            self._paused = not self._paused
+            if self._paused:
+                self._resume_event.clear()
+            else:
+                self._resume_event.set()
+            paused = self._paused
+        self.log("PAUSED - press [P] to resume" if paused else "RESUMED")
+
+    def wait_if_paused(self):
+        """Block until execution is resumed. Returns immediately if not paused."""
+        self._resume_event.wait()
+
+    def _start_key_listener(self):
+        """Start a daemon thread that listens for 'p' to toggle pause."""
+        if not sys.stdin.isatty():
+            return
+        if not _TERMIOS_AVAILABLE:
+            return
+        self._key_thread = threading.Thread(
+            target=self._key_listener, daemon=True, name="pause-listener",
+        )
+        self._key_thread.start()
+
+    def _key_listener(self):
+        """Background thread: read stdin in cbreak mode for pause toggle."""
+        fd = sys.stdin.fileno()
+        try:
+            old_settings = termios.tcgetattr(fd)
+        except termios.error:
+            return
+        try:
+            tty.setcbreak(fd)
+            while not self._stop_listener.is_set():
+                if select.select([fd], [], [], 0.3)[0]:
+                    ch = os.read(fd, 1)
+                    if ch in (b'p', b'P'):
+                        self.toggle_pause()
+        except Exception:
+            pass
+        finally:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
 
     def set_phase(self, phase: str):
         with self._lock:
@@ -316,6 +392,7 @@ class Dashboard:
             goal = self._state.get("goal", "")[:80]
             phase = self._phase
             steps = self._state.get("steps", [])
+            paused = self._paused
         total = len(steps)
         completed = sum(1 for s in steps if s["status"] == "completed")
         failed = sum(1 for s in steps if s["status"] == "failed")
@@ -328,7 +405,7 @@ class Dashboard:
         if failed:
             progress += f", {failed} failed"
 
-        text = Text.assemble(
+        parts = [
             ("Goal: ", "bold"),
             (goal, ""),
             ("  |  ", "dim"),
@@ -339,8 +416,14 @@ class Dashboard:
             (progress, "green" if not failed else "yellow"),
             ("  |  ", "dim"),
             (f"Elapsed: {elapsed:.0f}s", ""),
-        )
-        return Panel(text, style="blue")
+        ]
+
+        if paused:
+            parts.extend([("  |  ", "dim"), ("[PAUSED]", "bold red")])
+        parts.extend([("  |  ", "dim"), ("[P] Pause", "dim")])
+
+        text = Text.assemble(*parts)
+        return Panel(text, style="red" if paused else "blue")
 
     def _render_dag(self) -> Panel:
         with self._lock:

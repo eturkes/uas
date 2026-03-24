@@ -482,9 +482,11 @@ waits, so the user always knows the system is still working.
 
 **Terminal dashboard:** During execution, a Rich Live dashboard shows
 the DAG structure with step statuses (pending/executing/completed/failed),
-active step details, and a timing breakdown. When stdout is not a TTY
-or `rich` is not installed, it falls back to the original print-based
-progress reporting.
+active step details, and a timing breakdown. Press `P` at any time to
+pause execution — the current step(s) will finish, then the Architect
+waits before starting the next level. Press `P` again to resume. When
+stdout is not a TTY or `rich` is not installed, it falls back to the
+original print-based progress reporting.
 
 **Event log & provenance:** When `--events` is passed (or `UAS_EVENTS`
 is set), every significant action is recorded as a typed event in

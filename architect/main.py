@@ -4286,6 +4286,9 @@ def main():
 
     level_idx = 0
     while level_idx < len(levels):
+        # Wait if user has paused execution via the dashboard
+        dashboard.wait_if_paused()
+
         level = levels[level_idx]
         level_steps = [step_by_id[sid] for sid in level
                        if sid in step_by_id]

@@ -2517,6 +2517,51 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
     if step.get("output"):
         output_info = f"\nStep stdout (last 500 chars): {step['output'][-500:]}"
 
+    # Include the step description so the verification script knows the
+    # exact rules the implementation follows (e.g. which column-name
+    # patterns trigger specific cleaning rules).
+    description_info = ""
+    if step.get("description"):
+        desc = step["description"]
+        if len(desc) > 3000:
+            desc = desc[:3000] + "\n... [truncated]"
+        description_info = f"\n\nStep description (the spec the code was built from):\n{desc}"
+
+    # Include source code of files produced by this step so the
+    # verification script can write tests that match the actual
+    # implementation (column-name patterns, function signatures, etc.).
+    source_info = ""
+    _MAX_SOURCE_CHARS = 4000
+    _source_chars = 0
+    if step.get("files_written"):
+        source_parts = []
+        for fpath in step["files_written"]:
+            if not fpath.endswith(".py"):
+                continue
+            full = os.path.join(workspace, fpath)
+            if not os.path.isfile(full):
+                continue
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as sf:
+                    content = sf.read()
+            except OSError:
+                continue
+            remaining = _MAX_SOURCE_CHARS - _source_chars
+            if remaining <= 0:
+                break
+            if len(content) > remaining:
+                content = content[:remaining] + "\n... [truncated]"
+            source_parts.append(f"\n--- {fpath} ---\n{content}")
+            _source_chars += len(content)
+        if source_parts:
+            source_info = (
+                "\n\nSource code of files produced by this step "
+                "(use this to understand the ACTUAL implementation logic "
+                "and write tests that match it — e.g. column-name patterns, "
+                "conditional branches):"
+                + "".join(source_parts)
+            )
+
     # Build module availability context so verification scripts only
     # attempt to import functions that actually exist in the workspace.
     module_info = ""
@@ -2557,7 +2602,7 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
     task = (
         f"Write a Python verification script that checks the following:\n\n"
         f"Verification criteria: {verify}\n\n"
-        f"Context:{files_info}{output_info}{module_info}\n\n"
+        f"Context:{files_info}{output_info}{description_info}{source_info}{module_info}\n\n"
         f"Requirements:\n"
         f"- Use workspace = os.environ.get('WORKSPACE', '/workspace')\n"
         f"- Print 'VERIFICATION PASSED' if all checks pass\n"
@@ -2567,6 +2612,12 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
         f"exports above. If a function you need is NOT listed (not yet "
         f"implemented), build test data inline instead of importing it. "
         f"Never assume a function exists just because a module file is present.\n"
+        f"- IMPORTANT: When building test data, use column names and values "
+        f"that match the patterns defined in the step description and source "
+        f"code. For example, if the code cleans 'FALSE' only in columns "
+        f"matching a specific pattern, your test columns MUST match that "
+        f"pattern. Do NOT put anomalies in columns where the code does not "
+        f"handle them.\n"
     )
 
     result = run_orchestrator(
@@ -3502,11 +3553,21 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
 
         # Section 3a: Generate structured reflection (before classification
         # so the reflection's LLM-generated error_type is available)
+        # When the failure came from post-execution validation (e.g. the
+        # verify_step_output check), error_info holds the verification
+        # output.  Pass it explicitly so the reflection sees the *actual*
+        # failure rather than the orchestrator's successful stderr.
+        if is_validation_failure:
+            _refl_stdout = step.get("output", "") or ""
+            _refl_stderr = error_info
+        else:
+            _refl_stdout = result.get("stdout", "") or ""
+            _refl_stderr = result.get("stderr", "") or error_info
         try:
             reflection = generate_reflection(
                 step,
-                result.get("stdout", "") or "",
-                result.get("stderr", "") or error_info,
+                _refl_stdout,
+                _refl_stderr,
                 attempt=spec_attempt + 1,
             )
         except Exception as e:
@@ -3818,8 +3879,18 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     f"Step {step['id']} failed (attempt {spec_attempt + 1}), "
                     f"rewriting with full history"
                 )
+            # Use validation error output for rewrites when the failure was
+            # a post-execution validation/verification failure, so the
+            # rewriter sees the actual problem instead of the orchestrator's
+            # successful run output.
+            if is_validation_failure:
+                _rw_stdout = step.get("output", "") or ""
+                _rw_stderr = error_info
+            else:
+                _rw_stdout = result["stdout"]
+                _rw_stderr = result["stderr"]
             step["description"] = reflect_and_rewrite(
-                step, result["stdout"], result["stderr"],
+                step, _rw_stdout, _rw_stderr,
                 previous_attempts=attempt_history,
                 reflections=step.get("reflections", []),
             )

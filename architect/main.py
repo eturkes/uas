@@ -2517,15 +2517,56 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
     if step.get("output"):
         output_info = f"\nStep stdout (last 500 chars): {step['output'][-500:]}"
 
+    # Build module availability context so verification scripts only
+    # attempt to import functions that actually exist in the workspace.
+    module_info = ""
+    try:
+        module_lines = []
+        src_dir = os.path.join(workspace, "src")
+        scan_dirs = [workspace]
+        if os.path.isdir(src_dir):
+            scan_dirs.append(src_dir)
+        for scan_dir in scan_dirs:
+            for entry in sorted(os.listdir(scan_dir)):
+                if not entry.endswith(".py") or entry.startswith("."):
+                    continue
+                fpath = os.path.join(scan_dir, entry)
+                if not os.path.isfile(fpath):
+                    continue
+                rel = os.path.relpath(fpath, workspace)
+                api = extract_module_api(fpath)
+                funcs = api.get("functions", [])
+                classes = api.get("classes", [])
+                exports = funcs + classes
+                if exports:
+                    module_lines.append(
+                        f"  {rel}: exports {', '.join(exports)}"
+                    )
+                else:
+                    module_lines.append(
+                        f"  {rel}: no public functions or classes"
+                    )
+        if module_lines:
+            module_info = (
+                "\n\nWorkspace Python modules and their available exports:\n"
+                + "\n".join(module_lines)
+            )
+    except OSError:
+        pass
+
     task = (
         f"Write a Python verification script that checks the following:\n\n"
         f"Verification criteria: {verify}\n\n"
-        f"Context:{files_info}{output_info}\n\n"
+        f"Context:{files_info}{output_info}{module_info}\n\n"
         f"Requirements:\n"
         f"- Use workspace = os.environ.get('WORKSPACE', '/workspace')\n"
         f"- Print 'VERIFICATION PASSED' if all checks pass\n"
         f"- Print 'VERIFICATION FAILED: <reason>' and exit(1) if any check fails\n"
         f"- Be thorough but concise\n"
+        f"- IMPORTANT: Only import functions that are listed in the module "
+        f"exports above. If a function you need is NOT listed (not yet "
+        f"implemented), build test data inline instead of importing it. "
+        f"Never assume a function exists just because a module file is present.\n"
     )
 
     result = run_orchestrator(
@@ -3527,6 +3568,71 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                                step_id=step["id"],
                                data={"target": root_target,
                                      "dep_id": dep_id})
+
+                # Handle missing dependency: add it and execute if needed
+                if root_target == "missing_dependency" and dep_id is not None:
+                    step_by_id = {s["id"]: s for s in state["steps"]}
+                    missing_step = step_by_id.get(dep_id)
+                    if missing_step:
+                        logger.info(
+                            "  Adding missing dependency: step %d (%s) "
+                            "-> step %d depends_on.",
+                            dep_id, missing_step.get("title", "?"),
+                            step["id"],
+                        )
+                        step["depends_on"].append(dep_id)
+                        _save_state_threadsafe(state)
+
+                        # Execute the missing dependency if not completed
+                        if missing_step["status"] != "completed":
+                            logger.info(
+                                "  Executing missing dependency step %d...",
+                                dep_id,
+                            )
+                            if dashboard:
+                                dashboard.set_step_activity(
+                                    step["id"],
+                                    f"Executing missing dep step {dep_id}...",
+                                )
+                            dep_success = execute_step(
+                                missing_step, state, completed_outputs,
+                                progress_counts, dashboard,
+                                backtracked_steps,
+                            )
+                            if dep_success:
+                                completed_outputs[dep_id] = {
+                                    "stdout": missing_step.get("output", ""),
+                                    "stderr": missing_step.get(
+                                        "stderr_output", ""),
+                                    "files": missing_step.get(
+                                        "files_written", []),
+                                }
+                                context = build_context(
+                                    step, completed_outputs,
+                                    state=state,
+                                    workspace_path=PROJECT_DIR,
+                                )
+                                did_backtrack = True
+                            else:
+                                logger.warning(
+                                    "  Missing dependency step %d failed.",
+                                    dep_id,
+                                )
+                        else:
+                            # Already completed, just refresh context
+                            completed_outputs[dep_id] = {
+                                "stdout": missing_step.get("output", ""),
+                                "stderr": missing_step.get(
+                                    "stderr_output", ""),
+                                "files": missing_step.get(
+                                    "files_written", []),
+                            }
+                            context = build_context(
+                                step, completed_outputs,
+                                state=state,
+                                workspace_path=PROJECT_DIR,
+                            )
+                            did_backtrack = True
 
                 # Determine which dependency to backtrack to:
                 # either from root cause tracing or forced by stagnation

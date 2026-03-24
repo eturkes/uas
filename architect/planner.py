@@ -1025,7 +1025,11 @@ def trace_root_cause(step: dict, error: str,
     Only called when the step has dependencies. Uses an LLM to reason about
     whether the error was caused by incorrect dependency output.
 
-    Returns ("self", None) or ("dependency", step_id).
+    Returns:
+        ("self", None) - root cause is in this step
+        ("dependency", step_id) - root cause is in a declared dependency
+        ("missing_dependency", step_id) - root cause is a step that should
+            be a dependency but isn't declared as one
     """
     if not step.get("depends_on"):
         return ("self", None)
@@ -1080,7 +1084,20 @@ def trace_root_cause(step: dict, error: str,
         if dep_id in step["depends_on"]:
             logger.info("  Root cause traced to dependency step %d.", dep_id)
             return ("dependency", dep_id)
-        logger.warning("  Root cause traced to step %d but it's not a dependency.", dep_id)
+        # The LLM identified a step that's not a declared dependency.
+        # Check if it's a valid pending/completed step — this indicates
+        # a missing dependency in the plan.
+        if dep_id in step_by_id:
+            logger.warning(
+                "  Root cause traced to step %d which is NOT a declared "
+                "dependency — likely a missing dependency in the plan.",
+                dep_id,
+            )
+            return ("missing_dependency", dep_id)
+        logger.warning(
+            "  Root cause traced to step %d but it doesn't exist.",
+            dep_id,
+        )
 
     return ("self", None)
 

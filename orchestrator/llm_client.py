@@ -83,16 +83,31 @@ class ClaudeCodeClient:
         self.model = model
         self.role = role
 
-    def _run_streaming(self, cmd, env):
-        """Run the CLI streaming stdout to the logger line-by-line."""
+    def _run_streaming(self, cmd, env, input_text=None):
+        """Run the CLI streaming stdout to the logger line-by-line.
+
+        When *input_text* is provided it is written to the process's stdin
+        and the pipe is closed before stdout is consumed.  This avoids
+        passing large prompts as command-line arguments which can exceed
+        the OS ARG_MAX limit.
+        """
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if input_text else subprocess.DEVNULL,
             env=env,
         )
+        # Feed the prompt via stdin and close the pipe so the process
+        # knows input is complete.  Must happen before reading stdout
+        # to avoid deadlocks.
+        if input_text and proc.stdin:
+            try:
+                proc.stdin.write(input_text)
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass  # Process may have exited early
         # Collect stderr in a background thread to avoid pipe deadlock
         stderr_chunks = []
         stderr_thread = threading.Thread(
@@ -134,13 +149,15 @@ class ClaudeCodeClient:
 
         # Resolve the absolute path to the claude binary so subprocess
         # never fails due to a missing or overwritten PATH.
+        # The prompt is passed via stdin (not as a CLI argument) to
+        # avoid hitting the OS ARG_MAX limit on large prompts.
         claude_path = shutil.which("claude")
         if claude_path:
-            cmd = [claude_path, "-p", prompt, "--dangerously-skip-permissions"]
+            cmd = [claude_path, "-p", "--dangerously-skip-permissions"]
         else:
             cmd = [
                 "npx", "-y", "@anthropic-ai/claude-code",
-                "-p", prompt, "--dangerously-skip-permissions",
+                "-p", "--dangerously-skip-permissions",
             ]
 
         # Coder calls disable tools to force fenced code output instead
@@ -164,7 +181,9 @@ class ClaudeCodeClient:
         last_error: RuntimeError | None = None
         for attempt in range(1 + MAX_RETRIES):
             try:
-                stdout, stderr, returncode = self._run_streaming(cmd, env)
+                stdout, stderr, returncode = self._run_streaming(
+                    cmd, env, input_text=prompt,
+                )
             except subprocess.TimeoutExpired:
                 last_error = RuntimeError(
                     f"Claude Code CLI timed out after {self.timeout} seconds."

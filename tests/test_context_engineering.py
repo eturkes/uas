@@ -237,7 +237,8 @@ class TestCompressContext:
         result = compress_context(context, max_length=1000)
         assert result == context
 
-    def test_tier2_removes_previews(self):
+    @patch("orchestrator.llm_client.get_llm_client", side_effect=Exception("no LLM"))
+    def test_tier2_removes_previews(self, _mock_client):
         context = (
             '<dependency step="1" title="Step 1">\n'
             "  <key_outputs>important data</key_outputs>\n"
@@ -252,7 +253,7 @@ class TestCompressContext:
         max_length = int(len(context) / 0.7)
         result = compress_context(context, max_length=max_length)
         assert "important data" in result
-        # Preview and keys lines should be removed
+        # Preview and keys lines should be removed by regex fallback
         assert "preview:" not in result
         assert "keys:" not in result
 

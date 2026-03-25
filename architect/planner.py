@@ -1184,6 +1184,28 @@ def _is_confused_output(result: str, original_desc: str, error: str) -> bool:
         return True
     if error and len(error) > 200 and error[:200] in result:
         return True
+    # Detect rewrites that collapse into success summaries or output
+    # reports instead of actionable task descriptions.  A valid task
+    # description should contain imperative verbs or action-oriented
+    # language, not just a list of results.
+    result_lower = result.lower()
+    _SUMMARY_SIGNALS = [
+        "all checks passed", "all tests passed", "validation passed",
+        "verification passed", "no files modified", "uas_result:",
+    ]
+    signal_count = sum(1 for s in _SUMMARY_SIGNALS if s in result_lower)
+    if signal_count >= 2:
+        return True
+    # A very short rewrite that lacks imperative verbs is likely a
+    # summary, not a task description.
+    _ACTION_VERBS = [
+        "create ", "write ", "build ", "implement ", "generate ",
+        "validate ", "check ", "verify ", "test ", "run ", "install ",
+        "parse ", "read ", "load ", "import ", "define ", "add ",
+        "fix ", "update ", "ensure ", "compute ", "calculate ",
+    ]
+    if len(result) < 500 and not any(v in result_lower for v in _ACTION_VERBS):
+        return True
     return False
 
 

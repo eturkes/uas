@@ -2531,7 +2531,7 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
     # verification script can write tests that match the actual
     # implementation (column-name patterns, function signatures, etc.).
     source_info = ""
-    _MAX_SOURCE_CHARS = 4000
+    _MAX_SOURCE_CHARS = 12000
     _source_chars = 0
     if step.get("files_written"):
         source_parts = []
@@ -2564,18 +2564,23 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
 
     # Build module availability context so verification scripts only
     # attempt to import functions that actually exist in the workspace.
+    # Walk the full directory tree to discover modules in subpackages
+    # (e.g. data/loader.py, dashboard/tabs/cohort.py) — not just root.
     module_info = ""
+    _SKIP_SCAN_DIRS = {
+        ".state", ".git", "__pycache__", "node_modules", ".venv",
+        "venv", ".tox", ".eggs", ".uas_auth",
+    }
     try:
         module_lines = []
-        src_dir = os.path.join(workspace, "src")
-        scan_dirs = [workspace]
-        if os.path.isdir(src_dir):
-            scan_dirs.append(src_dir)
-        for scan_dir in scan_dirs:
-            for entry in sorted(os.listdir(scan_dir)):
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [
+                d for d in sorted(dirs) if d not in _SKIP_SCAN_DIRS
+            ]
+            for entry in sorted(files):
                 if not entry.endswith(".py") or entry.startswith("."):
                     continue
-                fpath = os.path.join(scan_dir, entry)
+                fpath = os.path.join(root, entry)
                 if not os.path.isfile(fpath):
                     continue
                 rel = os.path.relpath(fpath, workspace)
@@ -2608,6 +2613,9 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
         f"- Print 'VERIFICATION PASSED' if all checks pass\n"
         f"- Print 'VERIFICATION FAILED: <reason>' and exit(1) if any check fails\n"
         f"- Be thorough but concise\n"
+        f"- IMPORTANT: The verification script MUST be strictly READ-ONLY. "
+        f"Do NOT write, modify, patch, or overwrite any source files. "
+        f"Only read files and import modules to verify correctness.\n"
         f"- IMPORTANT: Only import functions that are listed in the module "
         f"exports above. If a function you need is NOT listed (not yet "
         f"implemented), build test data inline instead of importing it. "
@@ -2618,6 +2626,10 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
         f"matching a specific pattern, your test columns MUST match that "
         f"pattern. Do NOT put anomalies in columns where the code does not "
         f"handle them.\n"
+        f"- IMPORTANT: When working with DataFrames, discover actual column "
+        f"names from the data itself (e.g. df.columns.tolist()) rather than "
+        f"guessing column names like 'PatientID'. Use the module exports "
+        f"above to find the correct API to load data.\n"
     )
 
     result = run_orchestrator(

@@ -115,7 +115,7 @@ present in output").
    - For JSON files containing `accuracy` and `baseline_accuracy`, verify
      accuracy >= baseline_accuracy.
 
-- [ ] Done
+- [x] Done
 
 ---
 

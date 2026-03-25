@@ -187,6 +187,22 @@ BAD: "Use the Twitter API v2 endpoint /tweets/search/recent" (may be outdated) \
 GOOD: "Query the Twitter/X API documentation to find the current search endpoint, then implement"
 </anti_patterns>
 
+<verification_guidelines>
+Write verification criteria that test CORRECTNESS, not just EXISTENCE:
+- For data steps: verify row counts, column types, and value ranges match
+  expectations. Check for unexpected 100% NaN columns.
+- For modeling steps: verify model outperforms a trivial baseline (majority
+  class, mean prediction). If it doesn't, the step has FAILED.
+- For analysis steps: verify each claimed analysis actually appears in the
+  output (not just that the output file exists).
+- For integration steps: verify the output works in a clean environment,
+  not just the current sandbox.
+Anti-pattern: "file exists and is non-empty" -- this catches nothing.
+Good pattern: "model_metrics.json accuracy > baseline_accuracy AND all
+per_class_f1 values are defined AND confusion matrix is not degenerate
+(predicts more than one class)"
+</verification_guidelines>
+
 <expert_approach>
 ## How an Expert Would Approach This
 Think like a senior engineer planning this project:

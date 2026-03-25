@@ -1762,7 +1762,23 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
         if lower.endswith(".json"):
             try:
                 with open(fpath, "r", encoding="utf-8", errors="replace") as jf:
-                    json.load(jf)
+                    data = json.load(jf)
+                # Check accuracy vs baseline accuracy
+                if isinstance(data, dict):
+                    accuracy = data.get("accuracy")
+                    baseline = data.get("baseline_accuracy")
+                    if (
+                        accuracy is not None
+                        and baseline is not None
+                        and isinstance(accuracy, (int, float))
+                        and isinstance(baseline, (int, float))
+                        and accuracy < baseline
+                    ):
+                        issues.append(
+                            f"File '{f}': model accuracy ({accuracy:.4f}) is below "
+                            f"baseline accuracy ({baseline:.4f}) — model is worse "
+                            f"than trivial baseline"
+                        )
             except (json.JSONDecodeError, OSError) as e:
                 issues.append(f"File '{f}' has invalid JSON: {e}")
 
@@ -1772,6 +1788,32 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
                     first_line = cf.readline()
                 if not first_line.strip():
                     issues.append(f"File '{f}' is a CSV with no header line")
+                else:
+                    # Check for columns that are 100% NaN
+                    try:
+                        import csv as _csv
+
+                        with open(fpath, "r", encoding="utf-8", errors="replace") as cf:
+                            reader = _csv.DictReader(cf)
+                            headers = reader.fieldnames or []
+                            if headers:
+                                row_count = 0
+                                nan_counts: dict[str, int] = {h: 0 for h in headers}
+                                for row in reader:
+                                    row_count += 1
+                                    for h in headers:
+                                        val = (row.get(h) or "").strip().lower()
+                                        if val in ("", "nan", "none", "null", "na", "n/a"):
+                                            nan_counts[h] += 1
+                                if row_count > 0:
+                                    for h in headers:
+                                        if nan_counts[h] == row_count:
+                                            issues.append(
+                                                f"File '{f}' column '{h}' is 100% NaN/empty "
+                                                f"({row_count} rows)"
+                                            )
+                    except Exception:
+                        pass  # Column-level check is best-effort
             except OSError as e:
                 issues.append(f"File '{f}' could not be read: {e}")
 

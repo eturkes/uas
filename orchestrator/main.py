@@ -38,7 +38,7 @@ You are reviewing generated Python code before it runs in a sandbox.
 </code>
 
 Check for these common issues:
-1. Importing a package that is never pip-installed in the script
+1. Importing a package that is never installed in the script (via uv pip install or pip install)
 2. Using file paths without os.path.join(workspace, ...) where workspace = os.environ.get("WORKSPACE", "/workspace")
 3. Missing the UAS_RESULT output line entirely
 4. Obvious infinite loops or blocking operations (e.g. server.serve_forever() without a thread)
@@ -674,7 +674,7 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                     f"- {name}=={ver}" for name, ver in sorted(version_map.items())
                 )
                 pkg_hint += (
-                    f"\nCurrent stable versions from PyPI (use these for pip install):\n"
+                    f"\nCurrent stable versions from PyPI (use these for uv pip install):\n"
                     f"{version_lines}\n"
                 )
 
@@ -721,18 +721,15 @@ Before writing code, reason through these questions:
 1. What is the best approach for this task? Are there multiple strategies?
    Pick the most robust one.
 2. What packages or tools does this require? What are their current stable
-   versions? If you're not sure, check PyPI (https://pypi.org/pypi/PACKAGE/json)
-   or use pip's --dry-run flag to verify availability.
+   versions? If you're not sure, check PyPI (https://pypi.org/pypi/PACKAGE/json).
 3. Are there known pitfalls, breaking changes, or deprecations in the
    libraries you plan to use? If uncertain, check the docs.
 4. If the task involves an external API or data source, what is its current
    format/schema? Don't assume — verify if possible.
 5. Would any development tools improve the quality of your output?
-   Consider linters, formatters, type checkers, test runners, or
-   domain-specific tools. Install and use them if they'd catch bugs
-   or improve code quality. You can search for tools with
-   `pip search` alternatives (e.g., check PyPI directly) or simply
-   install well-known tools in the relevant domain.
+   Consider ruff (linting/formatting), pyright (type checking), pytest
+   (testing), or domain-specific tools. Install and use them if they'd
+   catch bugs or improve code quality.
 
 Encode your research findings directly into your code as comments or as
 defensive checks. Don't produce a separate research document — just write
@@ -746,7 +743,7 @@ better code because you researched first.
 You are running inside an isolated, disposable container. You have FULL AUTONOMY:
 - ROOT ACCESS. Install any system packages with apt-get. No sudo needed.
 - UNRESTRICTED NETWORK. Fetch any URL, call any API, clone any repo. No firewall, no proxy.
-- PACKAGE INSTALLATION. pip install anything you need. Do it proactively at the top of your script.
+- PACKAGE INSTALLATION. `uv` is pre-installed. Use `uv pip install --system` for fast package installation. Do it proactively at the top of your script.
 - COMMAND EXECUTION. Run any shell command via subprocess. No restrictions whatsoever.
 - WEB SEARCH. If you need to look something up — current library versions, API docs, best practices — you can and should use the network.
 - FILESYSTEM. Full read/write. Workspace: os.environ.get("WORKSPACE", "/workspace").
@@ -841,7 +838,7 @@ Do NOT use any XML tags, tool_call blocks, or analysis sections.
 - Use context managers (with statements) for file I/O.
 - Specify encoding="utf-8" when opening text files.
 - Do NOT run git init or any git commands -- version control is managed by the framework.
-- Pin dependency versions in pip install commands.
+- Pin dependency versions in install commands.
 - The workspace IS the project root. Write files directly to os.path.join(workspace, ...).
   Do NOT create a project subdirectory (e.g., os.path.join(workspace, "myproject", "main.py")).
 - When the workspace already contains subdirectories (e.g., "outputs/", "data/", "models/"),

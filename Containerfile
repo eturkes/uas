@@ -18,6 +18,10 @@ WORKDIR /uas
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
+# Install uv for fast package management (used by generated scripts)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -sf /root/.local/bin/uv /usr/local/bin/uv
+
 COPY orchestrator/ ./orchestrator/
 COPY architect/ ./architect/
 COPY entrypoint.sh .

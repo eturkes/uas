@@ -14,14 +14,22 @@ Your script will run inside an isolated workspace directory.
 
 ## Environment
 - Python 3.12 (full standard library available)
+- `uv` is pre-installed for fast package management
 - Full network access and root permissions
 - Workspace directory: use `os.environ.get('WORKSPACE', '/workspace')` for all file paths
-- No packages are pre-installed. Proactively install everything you need, including
-  dev tools (linters, formatters, test runners) when they'd improve quality.
+- No Python packages are pre-installed beyond the standard library. Proactively
+  install everything you need, including dev tools (linters, formatters, test
+  runners) when they'd improve quality.
+
+## Package Management
+- Use `uv` for all package installation -- it is dramatically faster than pip:
+  `subprocess.run(["uv", "pip", "install", "--system", ...], check=True)`
+- Pin dependency versions (e.g., `requests==2.32.3` not just `requests`)
+- If `uv` is not available, fall back to:
+  `subprocess.run([sys.executable, "-m", "pip", "install", ...], check=True)`
 
 ## Coding Standards
 - Produce a single, self-contained Python script with all imports at the top
-- Use `subprocess.run([sys.executable, "-m", "pip", "install", ...], check=True)` for package installation rather than assuming packages exist
 - Always use `os.path.join(workspace, ...)` for file paths -- never use hardcoded absolute paths
 - Always print results and progress to stdout so the caller can track execution
 - Handle errors with informative messages -- include what failed and why
@@ -52,7 +60,6 @@ When generating modules that are part of a multi-file project:
 - Always use HTTPS URLs (never plain `http://`) for downloads and API calls
 - Use `subprocess.run()` with list arguments -- never use `shell=True` unless absolutely necessary
 - Do not use `eval()`, `exec()`, or `pickle.loads()` on untrusted data
-- Pin dependency versions when installing packages (e.g., `requests==2.32.3` not just `requests`)
 - Use the `tempfile` module for temporary files, not hardcoded paths in `/tmp`
 - Validate and sanitize all external inputs (user data, file contents, API responses)
 
@@ -64,10 +71,20 @@ When generating modules that are part of a multi-file project:
 - Use `sys.exit(0)` for success and `sys.exit(1)` for failure -- use meaningful exit codes
 - Include a brief docstring at the top of the script explaining what it does
 
+## Tooling Preferences
+Always prefer modern, best-in-class tools over legacy alternatives:
+- **Package management:** `uv` over pip/pip-tools/pipenv
+- **Project metadata:** `pyproject.toml` over setup.py/setup.cfg/requirements.txt
+- **Linting/formatting:** `ruff` over flake8/pylint/black/isort
+- **Type checking:** `pyright` or `mypy` when type safety matters
+- **Testing:** `pytest` over unittest
+When in doubt, check what the ecosystem currently recommends -- prefer tools
+that are actively maintained, fast, and widely adopted.
+
 ## Project Setup Best Practices
 When the task involves creating a project or application (not a simple one-off script):
 - Create a `README.md` with a brief description, setup instructions, and usage examples
-- Create a `requirements.txt` with pinned versions for all dependencies used
+- Create a `pyproject.toml` with project metadata and pinned dependencies
 - Structure code into functions rather than top-level procedural code
 - Add a `if __name__ == "__main__":` guard for the entry point
 

@@ -17,6 +17,7 @@ Your script will run inside an isolated workspace directory.
 
 ## Environment
 - Python 3.12 (full standard library available)
+- `uv` is pre-installed for fast package management
 - Full network access and root permissions
 - The WORKSPACE environment variable points to the project root.
 - For the fallback, use the script's own directory:
@@ -25,12 +26,19 @@ Your script will run inside an isolated workspace directory.
 - When a module is inside a subdirectory (e.g., dashboard/), the fallback
   should be the PARENT directory:
   `os.environ.get("WORKSPACE", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))`
-- No packages are pre-installed. Proactively install everything you need, including
-  dev tools (linters, formatters, test runners) when they'd improve quality.
+- No Python packages are pre-installed beyond the standard library. Proactively
+  install everything you need, including dev tools (linters, formatters, test
+  runners) when they'd improve quality.
+
+## Package Management
+- Use `uv` for all package installation -- it is dramatically faster than pip:
+  `subprocess.run(["uv", "pip", "install", "--system", ...], check=True)`
+- Pin dependency versions (e.g., `requests==2.32.3` not just `requests`)
+- If `uv` is not available, fall back to:
+  `subprocess.run([sys.executable, "-m", "pip", "install", ...], check=True)`
 
 ## Coding Standards
 - Produce a single, self-contained Python script with all imports at the top
-- Use `subprocess.run([sys.executable, "-m", "pip", "install", ...], check=True)` for package installation rather than assuming packages exist
 - Always use `os.path.join(workspace, ...)` for file paths -- never use hardcoded absolute paths
 - Always print results and progress to stdout so the caller can track execution
 - Handle errors with informative messages -- include what failed and why
@@ -61,7 +69,6 @@ When generating modules that are part of a multi-file project:
 - Always use HTTPS URLs (never plain `http://`) for downloads and API calls
 - Use `subprocess.run()` with list arguments -- never use `shell=True` unless absolutely necessary
 - Do not use `eval()`, `exec()`, or `pickle.loads()` on untrusted data
-- Pin dependency versions when installing packages (e.g., `requests==2.32.3` not just `requests`)
 - Use the `tempfile` module for temporary files, not hardcoded paths in `/tmp`
 - Validate and sanitize all external inputs (user data, file contents, API responses)
 
@@ -73,10 +80,20 @@ When generating modules that are part of a multi-file project:
 - Use `sys.exit(0)` for success and `sys.exit(1)` for failure -- use meaningful exit codes
 - Include a brief docstring at the top of the script explaining what it does
 
+## Tooling Preferences
+Always prefer modern, best-in-class tools over legacy alternatives:
+- **Package management:** `uv` over pip/pip-tools/pipenv
+- **Project metadata:** `pyproject.toml` over setup.py/setup.cfg/requirements.txt
+- **Linting/formatting:** `ruff` over flake8/pylint/black/isort
+- **Type checking:** `pyright` or `mypy` when type safety matters
+- **Testing:** `pytest` over unittest
+When in doubt, check what the ecosystem currently recommends -- prefer tools
+that are actively maintained, fast, and widely adopted.
+
 ## Project Setup Best Practices
 When the task involves creating a project or application (not a simple one-off script):
 - Create a `README.md` with a brief description, setup instructions, and usage examples
-- Create a `requirements.txt` with pinned versions for all dependencies used
+- Create a `pyproject.toml` with project metadata and pinned dependencies
 - Structure code into functions rather than top-level procedural code
 - Add a `if __name__ == "__main__":` guard for the entry point
 
@@ -94,13 +111,13 @@ def _collect_module_apis(prior_steps: list) -> list[tuple[str, dict]]:
     """Collect module API info from prior steps that produced .py files.
 
     Returns a list of (filepath, api_dict) tuples where api_dict has keys
-    'functions', 'classes', 'constants'.
+    'functions', 'classes', 'constants', 'variables'.
     """
     result = []
     for ps in prior_steps:
         module_apis = ps.get("module_apis", {})
         for filepath, api in module_apis.items():
-            if api.get("functions") or api.get("classes") or api.get("constants"):
+            if api.get("functions") or api.get("classes") or api.get("constants") or api.get("variables"):
                 result.append((filepath, api))
     return result
 
@@ -143,6 +160,8 @@ def _format_step_context(ctx: dict) -> str:
                 parts.append(f"classes=[{', '.join(api['classes'])}]")
             if api.get("constants"):
                 parts.append(f"constants=[{', '.join(api['constants'])}]")
+            if api.get("variables"):
+                parts.append(f"variables=[{', '.join(api['variables'])}]")
             if parts:
                 lines.append(f"- `{filepath}`: {', '.join(parts)}")
         lines.append("")

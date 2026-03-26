@@ -164,7 +164,7 @@ Failure modes: blocked by site, empty results, no matching products.
 
 <anti_patterns>
 Common decomposition mistakes to avoid:
-- Over-splitting trivial tasks: a single pip install + script does not need 3 separate steps
+- Over-splitting trivial tasks: a single package install + script does not need 3 separate steps
 - Under-splitting complex tasks: a step that does "download, parse, transform, analyze, \
 and visualize" should be broken down. A step that requires model training AND \
 explainability AND visualization is too large — split them into separate steps \
@@ -285,14 +285,15 @@ Maximize parallelism by making steps independent whenever possible.
 5. Scale the number of steps to the goal's complexity: \
 1 step for trivial tasks, 2-3 for simple, 5-10 for medium, 10-20 for complex. \
 Prefer more, smaller steps over fewer, larger ones.
-6. The execution environment has full unrestricted network access and complete \
-autonomy. Install any packages needed (pip, apt-get, etc.) without hesitation.
+6. The execution environment has full unrestricted network access, complete \
+autonomy, and `uv` pre-installed. Install any packages needed (uv pip install, \
+apt-get, etc.) without hesitation.
 7. Each step must produce observable output to stdout so downstream steps \
 can use the results.
 8. Do NOT create steps that require user interaction.
 9. Do NOT include any steps that run `git init` or other git commands — version \
 control is managed automatically by the framework. Focus steps on the actual work.
-10. All projects must include a README.md and requirements.txt with pinned versions.
+10. All projects must include a README.md and a pyproject.toml with pinned dependencies.
 11. Never hardcode secrets or API keys in step descriptions — instruct the code \
 to read them from environment variables.
 12. Always prefer HTTPS URLs. Pin dependency versions. Use context managers for I/O.
@@ -318,7 +319,7 @@ array. Each element:
 "description": "detailed task for a code-generating LLM", \
 "depends_on": [step_numbers], \
 "verify": "how to verify this step succeeded beyond exit code 0", \
-"environment": ["pip or apt packages needed, if any"]}}
+"environment": ["packages needed, if any"]}}
 
 Steps are numbered starting from 1. depends_on references must use 1-based step \
 numbers (e.g. step 2 depending on step 1 should have "depends_on": [1]).
@@ -801,7 +802,7 @@ artifacts via the shared workspace.
 5. Are the verify fields specific enough to catch subtle failures?
 6. Are environment/package requirements complete?
 7. Does the plan correctly avoid git commands (version control is managed by the framework)?
-8. Does the plan ensure a README.md and requirements.txt (with pinned versions) are created for any multi-file project?
+8. Does the plan ensure a README.md and pyproject.toml (with pinned dependencies) are created for any multi-file project?
 9. Do step descriptions avoid hardcoding secrets and instead instruct reading from environment variables?
 10. Do steps use HTTPS URLs, not plain HTTP?
 </review_criteria>

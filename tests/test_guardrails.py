@@ -155,7 +155,7 @@ class TestCheckProjectGuardrails:
         (tmp_path / "utils.py").write_text("def helper(): pass")
         (tmp_path / ".gitignore").write_text("__pycache__/\n")
         (tmp_path / "README.md").write_text("# Project\n")
-        (tmp_path / "requirements.txt").write_text("requests==2.32.3\n")
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "test"\n')
         # Simulate git init -b main
         git_dir = tmp_path / ".git"
         git_dir.mkdir()

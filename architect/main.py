@@ -87,20 +87,25 @@ def _is_rate_limited(error_text: str) -> bool:
     return any(pat in lower for pat in _RATE_LIMIT_PATTERNS)
 
 
-# Section 8: Regex to extract package versions from pip install output.
+# Section 8: Regex to extract package versions from pip/uv install output.
 # Matches lines like "Successfully installed requests-2.31.0 pandas-2.1.4"
+# and uv output like "Installed 3 packages in 120ms" followed by
+# " + requests==2.31.0" lines.
 _PIP_INSTALLED_RE = re.compile(
     r"Successfully installed\s+(.*)", re.IGNORECASE
 )
 _PKG_VERSION_RE = re.compile(r"(\S+?)-(\d[\w.]*)")
+_UV_INSTALLED_RE = re.compile(r"^\s*\+\s*(\S+)==(\d[\w.]*)", re.MULTILINE)
 
 
 def _extract_installed_packages(output: str) -> dict[str, str]:
-    """Extract package->version mappings from pip install stdout."""
+    """Extract package->version mappings from pip or uv install stdout."""
     packages: dict[str, str] = {}
     for match in _PIP_INSTALLED_RE.finditer(output):
         for pkg_match in _PKG_VERSION_RE.finditer(match.group(1)):
             packages[pkg_match.group(1)] = pkg_match.group(2)
+    for match in _UV_INSTALLED_RE.finditer(output):
+        packages[match.group(1)] = match.group(2)
     return packages
 
 RETRY_DECISION_PROMPT = """\
@@ -2265,7 +2270,7 @@ def check_project_guardrails(workspace: str) -> list[str]:
     if not has_deps:
         warnings.append(
             "Project has no dependency file "
-            "(requirements.txt or pyproject.toml)"
+            "(pyproject.toml or requirements.txt)"
         )
 
     # Check for orphaned modules

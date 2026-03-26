@@ -1827,6 +1827,53 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
             except OSError as e:
                 issues.append(f"File '{f}' could not be read: {e}")
 
+    # Data leakage detection: when a step produces a model file AND a metrics
+    # JSON, check whether any feature name shares a temporal prefix with the
+    # target variable (e.g. "discharge" features predicting a "discharge" target).
+    lower_files = [f.lower() for f in files_written]
+    has_model_file = any(
+        f.endswith(".joblib") or f.endswith(".pkl") or f.endswith("model.pickle")
+        for f in lower_files
+    )
+    metrics_files = [
+        f for f, lf in zip(files_written, lower_files)
+        if lf.endswith(".json") and "metric" in lf
+    ]
+    if has_model_file and metrics_files:
+        for mf in metrics_files:
+            mpath = os.path.join(workspace, mf) if not os.path.isabs(mf) else mf
+            try:
+                with open(mpath, "r", encoding="utf-8", errors="replace") as jf:
+                    mdata = json.load(jf)
+                if not isinstance(mdata, dict):
+                    continue
+                feature_names = mdata.get("feature_names") or mdata.get("features") or []
+                target_name = (
+                    mdata.get("target") or mdata.get("target_variable") or ""
+                )
+                if not feature_names or not target_name:
+                    continue
+                # Extract temporal prefix from target (e.g. "discharge" from
+                # "discharge_ais") — use the first underscore-delimited token.
+                target_prefix = target_name.split("_")[0].lower()
+                if len(target_prefix) < 3:
+                    continue  # Too short to be a meaningful temporal indicator
+                leaked = [
+                    fn for fn in feature_names
+                    if fn.lower().startswith(target_prefix + "_")
+                    and fn.lower() != target_name.lower()
+                ]
+                if leaked:
+                    issues.append(
+                        f"File '{mf}': possible data leakage — features "
+                        f"{leaked[:5]} share temporal prefix '{target_prefix}' "
+                        f"with target '{target_name}'. These may be "
+                        f"future-time variables that should not be used as "
+                        f"predictors."
+                    )
+            except (json.JSONDecodeError, OSError, KeyError):
+                pass  # Leakage check is best-effort
+
     return issues
 
 

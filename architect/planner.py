@@ -185,6 +185,12 @@ use the exact source column name or a data-loading step must explicitly perform 
 interfaces, or data formats are current — they may have changed. \
 BAD: "Use the Twitter API v2 endpoint /tweets/search/recent" (may be outdated) \
 GOOD: "Query the Twitter/X API documentation to find the current search endpoint, then implement"
+- Data leakage in predictive modeling: when a step trains a model to predict \
+an outcome (e.g., discharge status), it must ONLY use features available at \
+prediction time (e.g., admission features). Using discharge-time measurements \
+to predict discharge outcomes is data leakage. The step description must \
+explicitly state which features are allowed and why. The verify criteria must \
+check that no future-time features are included.
 </anti_patterns>
 
 <verification_guidelines>
@@ -223,6 +229,9 @@ Think like a senior engineer planning this project:
   to discover the current version of a library, API endpoint format, or best
   practices, mention that in the step description. The executor can and will
   look things up.
+- For predictive modeling tasks, always specify the temporal boundary: which
+  data is available at prediction time vs. which data is the target. Instruct
+  the code to explicitly filter features by this boundary.
 </expert_approach>
 
 <instructions>

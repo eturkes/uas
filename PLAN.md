@@ -150,7 +150,7 @@ features from the same time period as the target variable.
    - If any feature name contains temporal indicators matching the target
      (e.g., both contain "discharge"), emit a warning.
 
-- [ ] Done
+- [x] Done
 
 ---
 

@@ -201,7 +201,7 @@ class TestExtractJsonKeys:
 
     def test_list_of_dicts(self):
         result = _extract_json_keys('[{"x": 1}, {"x": 2}]')
-        assert "list of 2 items" in result
+        assert "2 items" in result
         assert "x" in result
 
     def test_invalid_json(self):
@@ -210,7 +210,7 @@ class TestExtractJsonKeys:
 
     def test_scalar_json(self):
         result = _extract_json_keys("42")
-        assert result == "int"
+        assert "42" in result
 
 
 class TestSummarizeContext:

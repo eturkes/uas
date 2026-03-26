@@ -1270,12 +1270,26 @@ def _is_confused_output(result: str, original_desc: str, error: str) -> bool:
     # language, not just a list of results.
     result_lower = result.lower()
     _SUMMARY_SIGNALS = [
-        "all checks passed", "all tests passed", "validation passed",
-        "verification passed", "no files modified", "uas_result:",
+        "all checks passed", "all checks pass",
+        "all tests passed", "all tests pass",
+        "validation passed", "verification passed",
+        "no files modified", "uas_result:",
+        "here's what was fixed", "here's what was changed",
+        "here's what was done", "here is what was fixed",
+        "the following changes were made",
+        "successfully updated", "successfully fixed",
     ]
     signal_count = sum(1 for s in _SUMMARY_SIGNALS if s in result_lower)
-    if signal_count >= 2:
-        return True
+    if signal_count >= 1:
+        # Even a single summary signal is suspicious — check whether the
+        # text reads as a past-tense report rather than an imperative task.
+        _REPORT_PATTERNS = [
+            "changed from", "renamed to", "updated to",
+            "moved to", "removed;", "scores remain",
+        ]
+        report_hits = sum(1 for p in _REPORT_PATTERNS if p in result_lower)
+        if signal_count >= 2 or report_hits >= 2:
+            return True
     # A very short rewrite that lacks imperative verbs is likely a
     # summary, not a task description.
     _ACTION_VERBS = [

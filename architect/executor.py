@@ -682,6 +682,16 @@ def scan_workspace_files(workspace_path: str, recursive: bool = True,
                         file_info["preview"] = f.readline() + f.readline()
                 except OSError:
                     pass
+            elif entry.endswith(".json") and stat.st_size < 50000:
+                # Read the full JSON file (up to 50KB) so the key
+                # extractor can map the complete schema.  The 200-char
+                # default is far too short for nested JSON — without the
+                # full structure, the coder guesses wrong key paths.
+                try:
+                    with open(full_path, "r", errors="replace") as f:
+                        file_info["preview"] = f.read()
+                except OSError:
+                    pass
             elif file_info["type"] == "text" and stat.st_size < 50000:
                 try:
                     with open(full_path, "r", errors="replace") as f:

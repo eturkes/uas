@@ -800,16 +800,52 @@ def get_goal(args) -> str:
 
 
 def _extract_json_keys(preview: str) -> str:
-    """Extract top-level keys/schema from a JSON preview string."""
+    """Extract nested key structure from a JSON preview string.
+
+    Returns a compact representation of keys to 2 levels deep so the
+    coder can see the actual schema (e.g. which sub-keys exist under
+    each top-level key) rather than just the raw text beginning.
+    """
     try:
         data = json.loads(preview)
-        if isinstance(data, dict):
-            return str(list(data.keys()))
-        if isinstance(data, list) and data and isinstance(data[0], dict):
-            return f"list of {len(data)} items, keys: {list(data[0].keys())}"
-        return type(data).__name__
-    except (json.JSONDecodeError, IndexError):
-        return preview[:100]
+    except (json.JSONDecodeError, ValueError):
+        # Preview may be truncated — try adding closing braces to
+        # recover at least the keys that were fully written.
+        for suffix in ("}", "}}", "]}"):
+            try:
+                data = json.loads(preview.rsplit(",", 1)[0] + suffix)
+                break
+            except (json.JSONDecodeError, ValueError):
+                continue
+        else:
+            return preview[:100]
+
+    def _summarise(obj: object, depth: int = 0) -> str:
+        """Recursively summarise JSON structure to *depth* 2."""
+        if isinstance(obj, dict):
+            if depth >= 2:
+                return "{...}"
+            parts = []
+            for k, v in obj.items():
+                parts.append(f"{k}: {_summarise(v, depth + 1)}")
+            return "{" + ", ".join(parts) + "}"
+        if isinstance(obj, list):
+            if not obj:
+                return "[]"
+            return f"[{_summarise(obj[0], depth)}... ({len(obj)} items)]"
+        if isinstance(obj, str):
+            return "str"
+        if isinstance(obj, (int, float)):
+            return str(obj)
+        if obj is None:
+            return "null"
+        return type(obj).__name__
+
+    result = _summarise(data)
+    # Cap length so the preview doesn't bloat the context.
+    if len(result) > 1500:
+        result = result[:1500] + "..."
+    return result
 
 
 def summarize_context(context: str, goal: str, max_length: int,

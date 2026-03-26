@@ -1,7 +1,12 @@
 """Generate UAS-compliant markdown spec files for individual steps."""
 
 import os
+import re
 from .state import get_specs_dir
+
+_MODELING_RE = re.compile(
+    r'\b(?:model|train|predict|classif|regress)', re.IGNORECASE,
+)
 
 
 def generate_spec(step: dict, total_steps: int, context: str = "",
@@ -35,6 +40,20 @@ def generate_spec(step: dict, total_steps: int, context: str = "",
         spec += "## Context\n"
         spec += f"{context}\n\n"
 
+    # Section 7: For modeling steps, prepend a data-quality review directive.
+    if _MODELING_RE.search(step.get("description", "")):
+        spec += "## Data Quality Review\n"
+        spec += (
+            "BEFORE writing any modeling code, review the "
+            "<data_quality_warnings> section.\n"
+            "If critical features are all NaN, you must either:\n"
+            "(a) Fix the upstream computation by re-running feature "
+            "extraction, OR\n"
+            "(b) Report the issue and use only features with valid data.\n"
+            "Do NOT silently impute all-NaN columns with 0 -- this produces "
+            "meaningless models.\n\n"
+        )
+
     spec += "## Task\n"
     spec += f"Write a Python script that accomplishes the objective above.\n\n"
 
@@ -57,6 +76,17 @@ def generate_spec(step: dict, total_steps: int, context: str = "",
 def build_task_from_spec(step: dict, context: str = "") -> str:
     """Build the task string to pass to the Orchestrator."""
     task = step["description"]
+    # Section 7: For modeling steps, prepend data-quality review directive.
+    if _MODELING_RE.search(step.get("description", "")):
+        task += (
+            "\n\nBEFORE writing any modeling code, review the "
+            "<data_quality_warnings> section. "
+            "If critical features are all NaN, you must either: "
+            "(a) fix the upstream computation by re-running feature "
+            "extraction, or "
+            "(b) report the issue and use only features with valid data. "
+            "Do NOT silently impute all-NaN columns with 0."
+        )
     if context:
         task += f"\n\nContext from previous steps:\n{context}"
     return task

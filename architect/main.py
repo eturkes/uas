@@ -1437,6 +1437,32 @@ def build_context(step: dict, completed_outputs: dict,
                 f"</previous_step_output>"
             )
 
+    # Section 7: Extract data-quality mentions from dependency parts and
+    # promote them to a top-level <data_quality_warnings> section so they
+    # are not buried inside <dependency> blocks.
+    _DQ_PATTERN = re.compile(
+        r'(?:100%\s*NaN|all\s*NaN|entirely\s*NaN'
+        r'|\b\d{2,3}%\s*NaN|\b\d{2,3}%\s*missing'
+        r'|degenerate|constant\s*column|zero\s*variance'
+        r'|no\s*valid\s*data|critical\s*missing)',
+        re.IGNORECASE,
+    )
+    dq_lines: list[str] = []
+    for part in parts:
+        for line in part.split("\n"):
+            if _DQ_PATTERN.search(line):
+                cleaned = line.strip().lstrip("- ")
+                if cleaned and cleaned not in dq_lines:
+                    dq_lines.append(cleaned)
+    if dq_lines:
+        warning_block = "\n".join(f"- {w}" for w in dq_lines)
+        parts.insert(
+            0,
+            "<data_quality_warnings>\n"
+            + warning_block
+            + "\n</data_quality_warnings>",
+        )
+
     # Section 11: Enrichment context from completed upstream steps.
     # Stored in state["enrichment_context"] rather than baked into
     # descriptions, so compression logic can filter it.

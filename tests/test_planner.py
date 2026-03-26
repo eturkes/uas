@@ -306,15 +306,15 @@ class TestIsConfusedOutput:
     def test_excessive_length(self):
         assert _is_confused_output("x" * 10000, "short", "") is True
 
-    def test_reasonable_length(self):
-        assert _is_confused_output("reasonable output", "short task", "") is False
+    def test_reasonable_task_description(self):
+        assert _is_confused_output("Create the output file and validate it", "short task", "") is False
 
     def test_error_verbatim(self):
         error = "A" * 300
         assert _is_confused_output(f"prefix {error} suffix", "task", error) is True
 
     def test_short_error_not_flagged(self):
-        assert _is_confused_output("has error text", "task", "error") is False
+        assert _is_confused_output("Write the output and fix error text", "task", "error") is False
 
 
 class TestDecomposeFailingStep:

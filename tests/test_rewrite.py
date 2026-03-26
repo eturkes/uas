@@ -44,8 +44,8 @@ class TestCheckRewriteQualityLLM:
         client.generate.side_effect = RuntimeError("API down")
         mock_get_client.return_value = client
 
-        # Short output, no error verbatim → heuristic returns False
-        result = _check_rewrite_quality("short rewrite", "task", "err")
+        # Short output with action verb, no error verbatim → heuristic returns False
+        result = _check_rewrite_quality("Create the output file", "task", "err")
         assert result is False
 
         # Excessive length → heuristic returns True
@@ -54,8 +54,8 @@ class TestCheckRewriteQualityLLM:
 
     @patch("architect.planner.MINIMAL_MODE", True)
     def test_minimal_mode_uses_heuristic(self):
-        # Short output → heuristic returns False
-        result = _check_rewrite_quality("reasonable", "task", "")
+        # Short output with action verb → heuristic returns False
+        result = _check_rewrite_quality("Build the module", "task", "")
         assert result is False
 
         # Excessive length → heuristic returns True
@@ -137,14 +137,14 @@ class TestRewriteQualityInReflectAndRewrite:
     @patch("architect.planner.get_llm_client")
     def test_quality_check_failure_falls_back_during_rewrite(self, mock_get_client):
         client = MagicMock()
-        # First response: short and clean → heuristic fallback says not confused
+        # First response: short and clean with action verb → heuristic fallback says not confused
         client.generate.side_effect = [
-            "clean rewrite",
+            "Create the output file and validate results",
             RuntimeError("quality check API down"),
         ]
         mock_get_client.return_value = client
 
         step = {"description": "task"}
         result = reflect_and_rewrite(step, "stdout", "stderr")
-        # Quality check fails, heuristic says OK (short output, no error verbatim)
-        assert result == "clean rewrite"
+        # Quality check fails, heuristic says OK (short output with action verb)
+        assert result == "Create the output file and validate results"

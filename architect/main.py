@@ -955,6 +955,7 @@ def extract_module_api(filepath: str) -> dict:
     functions = []
     classes = []
     constants = []
+    variables = []
 
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
@@ -965,11 +966,17 @@ def extract_module_api(filepath: str) -> dict:
                 classes.append(node.name)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
-                if isinstance(target, ast.Name) and target.id.isupper():
-                    constants.append(target.id)
+                if isinstance(target, ast.Name):
+                    if target.id.isupper():
+                        constants.append(target.id)
+                    elif not target.id.startswith("_"):
+                        variables.append(target.id)
         elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id.isupper():
-                constants.append(node.target.id)
+            if isinstance(node.target, ast.Name):
+                if node.target.id.isupper():
+                    constants.append(node.target.id)
+                elif not node.target.id.startswith("_"):
+                    variables.append(node.target.id)
 
     result = {}
     if functions:
@@ -978,6 +985,8 @@ def extract_module_api(filepath: str) -> dict:
         result["classes"] = classes
     if constants:
         result["constants"] = constants
+    if variables:
+        result["variables"] = variables
     return result
 
 
@@ -1024,7 +1033,7 @@ def _distill_dependency_output(dep_id: int, dep_step: dict,
             api = extract_module_api(fpath)
             if api:
                 lines = []
-                for kind in ("functions", "classes", "constants"):
+                for kind in ("functions", "classes", "constants", "variables"):
                     if kind in api:
                         lines.append(f"      {kind}: {', '.join(api[kind])}")
                 if lines:
@@ -1138,7 +1147,7 @@ def _distill_dependency_output_llm(dep_id: int, dep_step: dict,
                 api = extract_module_api(fpath)
                 if api:
                     parts_api = []
-                    for kind in ("functions", "classes", "constants"):
+                    for kind in ("functions", "classes", "constants", "variables"):
                         if kind in api:
                             parts_api.append(
                                 f"  {kind}: {', '.join(api[kind])}")
@@ -3627,7 +3636,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                                 os.path.join(PROJECT_DIR, orph)
                             )
                             exports = []
-                            for kind in ("functions", "classes", "constants"):
+                            for kind in ("functions", "classes", "constants", "variables"):
                                 exports.extend(api.get(kind, []))
                             export_str = (
                                 ", ".join(exports) if exports else "(none)"

@@ -253,3 +253,62 @@ class TestCrossModuleImports:
         errors = check_cross_module_imports(str(tmp_path))
         assert len(errors) == 1
         assert errors[0]["line"] == 3
+
+    def test_module_level_alias_valid(self, tmp_path):
+        """Importing a module-level alias (e.g., generate_dataset = simulate) works."""
+        (tmp_path / "core.py").write_text(
+            textwrap.dedent("""\
+                def simulate():
+                    pass
+
+                generate_dataset = simulate
+            """),
+            encoding="utf-8",
+        )
+        (tmp_path / "app.py").write_text(
+            textwrap.dedent("""\
+                from core import generate_dataset
+            """),
+            encoding="utf-8",
+        )
+        errors = check_cross_module_imports(str(tmp_path))
+        assert errors == []
+
+    def test_module_level_variable_valid(self, tmp_path):
+        """Importing a non-uppercase module-level variable works."""
+        (tmp_path / "config.py").write_text(
+            textwrap.dedent("""\
+                default_seed = 42
+                app_name: str = "my_app"
+            """),
+            encoding="utf-8",
+        )
+        (tmp_path / "app.py").write_text(
+            textwrap.dedent("""\
+                from config import default_seed, app_name
+            """),
+            encoding="utf-8",
+        )
+        errors = check_cross_module_imports(str(tmp_path))
+        assert errors == []
+
+    def test_private_variable_not_exposed(self, tmp_path):
+        """Underscore-prefixed module-level variables are not part of public API."""
+        (tmp_path / "core.py").write_text(
+            textwrap.dedent("""\
+                def public_func():
+                    pass
+
+                _internal = 42
+            """),
+            encoding="utf-8",
+        )
+        (tmp_path / "app.py").write_text(
+            textwrap.dedent("""\
+                from core import _internal
+            """),
+            encoding="utf-8",
+        )
+        errors = check_cross_module_imports(str(tmp_path))
+        assert len(errors) == 1
+        assert errors[0]["imports"] == "_internal"

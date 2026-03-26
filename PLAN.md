@@ -321,7 +321,7 @@ usable output. The eval.py exists but doesn't test real-world quality.
 2. This test can be run against the `rehab/workspace/` output to validate
    improvements and can serve as a template for project-specific quality gates.
 
-- [ ] Done
+- [x] Done
 
 ---
 

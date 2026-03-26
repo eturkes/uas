@@ -49,6 +49,7 @@ If it's vague or ambiguous, expand it with sensible defaults:
 - Where should outputs be saved?
 - What quality level is expected?
 - What scope is appropriate (prototype vs production)?
+- Use the latest best-in-class tools and libraries for the task, not legacy defaults.
 
 Return ONLY the goal text (expanded or unchanged). No explanation."""
 
@@ -69,10 +70,17 @@ current best practices, relevant standards, and authoritative sources.
 Return a structured research summary:
 1. **Key findings**: Current best practices, standards, or established \
 approaches for this type of task.
-2. **Recommended libraries/tools**: Libraries, frameworks, or tools commonly \
-used, with current version numbers if known.
-3. **Common pitfalls**: Known failure modes or anti-patterns to avoid.
-4. **Citations**: URLs or reference names for sources consulted.
+2. **Recommended libraries/tools**: What are the current best-in-class \
+libraries, frameworks, and tools for this task? Actively look for modern \
+replacements that have superseded older defaults — the ecosystem evolves fast \
+and what was standard two years ago may now be obsolete. Include current \
+version numbers when known.
+3. **Tooling & infrastructure**: What are the current best practices for \
+project structure, dependency management, testing, linting, and formatting \
+in this ecosystem? Prefer the latest widely-adopted tools over legacy ones.
+4. **Common pitfalls**: Known failure modes or anti-patterns to avoid, \
+including use of deprecated libraries or outdated approaches.
+5. **Citations**: URLs or reference names for sources consulted.
 
 Be concise and actionable. Focus on information that directly informs \
 implementation decisions. If the domain is straightforward and well-understood, \
@@ -111,9 +119,13 @@ You have full network access. If the goal involves:
 - An external API: Check its current documentation for endpoints and auth methods
 - A library you're unsure about: Verify it exists on PyPI and check its current version
 - A domain you're unfamiliar with: Look up best practices and common approaches
+- Any technology choice: Research what the current best-in-class tool is — the
+  ecosystem evolves fast, and legacy defaults may have been superseded by faster,
+  better-maintained alternatives
 
 Use what you learn to make your decomposition more specific and accurate.
 Don't guess at API formats or library capabilities — verify when uncertain.
+Always specify the most modern, widely-adopted tools and libraries for the job.
 </research>
 {research_context}
 <goal>{goal}</goal>
@@ -221,6 +233,12 @@ per_class_f1 values are defined AND confusion matrix is not degenerate
 ## How an Expert Would Approach This
 Think like a senior engineer planning this project:
 
+- Always use the latest, best-in-class tools — not legacy defaults. The
+  ecosystem evolves fast. Before specifying a library, framework, or tool in a
+  step description, consider whether a more modern, faster, or better-maintained
+  alternative exists. If you're unsure, instruct the step to research current
+  best practices before implementing. This applies to everything: package
+  managers, linters, frameworks, data libraries, HTTP clients, ORMs, etc.
 - If you're unsure about the best library, API format, or approach for part of
   the task, add an early exploration step that investigates options and writes
   findings to a file. Later steps can read that file.
@@ -800,7 +818,8 @@ artifacts via the shared workspace.
 3. Are the dependencies correct? Could any steps be made independent to enable parallelism?
 4. Are there missing error handling considerations for external resources (network, files)?
 5. Are the verify fields specific enough to catch subtle failures?
-6. Are environment/package requirements complete?
+6. Are environment/package requirements complete? Do they use the current
+   best-in-class tools and libraries, not legacy or outdated alternatives?
 7. Does the plan correctly avoid git commands (version control is managed by the framework)?
 8. Does the plan ensure a README.md and pyproject.toml (with pinned dependencies) are created for any multi-file project?
 9. Do step descriptions avoid hardcoding secrets and instead instruct reading from environment variables?

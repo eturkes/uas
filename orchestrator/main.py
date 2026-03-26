@@ -720,16 +720,17 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
 Before writing code, reason through these questions:
 1. What is the best approach for this task? Are there multiple strategies?
    Pick the most robust one.
-2. What packages or tools does this require? What are their current stable
-   versions? If you're not sure, check PyPI (https://pypi.org/pypi/PACKAGE/json).
+2. What packages or tools does this require? For EACH dependency, ask: is
+   there a more modern, faster, or better-maintained alternative? The
+   ecosystem evolves fast — what was standard two years ago may be obsolete.
+   If you're not sure, check PyPI or the project's docs. Always use the
+   latest best-in-class option.
 3. Are there known pitfalls, breaking changes, or deprecations in the
    libraries you plan to use? If uncertain, check the docs.
 4. If the task involves an external API or data source, what is its current
    format/schema? Don't assume — verify if possible.
-5. Would any development tools improve the quality of your output?
-   Consider ruff (linting/formatting), pyright (type checking), pytest
-   (testing), or domain-specific tools. Install and use them if they'd
-   catch bugs or improve code quality.
+5. Would any development tools improve the quality of your output? Install
+   and use them if they'd catch bugs or improve code quality.
 
 Encode your research findings directly into your code as comments or as
 defensive checks. Don't produce a separate research document — just write
@@ -810,13 +811,16 @@ You are an expert engineer with full system access in a disposable container.
 Generate a complete, self-contained Python script.
 
 Before writing code, think about what you need:
-- What packages does this task require? Install them.
-- Are there tools that would improve quality (linters, formatters, test runners)?
-  Install and use them if it would meaningfully improve the result.
+- What packages does this task require? For each one, use the current
+  best-in-class option — not a legacy default. If a newer, faster, or
+  better-maintained tool has superseded an older one, use the newer tool.
+- Are there tools that would improve quality? Install and use them if it
+  would meaningfully improve the result.
 - Is there information you're uncertain about (API formats, library versions,
   current best practices)? Use the network to check.
 
-Act like a senior engineer who sets up their own environment before starting work.
+Act like a senior engineer who stays current and sets up their own environment
+before starting work.
 
 CRITICAL OUTPUT FORMAT: Your response must contain exactly ONE fenced code block
 tagged as ```python ... ```. The script must be complete and self-contained.

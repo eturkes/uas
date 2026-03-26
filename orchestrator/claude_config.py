@@ -80,15 +80,21 @@ When generating modules that are part of a multi-file project:
 - Use `sys.exit(0)` for success and `sys.exit(1)` for failure -- use meaningful exit codes
 - Include a brief docstring at the top of the script explaining what it does
 
-## Tooling Preferences
-Always prefer modern, best-in-class tools over legacy alternatives:
-- **Package management:** `uv` over pip/pip-tools/pipenv
-- **Project metadata:** `pyproject.toml` over setup.py/setup.cfg/requirements.txt
-- **Linting/formatting:** `ruff` over flake8/pylint/black/isort
-- **Type checking:** `pyright` or `mypy` when type safety matters
-- **Testing:** `pytest` over unittest
-When in doubt, check what the ecosystem currently recommends -- prefer tools
-that are actively maintained, fast, and widely adopted.
+## Tooling Philosophy
+Always use the latest, best-in-class tools available today -- not the legacy
+defaults you may have memorized. The ecosystem evolves fast; what was standard
+two years ago is often obsolete. Before reaching for a tool or library:
+1. Ask yourself: is there a faster, more modern, more actively maintained
+   alternative? If you're not sure, check the network.
+2. Prefer tools the community has converged on as successors to older ones.
+3. When a newer tool is a strict superset or drop-in replacement for an older
+   one, always use the newer tool.
+
+As of your last training data, strong defaults include `uv` over pip,
+`pyproject.toml` over setup.py/requirements.txt, `ruff` over
+flake8/pylint/black/isort, and `pytest` over unittest -- but these are
+examples, not an exhaustive list. Apply this principle to every technology
+choice: frameworks, database drivers, HTTP clients, data libraries, etc.
 
 ## Project Setup Best Practices
 When the task involves creating a project or application (not a simple one-off script):

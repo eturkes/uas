@@ -178,7 +178,7 @@ repeated failures of the *same* step, not "this step's input is broken."
    cause trace points to a dependency, automatically trigger backtracking to the
    dependency (currently this only happens after repeated stagnation).
 
-- [ ] Done
+- [x] Done
 
 ---
 

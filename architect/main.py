@@ -1877,6 +1877,75 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
     return issues
 
 
+# Patterns indicating data quality issues likely caused by upstream dependencies.
+_DATA_QUALITY_PATTERNS = [
+    "all nan", "100% nan", "no valid data", "constant column",
+    "all values are nan", "entirely nan", "all missing",
+]
+
+
+def _has_data_quality_error(error_text: str) -> bool:
+    """Return True if the error text indicates upstream data quality issues."""
+    lower = error_text.lower()
+    return any(pat in lower for pat in _DATA_QUALITY_PATTERNS)
+
+
+def check_input_quality(step: dict, state: dict, workspace: str) -> list[str]:
+    """Check quality of dependency outputs before code generation.
+
+    Scans CSV files produced by dependency steps for columns that are >90%
+    NaN/empty. Returns a list of warning strings (empty = clean).
+    """
+    warnings: list[str] = []
+    step_by_id = {s["id"]: s for s in state.get("steps", [])}
+
+    for dep_id in step.get("depends_on", []):
+        dep_step = step_by_id.get(dep_id, {})
+        files_written = dep_step.get("files_written", [])
+
+        for f in files_written:
+            if not f.lower().endswith(".csv"):
+                continue
+            fpath = os.path.join(workspace, f) if not os.path.isabs(f) else f
+            if not os.path.isfile(fpath):
+                continue
+            try:
+                import csv as _csv
+
+                with open(fpath, "r", encoding="utf-8", errors="replace") as cf:
+                    reader = _csv.DictReader(cf)
+                    headers = reader.fieldnames or []
+                    if not headers:
+                        continue
+                    row_count = 0
+                    nan_counts: dict[str, int] = {h: 0 for h in headers}
+                    for row in reader:
+                        row_count += 1
+                        for h in headers:
+                            val = (row.get(h) or "").strip().lower()
+                            if val in ("", "nan", "none", "null", "na", "n/a"):
+                                nan_counts[h] += 1
+                    if row_count > 0:
+                        high_nan_cols = [
+                            h for h in headers
+                            if nan_counts[h] / row_count > 0.9
+                        ]
+                        if high_nan_cols:
+                            pcts = [
+                                f"{h} ({nan_counts[h]/row_count:.0%})"
+                                for h in high_nan_cols
+                            ]
+                            warnings.append(
+                                f"Dependency step {dep_id} file '{f}': "
+                                f"columns >90% NaN/empty ({row_count} rows): "
+                                f"{', '.join(pcts)}"
+                            )
+            except Exception:
+                pass  # Input quality check is best-effort
+
+    return warnings
+
+
 def cleanup_workspace_artifacts(
     workspace: str,
     pre_step_files: set[str] | None = None,
@@ -3179,6 +3248,24 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
     _probe_environment(run_id=run_id)
     context = build_context(step, completed_outputs, state=state,
                             workspace_path=PROJECT_DIR)
+
+    # Section 3: Check input quality before code generation
+    input_warnings = check_input_quality(step, state, PROJECT_DIR)
+    if input_warnings:
+        for iw in input_warnings:
+            logger.info("  Input quality issue: %s", iw)
+        warning_block = "\n".join(f"- {w}" for w in input_warnings)
+        context = (
+            "<data_quality_warnings>\n"
+            "WARNING: Dependency output has quality issues:\n"
+            f"{warning_block}\n"
+            "Consider whether these indicate a bug in the upstream step. "
+            "If the data is fundamentally broken, this step should report "
+            "the issue rather than work around it.\n"
+            "</data_quality_warnings>\n\n"
+            + context
+        )
+
     counts = progress_counts or {"completed": 0, "failed": 0}
     step_start = time.monotonic()
     if backtracked_steps is None:
@@ -3817,6 +3904,25 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                         logger.info(
                             "  Verification stagnation detected. "
                             "Force-backtracking to dep step %d...",
+                            force_dep_id,
+                        )
+                        backtrack_dep_id = force_dep_id
+                elif (root_target == "self"
+                        and _has_data_quality_error(error_info)
+                        and step["depends_on"]):
+                    # Section 3: Data quality errors (all NaN, no valid
+                    # data, constant column) strongly suggest the upstream
+                    # dependency produced broken data. Backtrack immediately
+                    # instead of waiting for stagnation.
+                    force_dep_id = next(
+                        (d for d in step["depends_on"]
+                         if d not in backtracked_steps),
+                        None,
+                    )
+                    if force_dep_id is not None:
+                        logger.info(
+                            "  Data quality issue detected in error. "
+                            "Backtracking to dep step %d...",
                             force_dep_id,
                         )
                         backtrack_dep_id = force_dep_id

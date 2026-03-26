@@ -126,7 +126,7 @@ descriptions, and dependency structure, then exits without executing anything.
 Write a machine-readable JSON summary of the run:
 
 ```bash
-# Via CLI flag (writes to .state/runs/<run_id>/output.json by default):
+# Via CLI flag (writes to .uas_state/runs/<run_id>/output.json by default):
 uas -o "your goal"
 
 # Specify a custom path:
@@ -145,7 +145,7 @@ The JSON file contains the goal, overall status (`completed`, `failed`, or
 Record a structured event log and provenance graph for the run:
 
 ```bash
-# Via CLI flag (writes to .state/runs/<run_id>/events.jsonl by default):
+# Via CLI flag (writes to .uas_state/runs/<run_id>/events.jsonl by default):
 uas --events "your goal"
 
 # Specify a custom path:
@@ -156,7 +156,7 @@ UAS_EVENTS=events.jsonl uas "your goal"
 ```
 
 The event log records every phase boundary as a JSONL file. The
-provenance graph (`.state/runs/<run_id>/provenance.json`) tracks data lineage
+provenance graph (`.uas_state/runs/<run_id>/provenance.json`) tracks data lineage
 from goal through decomposition, code generation, and execution.
 
 ### HTML Run Report
@@ -165,7 +165,7 @@ Generate a self-contained HTML report with interactive DAG
 visualization, execution timeline, per-step details, and provenance:
 
 ```bash
-# Via CLI flag (writes to .state/runs/<run_id>/report.html by default):
+# Via CLI flag (writes to .uas_state/runs/<run_id>/report.html by default):
 uas --report "your goal"
 
 # Specify a custom path:
@@ -186,7 +186,7 @@ Export a Chrome Trace Event JSON file viewable in
 [Perfetto](https://ui.perfetto.dev) for detailed timeline analysis:
 
 ```bash
-# Via CLI flag (writes to .state/runs/<run_id>/trace.json by default):
+# Via CLI flag (writes to .uas_state/runs/<run_id>/trace.json by default):
 uas --trace "your goal"
 
 # Specify a custom path:
@@ -310,7 +310,7 @@ User (any directory)
          └─ Stage 2: Architect Agent (code in /uas, output in /workspace)
               ├─ Planner        -> Claude Code decomposes goal
               ├─ Spec Generator  -> writes UAS markdown specs
-              ├─ State Manager   -> tracks .state/runs/<run_id>/
+              ├─ State Manager   -> tracks .uas_state/runs/<run_id>/
               └─ Executor        -> invokes Orchestrator loop
                    └─ uas-sandbox (python:3.12-slim)
                        └─ Orchestrator
@@ -356,11 +356,11 @@ each completed dependency is summarized into a `<dependency>` element
 with `<files_produced>`, `<key_outputs>`, and `<relevant_data>` tags,
 using the step's `UAS_RESULT` summary as the primary source and raw
 stdout only as a fallback. A **structured progress file**
-(`.state/runs/<run_id>/progress.md`) replaces the flat scratchpad for context
+(`.uas_state/runs/<run_id>/progress.md`) replaces the flat scratchpad for context
 building, with sections for current state, key decisions, completed
 steps, and lessons learned — updated after every step completion or
 failure. **Recursive workspace scanning** (up to 3 levels deep, skipping
-`.state/`, `.git/`, `__pycache__/`, `node_modules/`, `venv/`) groups
+`.uas_state/`, `.git/`, `__pycache__/`, `node_modules/`, `venv/`) groups
 files by directory with previews and JSON key extraction, capped at
 4000 chars. When `UAS_MAX_CONTEXT_LENGTH` is set and context exceeds
 the limit, **tiered context compression** applies: Tier 1 (< 60%)
@@ -410,14 +410,14 @@ Each rewrite prompt also includes a `<previous_attempts>` section and a
 `<counterfactual>` reasoning step. Outputs are red-flagged and resampled
 if they show signs of confusion (excessive length or verbatim error
 repetition). If all rewrites are exhausted, it halts with
-`.state/blocker.md`.
+`.uas_state/blocker.md`.
 
 **Verification:** After a step exits successfully (code 0), post-execution
 validation checks the `UAS_RESULT` JSON (status field, file existence)
 and, if the step has a `verify` field, generates and runs a verification
 script through the Orchestrator. If either check fails, the step
 re-enters the rewrite loop rather than being marked complete. After all
-steps finish, a final validation pass writes `.state/validation.md` to the
+steps finish, a final validation pass writes `.uas_state/validation.md` to the
 workspace summarizing produced files and flagging any missing outputs.
 
 **Best-practice guardrails:** Generated code is checked at two levels.
@@ -432,7 +432,7 @@ keys (error severity, triggers rewrite), bare `except:`, `eval()`,
 `shell=True`, plain HTTP URLs, and `git init` without `-b` (warning
 severity, logged). For multi-file projects, workspace-level checks
 verify the Git branch is `main`, and that `.gitignore`, `README`,
-and a dependency file exist. Warnings appear in `.state/validation.md`.
+and a dependency file exist. Warnings appear in `.uas_state/validation.md`.
 
 **Workspace guidance:** Before each orchestrator invocation, the Executor
 writes a `.claude/CLAUDE.md` file to the workspace. This gives the Claude
@@ -460,11 +460,11 @@ run concurrently, optionally capped by `UAS_MAX_PARALLEL`. Per-step
 timing tracks LLM call time vs sandbox execution time for performance
 analysis.
 
-**State:** Each run's state is persisted to `.state/runs/<run_id>/state.json`
+**State:** Each run's state is persisted to `.uas_state/runs/<run_id>/state.json`
 after every significant event (step start, completion, failure, rewrite).
-Per-run directories (`.state/runs/<run_id>/`) isolate all artifacts
+Per-run directories (`.uas_state/runs/<run_id>/`) isolate all artifacts
 (specs, code versions, events, reports) so multiple runs never overwrite
-each other. A shared scratchpad (`.state/scratchpad.md`) enables
+each other. A shared scratchpad (`.uas_state/scratchpad.md`) enables
 cross-run learning with per-run filtering via `[run:<run_id>]` tags.
 An environment probe runs on the first step, recording Python version,
 installed packages, and disk space to the scratchpad so subsequent steps
@@ -495,8 +495,8 @@ it falls back to the original print-based progress reporting.
 
 **Event log & provenance:** When `--events` is passed (or `UAS_EVENTS`
 is set), every significant action is recorded as a typed event in
-`.state/runs/<run_id>/events.jsonl` (one JSON object per line). A W3C
-PROV-inspired provenance graph (`.state/runs/<run_id>/provenance.json`)
+`.uas_state/runs/<run_id>/events.jsonl` (one JSON object per line). A W3C
+PROV-inspired provenance graph (`.uas_state/runs/<run_id>/provenance.json`)
 tracks the full transformation chain from goal to result using
 content-addressed entities, activities, and agents. Cross-attempt
 linking connects rewrite errors to subsequent code versions.
@@ -504,7 +504,7 @@ linking connects rewrite errors to subsequent code versions.
 **Code evolution tracking:** Every version of generated code is
 recorded across orchestrator retries and architect-level rewrites
 (up to 12 versions per step). Versions are persisted to
-`.state/runs/<run_id>/code_versions/{step_id}.json` with metadata
+`.uas_state/runs/<run_id>/code_versions/{step_id}.json` with metadata
 (attempt indices, prompt hash, exit code, error summary). Unified
 diffs between consecutive versions are computed and displayed in the
 HTML report with colorized add/remove highlighting. A retry
@@ -514,7 +514,7 @@ graph via `wasDerivedFrom` edges.
 
 **Execution trace export:** When `--trace` is passed (or `UAS_TRACE`
 is set), a Chrome Trace Event JSON file is written to
-`.state/runs/<run_id>/trace.json`. The trace maps Architect, Orchestrator, and
+`.uas_state/runs/<run_id>/trace.json`. The trace maps Architect, Orchestrator, and
 Sandbox activity to separate processes with per-step threads,
 enabling microsecond-precision timeline analysis in Perfetto or
 `chrome://tracing`. Counter tracks show cumulative LLM calls and

@@ -25,20 +25,16 @@ def tmp_workspace(tmp_path, monkeypatch):
     import architect.main as main_mod
     import architect.state as state_mod
 
-    state_dir = os.path.join(str(tmp_path), ".state")
+    state_dir = os.path.join(str(tmp_path), ".uas_state")
     scratchpad_file = os.path.join(state_dir, "scratchpad.md")
 
     monkeypatch.setattr(state_mod, "WORKSPACE", str(tmp_path))
     monkeypatch.setattr(state_mod, "STATE_DIR", state_dir)
     monkeypatch.setattr(state_mod, "SCRATCHPAD_FILE", scratchpad_file)
 
-    # Patch the project directory convention.
-    project_name = os.path.basename(str(tmp_path))
-    project_dir = os.path.join(str(tmp_path), project_name)
-    os.makedirs(project_dir, exist_ok=True)
+    # Patch the project directory convention: workspace IS the project dir.
     monkeypatch.setattr(main_mod, "WORKSPACE", str(tmp_path))
-    monkeypatch.setattr(main_mod, "PROJECT_NAME", project_name)
-    monkeypatch.setattr(main_mod, "PROJECT_DIR", project_dir)
+    monkeypatch.setattr(main_mod, "PROJECT_DIR", str(tmp_path))
 
     return tmp_path
 

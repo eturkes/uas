@@ -130,7 +130,7 @@ class TestValidateWorkspaceLLM:
         assert "llm_assessment" in result
         assert result["llm_assessment"]["goal_satisfied"] is True
 
-        content = (tmp_path / ".state" / "validation.md").read_text()
+        content = (tmp_path / ".uas_state" / "validation.md").read_text()
         assert "Goal Assessment (LLM)" in content
         assert "Goal satisfied:** Yes" in content
         assert "hello world" in content
@@ -156,7 +156,7 @@ class TestValidateWorkspaceLLM:
                    return_value=mock_client):
             result = validate_workspace(state, str(tmp_path))
 
-        content = (tmp_path / ".state" / "validation.md").read_text()
+        content = (tmp_path / ".uas_state" / "validation.md").read_text()
         assert "Goal satisfied:** No" in content
         assert "Output file is empty" in content
 

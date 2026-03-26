@@ -420,7 +420,7 @@ _TEXT_EXTENSIONS = {
     ".txt", ".csv", ".json", ".py", ".md", ".html", ".xml",
     ".yaml", ".yml", ".log", ".tsv", ".sh", ".cfg", ".ini", ".toml",
 }
-_SKIP_DIRS = {".state", ".git", "__pycache__", "node_modules", "venv", ".venv", ".claude"}
+_SKIP_DIRS = {".uas_state", ".git", "__pycache__", "node_modules", "venv", ".venv", ".claude"}
 
 
 _EXTENSION_LABELS = {
@@ -1319,10 +1319,10 @@ def _record_code_version(step_id, spec_attempt, orch_attempt, code, prompt,
     workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
     run_id = os.environ.get("UAS_RUN_ID", "")
     if run_id:
-        versions_dir = os.path.join(workspace, ".state", "runs", run_id,
+        versions_dir = os.path.join(workspace, ".uas_state", "runs", run_id,
                                     "code_versions")
     else:
-        versions_dir = os.path.join(workspace, ".state", "code_versions")
+        versions_dir = os.path.join(workspace, ".uas_state", "code_versions")
     try:
         os.makedirs(versions_dir, exist_ok=True)
     except OSError:

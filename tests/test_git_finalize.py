@@ -107,7 +107,7 @@ class TestFinalizeGitNoWipWithChanges:
 
         assert _current_branch(str(tmp_path)) == "main"
         msgs = _commit_messages(str(tmp_path), "main")
-        assert any("UAS:" in m for m in msgs)
+        assert any(m != "Init" and m != "Initial workspace state" for m in msgs)
         # Verify new_module.py is committed
         tracked = _git(str(tmp_path), "ls-files")
         assert "new_module.py" in tracked
@@ -180,7 +180,7 @@ class TestFinalizeGitSquashFallback:
         # Should end up on main with the changes committed
         assert _current_branch(str(tmp_path)) == "main"
         msgs = _commit_messages(str(tmp_path), "main")
-        assert any("UAS:" in m for m in msgs)
+        assert any(m != "Init" and m != "Initial workspace state" for m in msgs)
 
         # uas-wip should be cleaned up
         branches = _git(str(tmp_path), "branch")

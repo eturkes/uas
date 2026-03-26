@@ -1,8 +1,8 @@
 """Plan state management — persists the DAG to JSON on disk.
 
-Each run's artifacts are stored under ``.state/runs/{run_id}/`` so that
+Each run's artifacts are stored under ``.uas_state/runs/{run_id}/`` so that
 multiple runs can coexist without overwriting each other.  A shared
-scratchpad at ``.state/scratchpad.md`` provides cross-run learning with
+scratchpad at ``.uas_state/scratchpad.md`` provides cross-run learning with
 per-run filtering via ``[run:{run_id}]`` tags.
 """
 
@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
-STATE_DIR = os.path.join(WORKSPACE, ".state")
+STATE_DIR = os.path.join(WORKSPACE, ".uas_state")
 SCRATCHPAD_FILE = os.path.join(STATE_DIR, "scratchpad.md")
 
 # Legacy flat paths — kept only for migration / fallback
@@ -24,14 +24,14 @@ _LEGACY_STATE_FILE = os.path.join(STATE_DIR, "state.json")
 # ---------------------------------------------------------------------------
 
 def get_run_dir(run_id: str) -> str:
-    """Return the directory for a specific run: .state/runs/{run_id}."""
+    """Return the directory for a specific run: .uas_state/runs/{run_id}."""
     return os.path.join(STATE_DIR, "runs", run_id)
 
 
 def get_specs_dir(run_id: str) -> str:
     """Return the specs directory for a specific run.
 
-    Falls back to the legacy ``.state/specs`` path when *run_id* is empty.
+    Falls back to the legacy ``.uas_state/specs`` path when *run_id* is empty.
     """
     if not run_id:
         return os.path.join(STATE_DIR, "specs")
@@ -337,7 +337,7 @@ def read_progress_file(run_id: str = "") -> str:
 
 def get_knowledge_base_path() -> str:
     workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
-    return os.path.join(workspace, ".state", "knowledge.json")
+    return os.path.join(workspace, ".uas_state", "knowledge.json")
 
 
 def read_knowledge_base() -> dict:

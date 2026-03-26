@@ -141,8 +141,8 @@ class TestDetectOrphanedModules:
         assert orphaned == []
 
     def test_skip_dirs(self, tmp_path):
-        """Files in .state/, __pycache__/, venv/ etc. are ignored."""
-        state_dir = tmp_path / ".state"
+        """Files in .uas_state/, __pycache__/, venv/ etc. are ignored."""
+        state_dir = tmp_path / ".uas_state"
         state_dir.mkdir()
         (state_dir / "internal.py").write_text("x = 1\n", encoding="utf-8")
         pycache = tmp_path / "__pycache__"

@@ -231,5 +231,5 @@ class TestOutputIntegration:
         # No JSON output file should exist in workspace
         json_files = [f for f in os.listdir(str(tmp_workspace))
                       if f.endswith(".json") and f != "state.json"]
-        # Only .state dir should exist, no stray JSON files
+        # Only .uas_state dir should exist, no stray JSON files
         assert not any(f.endswith(".json") for f in json_files)

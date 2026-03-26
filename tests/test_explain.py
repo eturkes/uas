@@ -475,7 +475,7 @@ class TestRunExplainer:
 
 class TestLoadRunData:
     def test_loads_from_workspace(self, tmp_path):
-        state_dir = tmp_path / ".state"
+        state_dir = tmp_path / ".uas_state"
         state_dir.mkdir()
 
         state = _fixture_state()
@@ -506,7 +506,7 @@ class TestLoadRunData:
         assert 3 in c
 
     def test_loads_without_optional_files(self, tmp_path):
-        state_dir = tmp_path / ".state"
+        state_dir = tmp_path / ".uas_state"
         state_dir.mkdir()
 
         state = _fixture_state()

@@ -53,7 +53,7 @@ class TestFindEntryPoints:
         assert eps == []
 
     def test_skips_state_and_venv(self, tmp_path):
-        state_dir = tmp_path / ".state"
+        state_dir = tmp_path / ".uas_state"
         state_dir.mkdir()
         (state_dir / "app.py").write_text(
             'if __name__ == "__main__": pass\n', encoding="utf-8"
@@ -234,6 +234,6 @@ class TestSmokeTestInValidateWorkspace:
             result = validate_workspace(state, str(tmp_path))
 
         assert result["launch_test_error"] is not None
-        report = (tmp_path / ".state" / "validation.md").read_text()
+        report = (tmp_path / ".uas_state" / "validation.md").read_text()
         assert "## Launch Test" in report
         assert "import failed" in report.lower() or "ImportError" in report

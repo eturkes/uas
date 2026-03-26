@@ -634,7 +634,7 @@ def load_run_data(workspace_path: str) -> tuple[dict, list[dict], dict, dict]:
 
     Returns (state, events, provenance, code_versions).
     """
-    state_dir = os.path.join(workspace_path, ".state")
+    state_dir = os.path.join(workspace_path, ".uas_state")
 
     # State
     state_file = os.path.join(state_dir, "state.json")

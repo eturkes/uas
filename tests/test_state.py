@@ -14,7 +14,7 @@ from architect.state import (
 class TestInitState:
     def test_creates_state_dir(self, tmp_workspace):
         state = init_state("test goal")
-        assert os.path.isdir(os.path.join(tmp_workspace, ".state"))
+        assert os.path.isdir(os.path.join(tmp_workspace, ".uas_state"))
 
     def test_returns_correct_structure(self, tmp_workspace):
         state = init_state("my goal")

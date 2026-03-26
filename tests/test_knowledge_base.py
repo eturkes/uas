@@ -12,7 +12,7 @@ class TestReadKnowledgeBase:
         assert result == {"package_versions": {}, "lessons": []}
 
     def test_reads_existing_file(self, tmp_workspace):
-        kb_path = os.path.join(str(tmp_workspace), ".state", "knowledge.json")
+        kb_path = os.path.join(str(tmp_workspace), ".uas_state", "knowledge.json")
         os.makedirs(os.path.dirname(kb_path), exist_ok=True)
         data = {"package_versions": {"requests": "2.31.0"}, "lessons": []}
         with open(kb_path, "w", encoding="utf-8") as f:
@@ -50,8 +50,8 @@ class TestAppendKnowledge:
         assert kb["lessons"][-1]["text"] == "lesson 54"
 
     def test_creates_state_directory(self, tmp_workspace):
-        # Ensure .state doesn't exist yet
-        state_dir = os.path.join(str(tmp_workspace), ".state")
+        # Ensure .uas_state doesn't exist yet
+        state_dir = os.path.join(str(tmp_workspace), ".uas_state")
         if os.path.exists(state_dir):
             os.rmdir(state_dir)
         append_knowledge("package_version", {"pip": "24.0"})
@@ -71,7 +71,7 @@ class TestAppendKnowledge:
         assert kb["lessons"] == []
 
     def test_corrupt_file_raises(self, tmp_workspace):
-        kb_path = os.path.join(str(tmp_workspace), ".state", "knowledge.json")
+        kb_path = os.path.join(str(tmp_workspace), ".uas_state", "knowledge.json")
         os.makedirs(os.path.dirname(kb_path), exist_ok=True)
         with open(kb_path, "w", encoding="utf-8") as f:
             f.write("not valid json{{{")

@@ -103,8 +103,8 @@ class TestVerifyStepOutput:
         assert "verification" in task_arg.lower() or "verify" in task_arg.lower()
 
     @patch("architect.main.run_orchestrator")
-    def test_verification_passes_project_name(self, mock_orch):
-        """Verify that UAS_PROJECT_NAME is forwarded to the orchestrator."""
+    def test_verification_calls_orchestrator(self, mock_orch):
+        """Verify that verification invokes the orchestrator."""
         mock_orch.return_value = {
             "exit_code": 0,
             "stdout": "",
@@ -112,8 +112,7 @@ class TestVerifyStepOutput:
         }
         step = {"id": 1, "verify": "check something"}
         verify_step_output(step, "/workspace")
-        extra_env = mock_orch.call_args[1].get("extra_env") or {}
-        assert "UAS_PROJECT_NAME" in extra_env
+        mock_orch.assert_called_once()
 
     @patch("architect.main.run_orchestrator")
     def test_verification_fails(self, mock_orch):
@@ -160,8 +159,8 @@ class TestValidateWorkspace:
         result = validate_workspace(state, str(tmp_path))
         assert result["workspace_empty"] is True
         assert result["missing_files"] == []
-        # validation.md should be written inside .state/
-        assert (tmp_path / ".state" / "validation.md").exists()
+        # validation.md should be written inside .uas_state/
+        assert (tmp_path / ".uas_state" / "validation.md").exists()
 
     @patch("architect.main.validate_workspace_llm", return_value=None)
     @patch("architect.main.check_project_guardrails_llm", return_value=[])
@@ -200,7 +199,7 @@ class TestValidateWorkspace:
             ],
         }
         validate_workspace(state, str(tmp_path))
-        content = (tmp_path / ".state" / "validation.md").read_text()
+        content = (tmp_path / ".uas_state" / "validation.md").read_text()
         assert "analyze data" in content
         assert "2/2" in content
         assert "result.txt" in content
@@ -219,7 +218,7 @@ class TestValidateWorkspace:
             ],
         }
         validate_workspace(state, str(tmp_path))
-        content = (tmp_path / ".state" / "validation.md").read_text()
+        content = (tmp_path / ".uas_state" / "validation.md").read_text()
         assert "Missing Files" in content
         assert "ghost.txt" in content
 

@@ -138,7 +138,7 @@ class TestProvenanceGraph:
         assert len(d["edges"]) == 1
 
     def test_save_to_disk(self, tmp_path):
-        output_path = os.path.join(str(tmp_path), ".state", "provenance.json")
+        output_path = os.path.join(str(tmp_path), ".uas_state", "provenance.json")
         g = ProvenanceGraph(output_path=output_path)
         eid = g.add_entity("goal", content="test")
         aid = g.add_activity("decompose", content="run")

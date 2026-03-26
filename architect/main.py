@@ -64,8 +64,7 @@ from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
-PROJECT_NAME = os.path.basename(os.path.realpath(WORKSPACE))
-PROJECT_DIR = os.path.join(WORKSPACE, PROJECT_NAME)
+PROJECT_DIR = WORKSPACE
 MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
@@ -173,6 +172,7 @@ __pycache__/
 *.py[cod]
 *.so
 .env
+.venv/
 venv/
 dist/
 *.egg-info/
@@ -182,12 +182,11 @@ dist/
 # Node
 node_modules/
 
-# Data artifacts
-*.joblib
-*.npz
+# Data
+data/
 
-# UAS internal
-.state/
+# UAS (auth contains credentials; state and goals are committed)
+.uas_auth/
 .claude/
 """
 
@@ -403,6 +402,60 @@ def _commit_all_on_main(workspace: str, msg: str) -> None:
     logger.debug("Committed on main: %s", msg)
 
 
+_COMMIT_MSG_PROMPT = """\
+Write a git commit message for the following completed project.
+
+Goal: {goal}
+
+Rules (strict):
+- Subject line: imperative mood, ≤50 characters, no trailing period
+- Blank line after subject
+- Body: wrap each line at 72 characters, describe what was built
+- Do NOT use markdown, bullet points, or formatting
+- Return ONLY the commit message text, nothing else
+
+Example:
+Add user authentication module
+
+Implement JWT-based auth with login, logout, and token
+refresh endpoints. Include rate limiting and input
+validation for all auth routes."""
+
+
+def _build_commit_message(goal: str) -> str:
+    """Generate a best-practice git commit message from the goal.
+
+    Tries the LLM first for a well-crafted message, falls back to a
+    mechanical derivation from the goal text.
+    """
+    try:
+        from orchestrator.llm_client import get_llm_client
+        client = get_llm_client(role="planner")
+        prompt = _COMMIT_MSG_PROMPT.format(goal=goal)
+        raw = client.generate(prompt).strip()
+        # Strip markdown fences if the LLM wrapped it
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            lines = [ln for ln in lines if not ln.startswith("```")]
+            raw = "\n".join(lines).strip()
+        # Validate: subject must be ≤50 chars
+        subject = raw.split("\n", 1)[0]
+        if len(subject) <= 50:
+            return raw
+        # Subject too long — truncate it, keep the body
+        parts = raw.split("\n", 1)
+        subject = parts[0][:47] + "..."
+        return subject + ("\n" + parts[1] if len(parts) > 1 else "")
+    except Exception:
+        pass
+
+    # Mechanical fallback: derive from goal text
+    subject = goal.strip().split("\n", 1)[0]
+    if len(subject) > 50:
+        subject = subject[:47] + "..."
+    return subject
+
+
 def finalize_git(workspace: str, goal: str) -> None:
     """Squash all ``uas-wip`` checkpoint commits into a single commit on ``main``.
 
@@ -417,11 +470,8 @@ def finalize_git(workspace: str, goal: str) -> None:
         if not os.path.isdir(git_dir):
             return
 
-        # Build a meaningful commit message from the goal
-        summary = goal.strip()
-        if len(summary) > 72:
-            summary = summary[:69] + "..."
-        msg = f"UAS: {summary}"
+        # Build a best-practice commit message
+        msg = _build_commit_message(goal)
 
         # Check if uas-wip branch exists
         result = subprocess.run(
@@ -707,19 +757,19 @@ def parse_args():
     )
     parser.add_argument(
         "-o", "--output", type=str, default=None, nargs="?", const="auto",
-        help="Write a JSON results summary (default: .state/runs/<run_id>/output.json)",
+        help="Write a JSON results summary (default: .uas_state/runs/<run_id>/output.json)",
     )
     parser.add_argument(
         "--events", type=str, default=None, nargs="?", const="auto",
-        help="Write event log to this path (default: .state/runs/<run_id>/events.jsonl)",
+        help="Write event log to this path (default: .uas_state/runs/<run_id>/events.jsonl)",
     )
     parser.add_argument(
         "--report", type=str, default=None, nargs="?", const="auto",
-        help="Generate HTML report at this path (default: .state/runs/<run_id>/report.html)",
+        help="Generate HTML report at this path (default: .uas_state/runs/<run_id>/report.html)",
     )
     parser.add_argument(
         "--trace", type=str, default=None, nargs="?", const="auto",
-        help="Export Perfetto trace to this path (default: .state/runs/<run_id>/trace.json)",
+        help="Export Perfetto trace to this path (default: .uas_state/runs/<run_id>/trace.json)",
     )
     parser.add_argument(
         "--explain", action="store_true", default=False,
@@ -1622,7 +1672,7 @@ def write_json_output(state: dict, output_path: str):
 
 
 def create_blocker(state: dict, step: dict):
-    state_dir = os.path.join(WORKSPACE, ".state")
+    state_dir = os.path.join(WORKSPACE, ".uas_state")
     os.makedirs(state_dir, exist_ok=True)
     blocker_path = os.path.join(state_dir, "blocker.md")
     with open(blocker_path, "w") as f:
@@ -1752,7 +1802,7 @@ def validate_uas_result(step: dict, workspace: str) -> str | None:
             # Limit depth to avoid traversing .state, .git, etc.
             _dirs[:] = [
                 d for d in _dirs
-                if d not in (".state", ".git", "__pycache__", "node_modules")
+                if d not in (".uas_state", ".git", "__pycache__", "node_modules")
             ]
         if not found:
             return f"UAS_RESULT claims file '{f}' was written but it does not exist"
@@ -2042,7 +2092,7 @@ def cleanup_workspace_artifacts(
             # Skip .git and other internal dirs
             dirs[:] = [
                 d for d in dirs
-                if d not in (".git", ".state", "node_modules")
+                if d not in (".git", ".uas_state", "node_modules")
             ]
     except OSError:
         pass
@@ -2299,7 +2349,7 @@ def detect_orphaned_modules(workspace: str) -> list[str]:
 
     Returns a list of relative paths for orphaned (never-imported) modules.
     """
-    skip_dirs = {".state", ".git", "__pycache__", "venv", ".venv",
+    skip_dirs = {".uas_state", ".git", "__pycache__", "venv", ".venv",
                  "node_modules", ".tox", ".eggs"}
 
     # Collect all .py files
@@ -2412,7 +2462,7 @@ def check_cross_module_imports(workspace: str) -> list[dict]:
     Returns a list of dicts with keys: file, line, imports, from_module,
     severity, description.
     """
-    skip_dirs = {".state", ".git", "__pycache__", "venv", ".venv",
+    skip_dirs = {".uas_state", ".git", "__pycache__", "venv", ".venv",
                  "node_modules", ".tox", ".eggs"}
     py_files = []
     for root, dirs, files in os.walk(workspace):
@@ -2783,7 +2833,7 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
     # (e.g. data/loader.py, dashboard/tabs/cohort.py) — not just root.
     module_info = ""
     _SKIP_SCAN_DIRS = {
-        ".state", ".git", "__pycache__", "node_modules", ".venv",
+        ".uas_state", ".git", "__pycache__", "node_modules", ".venv",
         "venv", ".tox", ".eggs", ".uas_auth",
     }
     try:
@@ -2847,9 +2897,7 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
         f"above to find the correct API to load data.\n"
     )
 
-    result = run_orchestrator(
-        task, extra_env={"UAS_PROJECT_NAME": PROJECT_NAME}
-    )
+    result = run_orchestrator(task)
 
     stdout = extract_sandbox_stdout(result.get("stderr", ""))
     all_output = (stdout or "") + (result.get("stdout", "") or "")
@@ -2867,7 +2915,7 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
 
 _ENTRY_POINT_NAMES = {"app.py", "main.py", "run.py", "server.py", "dashboard.py"}
 _LAUNCHER_SCRIPTS = {"run.sh", "start.sh", "launch.sh"}
-_SKIP_DIRS = {".state", ".git", "__pycache__", "venv", ".venv", "node_modules",
+_SKIP_DIRS = {".uas_state", ".git", "__pycache__", "venv", ".venv", "node_modules",
               ".tox", ".eggs"}
 
 
@@ -2978,7 +3026,7 @@ def validate_workspace(state: dict, workspace: str, *,
     Args:
         state: Run state dict.
         workspace: Path to inspect for project files.
-        state_root: Path where ``.state/`` lives.  Defaults to *workspace*.
+        state_root: Path where ``.uas_state/`` lives.  Defaults to *workspace*.
     """
     all_files = []
     missing_files = []
@@ -3112,7 +3160,7 @@ def validate_workspace(state: dict, workspace: str, *,
             lines.append("\n")
 
     _val_state_root = state_root or workspace
-    _val_state_dir = os.path.join(_val_state_root, ".state")
+    _val_state_dir = os.path.join(_val_state_root, ".uas_state")
     try:
         os.makedirs(_val_state_dir, exist_ok=True)
         validation_path = os.path.join(_val_state_dir, "validation.md")
@@ -3272,7 +3320,7 @@ def _finalize_code_tracking(run_id: str = ""):
     if run_id:
         cv_dir = os.path.join(get_run_dir(run_id), "code_versions")
     else:
-        cv_dir = os.path.join(WORKSPACE, ".state", "code_versions")
+        cv_dir = os.path.join(WORKSPACE, ".uas_state", "code_versions")
     if os.path.isdir(cv_dir):
         tracker.load_from_dir(cv_dir)
     prov = get_provenance_graph()
@@ -3427,8 +3475,6 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 for fname, info in sorted(ws_files.items())
             )
             extra_env["UAS_WORKSPACE_FILES"] = ws_listing
-        # Tell the orchestrator/sandbox to use the project subdirectory.
-        extra_env["UAS_PROJECT_NAME"] = PROJECT_NAME
         output_cb = None
         if dashboard and dashboard.use_rich:
             output_cb = lambda line: dashboard.add_output_line(line)
@@ -4268,27 +4314,6 @@ def main():
     event_log = get_event_log(events_path=events_path)
     prov = get_provenance_graph(output_path=provenance_path)
 
-    # Always ensure the project subdirectory exists (including resume).
-    os.makedirs(PROJECT_DIR, exist_ok=True)
-
-    # Symlink user data files from WORKSPACE root into PROJECT_DIR so that
-    # generated scripts (which run with WORKSPACE=PROJECT_DIR) can find them.
-    _FRAMEWORK_ENTRIES = {
-        ".state", ".claude", ".git", ".gitignore", ".uas_auth",
-        PROJECT_NAME,  # the project subdir itself
-    }
-    try:
-        for entry in os.listdir(WORKSPACE):
-            if entry.startswith(".") or entry in _FRAMEWORK_ENTRIES:
-                continue
-            src = os.path.join(WORKSPACE, entry)
-            dst = os.path.join(PROJECT_DIR, entry)
-            if not os.path.exists(dst):
-                os.symlink(src, dst)
-    except OSError as exc:
-        logger.debug("Could not symlink workspace files into project dir: %s",
-                     exc)
-
     if state is not None:
         logger.info("Resuming goal: %s\n", state["goal"])
         _write_latest_run(run_id)
@@ -4299,8 +4324,10 @@ def main():
             logger.error("No goal provided.")
             sys.exit(1)
 
-        # Copy/persist the goal file at the workspace root so it is
-        # committed to Git and serves as the canonical project brief.
+        # Persist the goal file in .uas_goals/ so it is committed to Git
+        # and serves as the canonical project brief.
+        _goals_dir = os.path.join(WORKSPACE, ".uas_goals")
+        os.makedirs(_goals_dir, exist_ok=True)
         _goal_file_src = (
             getattr(args, "goal_file", None)
             or os.environ.get("UAS_GOAL_FILE")
@@ -4309,12 +4336,14 @@ def main():
             _goal_file_src = os.path.expanduser(_goal_file_src)
             if not os.path.isabs(_goal_file_src):
                 _goal_file_src = os.path.join(WORKSPACE, _goal_file_src)
-            _goal_dest = os.path.join(WORKSPACE, os.path.basename(_goal_file_src))
+            _goal_dest = os.path.join(
+                _goals_dir, os.path.basename(_goal_file_src)
+            )
             if os.path.realpath(_goal_file_src) != os.path.realpath(_goal_dest):
                 shutil.copy2(_goal_file_src, _goal_dest)
         else:
             # Goal was provided via CLI args or stdin — write it to a file.
-            _goal_dest = os.path.join(WORKSPACE, "GOAL.txt")
+            _goal_dest = os.path.join(_goals_dir, "GOAL.txt")
             if not os.path.exists(_goal_dest):
                 with open(_goal_dest, "w", encoding="utf-8") as _gf:
                     _gf.write(goal + "\n")
@@ -4778,7 +4807,7 @@ def main():
     save_state(state)
 
     # Final workspace validation
-    validation = validate_workspace(state, PROJECT_DIR, state_root=WORKSPACE)
+    validation = validate_workspace(state, PROJECT_DIR)
     if validation["missing_files"]:
         logger.warning(
             "  Some referenced files are missing: %s",
@@ -4862,7 +4891,7 @@ def main():
     logger.info("  ALL STEPS COMPLETED SUCCESSFULLY")
     logger.info("%s", "=" * 60)
     dashboard.finish(state)
-    run_rel = os.path.join(".state", "runs", run_id)
+    run_rel = os.path.join(".uas_state", "runs", run_id)
     logger.info("Run ID: %s", run_id)
     logger.info(
         "State saved to: %s",

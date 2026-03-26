@@ -16,7 +16,7 @@ def generate_spec(step: dict, total_steps: int, context: str = "",
     *specs_dir* overrides the default location derived from the step's
     run_id (if known).  When omitted, falls back to
     ``get_specs_dir(run_id)`` using the run_id stored on *step*, or
-    the legacy ``.state/specs`` directory.
+    the legacy ``.uas_state/specs`` directory.
 
     Returns the path to the written spec file.
     """

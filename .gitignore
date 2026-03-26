@@ -1,6 +1,4 @@
-# Runtime state (contains state.json, specs/, blocker.md, validation.md, etc.)
-.state/
-VALIDATION.md
+# Runtime artifacts
 hello.txt
 
 # Sandbox build artifact
@@ -13,7 +11,7 @@ integration/data/
 integration/step*.txt
 integration/hello.txt
 integration/.uas_auth/
-integration/.state/
+integration/.uas_state/
 
 # Past run workspaces (contain large generated artifacts)
 rehab/

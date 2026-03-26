@@ -101,11 +101,11 @@ class TestScanWorkspace:
         assert ".git" not in result
 
     def test_skips_state_dir(self, tmp_path):
-        state_dir = tmp_path / ".state"
+        state_dir = tmp_path / ".uas_state"
         state_dir.mkdir()
         (state_dir / "state.json").write_text("{}")
         result = scan_workspace(str(tmp_path))
-        assert ".state" not in result
+        assert ".uas_state" not in result
 
     def test_nonexistent_path(self):
         assert scan_workspace("/nonexistent/path") == ""

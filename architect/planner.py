@@ -2003,7 +2003,7 @@ def enrich_step_descriptions(
                         full = os.path.join(root, base)
                         break
                     _dirs[:] = [d for d in _dirs if d not in
-                                (".state", ".git", "__pycache__")]
+                                (".uas_state", ".git", "__pycache__")]
             schema = _extract_file_schema(full)
             if schema:
                 parts.append(f"{os.path.basename(fpath)} {schema}")

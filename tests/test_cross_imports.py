@@ -113,8 +113,8 @@ class TestCrossModuleImports:
         assert errors == []
 
     def test_skip_dirs(self, tmp_path):
-        """Files in .state/, __pycache__/, venv/ etc. are skipped."""
-        state_dir = tmp_path / ".state"
+        """Files in .uas_state/, __pycache__/, venv/ etc. are skipped."""
+        state_dir = tmp_path / ".uas_state"
         state_dir.mkdir()
         (state_dir / "internal.py").write_text(
             "from nonexistent import foo\n", encoding="utf-8"

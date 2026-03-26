@@ -241,9 +241,7 @@ def _run_local(task: str, extra_env: dict | None = None,
         os.path.join(os.path.dirname(__file__), "..")
     )
     workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
-    # Use the project subdirectory as cwd when UAS_PROJECT_NAME is set.
-    project_name = (extra_env or {}).get("UAS_PROJECT_NAME", "")
-    cwd = os.path.join(workspace, project_name) if project_name else workspace
+    cwd = workspace
     env = os.environ.copy()
     env["PYTHONPATH"] = framework_root
     env["IS_SANDBOX"] = "1"
@@ -471,8 +469,6 @@ def _run_container(task: str, extra_env: dict | None = None,
         "UAS_MODEL_PLANNER", "UAS_MODEL_CODER",
         # Package requirements and best-of-N for orchestrator
         "UAS_BEST_OF_N", "UAS_STEP_ENVIRONMENT",
-        # Project directory convention
-        "UAS_PROJECT_NAME",
     ]:
         val = os.environ.get(var)
         if val:
@@ -627,7 +623,7 @@ def _guess_file_type(filename: str) -> str:
     return "text" if ext in TEXT_EXTENSIONS else "binary"
 
 
-_SKIP_DIRS = {".state", ".git", "__pycache__", "node_modules", "venv", ".venv"}
+_SKIP_DIRS = {".uas_state", ".git", "__pycache__", "node_modules", "venv", ".venv"}
 _MAX_SCAN_OUTPUT = 4000
 
 
@@ -636,7 +632,7 @@ def scan_workspace_files(workspace_path: str, recursive: bool = True,
     """List files in workspace directory, optionally recursive.
 
     Scans up to max_depth levels deep (Section 4b). Skips hidden dirs
-    and common non-essential directories (.state, .git, __pycache__,
+    and common non-essential directories (.uas_state, .git, __pycache__,
     node_modules, venv).
 
     Returns dict of {relative_path: {size, type, preview}} where preview

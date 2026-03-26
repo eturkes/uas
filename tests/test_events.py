@@ -90,7 +90,7 @@ class TestEventLog:
         assert len(log.query()) == 2
 
     def test_persist_to_disk(self, tmp_path):
-        events_path = os.path.join(str(tmp_path), ".state", "events.jsonl")
+        events_path = os.path.join(str(tmp_path), ".uas_state", "events.jsonl")
         log = EventLog(events_path=events_path)
         log.emit(EventType.GOAL_RECEIVED, data={"goal": "test"})
         log.emit(EventType.STEP_START, step_id=1)
@@ -150,7 +150,7 @@ class TestSingleton:
 
     def test_get_event_log_with_path(self, tmp_path):
         reset_event_log()
-        events_path = os.path.join(str(tmp_path), ".state", "events.jsonl")
+        events_path = os.path.join(str(tmp_path), ".uas_state", "events.jsonl")
         log = get_event_log(events_path=events_path)
         assert log.events_path == events_path
         reset_event_log()

@@ -149,7 +149,8 @@ class TestFinalizeGit:
         # main should have exactly 2 commits: initial + squashed
         main_msgs = _commit_messages(str(tmp_path), "main")
         assert len(main_msgs) == 2
-        assert main_msgs[0] == "UAS: Build analytics dashboard"
+        # Commit message should be derived from goal (no "UAS:" prefix)
+        assert "Initial workspace state" not in main_msgs[0]
         assert main_msgs[1] == "Initial workspace state"
 
         # Should be on main after finalize
@@ -178,9 +179,9 @@ class TestFinalizeGit:
         finalize_git(str(tmp_path), long_goal)
 
         main_msgs = _commit_messages(str(tmp_path), "main")
-        # "UAS: " prefix (5 chars) + 69 chars + "..." = 77 chars
-        assert len(main_msgs[0]) <= 77
-        assert main_msgs[0].endswith("...")
+        # Subject line must be ≤50 chars (best practice)
+        subject = main_msgs[0].split("\n", 1)[0]
+        assert len(subject) <= 50
 
     def test_no_wip_branch_is_noop(self, tmp_path):
         """finalize_git does nothing if there's no uas-wip branch."""

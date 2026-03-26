@@ -236,7 +236,7 @@ This works inside the container but breaks when running outside it.
    literal `"/workspace"` in default arguments or assignments. If found, emit a
    warning: "Hardcoded /workspace path detected -- will break outside container."
 
-- [ ] Done
+- [x] Done
 
 ---
 

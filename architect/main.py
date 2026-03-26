@@ -1822,6 +1822,18 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
                 with open(fpath, "r", encoding="utf-8", errors="replace") as pf:
                     source = pf.read()
                 compile(source, fpath, "exec")
+                # Check for hardcoded /workspace paths
+                for line_no, line in enumerate(source.splitlines(), 1):
+                    stripped = line.strip()
+                    # Skip comments
+                    if stripped.startswith("#"):
+                        continue
+                    if '"/workspace' in line or "'/workspace" in line:
+                        issues.append(
+                            f"File '{f}' line {line_no}: hardcoded /workspace "
+                            f"path detected — will break outside container"
+                        )
+                        break  # One warning per file is enough
             except SyntaxError as e:
                 issues.append(f"File '{f}' has Python syntax error: {e}")
             except OSError as e:

@@ -18,7 +18,13 @@ Your script will run inside an isolated workspace directory.
 ## Environment
 - Python 3.12 (full standard library available)
 - Full network access and root permissions
-- Workspace directory: use `os.environ.get('WORKSPACE', '/workspace')` for all file paths
+- The WORKSPACE environment variable points to the project root.
+- For the fallback, use the script's own directory:
+  `os.environ.get("WORKSPACE", os.path.dirname(os.path.abspath(__file__)))`
+- NEVER hardcode `/workspace` or `/workspace/workspace` as a fallback.
+- When a module is inside a subdirectory (e.g., dashboard/), the fallback
+  should be the PARENT directory:
+  `os.environ.get("WORKSPACE", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))`
 - No packages are pre-installed. Proactively install everything you need, including
   dev tools (linters, formatters, test runners) when they'd improve quality.
 

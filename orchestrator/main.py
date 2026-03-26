@@ -674,7 +674,7 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                     f"- {name}=={ver}" for name, ver in sorted(version_map.items())
                 )
                 pkg_hint += (
-                    f"\nCurrent stable versions from PyPI (use these for uv pip install):\n"
+                    f"\nCurrent stable versions from PyPI (use these for installation):\n"
                     f"{version_lines}\n"
                 )
 
@@ -721,10 +721,10 @@ Before writing code, reason through these questions:
 1. What is the best approach for this task? Are there multiple strategies?
    Pick the most robust one.
 2. What packages or tools does this require? For EACH dependency, ask: is
-   there a more modern, faster, or better-maintained alternative? The
+   there a more modern, faster, or better-maintained alternative? Every
    ecosystem evolves fast — what was standard two years ago may be obsolete.
-   If you're not sure, check PyPI or the project's docs. Always use the
-   latest best-in-class option.
+   If you're not sure, check the relevant package registry or docs. Always
+   use the latest best-in-class option for the target ecosystem.
 3. Are there known pitfalls, breaking changes, or deprecations in the
    libraries you plan to use? If uncertain, check the docs.
 4. If the task involves an external API or data source, what is its current
@@ -842,7 +842,7 @@ Do NOT use any XML tags, tool_call blocks, or analysis sections.
 - Use context managers (with statements) for file I/O.
 - Specify encoding="utf-8" when opening text files.
 - Do NOT run git init or any git commands -- version control is managed by the framework.
-- Pin dependency versions in install commands.
+- Pin dependency versions.
 - The workspace IS the project root. Write files directly to os.path.join(workspace, ...).
   Do NOT create a project subdirectory (e.g., os.path.join(workspace, "myproject", "main.py")).
 - When the workspace already contains subdirectories (e.g., "outputs/", "data/", "models/"),

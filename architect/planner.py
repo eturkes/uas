@@ -117,7 +117,7 @@ DECOMPOSITION_PROMPT = """\
 <research>
 You have full network access. If the goal involves:
 - An external API: Check its current documentation for endpoints and auth methods
-- A library you're unsure about: Verify it exists on PyPI and check its current version
+- A library you're unsure about: Verify it exists in the relevant package registry and check its current version
 - A domain you're unfamiliar with: Look up best practices and common approaches
 - Any technology choice: Research what the current best-in-class tool is — the
   ecosystem evolves fast, and legacy defaults may have been superseded by faster,
@@ -303,18 +303,18 @@ Maximize parallelism by making steps independent whenever possible.
 5. Scale the number of steps to the goal's complexity: \
 1 step for trivial tasks, 2-3 for simple, 5-10 for medium, 10-20 for complex. \
 Prefer more, smaller steps over fewer, larger ones.
-6. The execution environment has full unrestricted network access, complete \
-autonomy, and `uv` pre-installed. Install any packages needed (uv pip install, \
-apt-get, etc.) without hesitation.
+6. The execution environment has full unrestricted network access and complete \
+autonomy. Install any packages, runtimes, or tools needed without hesitation.
 7. Each step must produce observable output to stdout so downstream steps \
 can use the results.
 8. Do NOT create steps that require user interaction.
 9. Do NOT include any steps that run `git init` or other git commands — version \
 control is managed automatically by the framework. Focus steps on the actual work.
-10. All projects must include a README.md and a pyproject.toml with pinned dependencies.
+10. All projects must include a README.md and a dependency manifest with pinned versions \
+(using the format standard for the target ecosystem).
 11. Never hardcode secrets or API keys in step descriptions — instruct the code \
 to read them from environment variables.
-12. Always prefer HTTPS URLs. Pin dependency versions. Use context managers for I/O.
+12. Always prefer HTTPS URLs. Pin dependency versions.
 13. When a step produces structured data (CSV, JSON, database) that other steps consume, \
 the step description MUST explicitly state the column names, key names, or schema. \
 Consumer steps MUST reference the exact names from the producer step — never invent \
@@ -821,7 +821,7 @@ artifacts via the shared workspace.
 6. Are environment/package requirements complete? Do they use the current
    best-in-class tools and libraries, not legacy or outdated alternatives?
 7. Does the plan correctly avoid git commands (version control is managed by the framework)?
-8. Does the plan ensure a README.md and pyproject.toml (with pinned dependencies) are created for any multi-file project?
+8. Does the plan ensure a README.md and a dependency manifest (with pinned versions) are created for any multi-file project?
 9. Do step descriptions avoid hardcoding secrets and instead instruct reading from environment variables?
 10. Do steps use HTTPS URLs, not plain HTTP?
 </review_criteria>

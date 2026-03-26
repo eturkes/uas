@@ -2262,15 +2262,20 @@ def check_project_guardrails(workspace: str) -> list[str]:
     if not has_readme:
         warnings.append("Project has no README file")
 
-    # Check for requirements.txt or pyproject.toml
+    # Check for a dependency manifest (any ecosystem)
     has_deps = any(
         e in entries
-        for e in ("requirements.txt", "pyproject.toml", "Pipfile", "poetry.lock")
+        for e in (
+            "pyproject.toml", "requirements.txt", "Pipfile", "poetry.lock",
+            "package.json", "Cargo.toml", "go.mod", "Gemfile",
+            "build.gradle", "build.gradle.kts", "pom.xml",
+            "pubspec.yaml", "Package.swift", "composer.json",
+        )
     )
     if not has_deps:
         warnings.append(
-            "Project has no dependency file "
-            "(pyproject.toml or requirements.txt)"
+            "Project has no dependency manifest "
+            "(pyproject.toml, requirements.txt, package.json, etc.)"
         )
 
     # Check for orphaned modules

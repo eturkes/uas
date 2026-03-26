@@ -170,6 +170,14 @@ and visualize" should be broken down. A step that requires model training AND \
 explainability AND visualization is too large — split them into separate steps \
 that save/load intermediate artifacts (e.g., save the trained model with joblib, \
 then a separate step loads it and computes SHAP values)
+- Overloading steps: A step that requires model training AND statistical \
+testing AND visualization will fail to do all three well. Split into \
+separate steps: one trains and saves the model, one loads the model and \
+runs statistical analyses, one generates visualizations. Each step should \
+have ONE primary responsibility.
+- The 250-line limit is real: if a step description contains more than 3 \
+distinct deliverables, it MUST be split. Count deliverables explicitly in \
+your analysis.
 - Missing dependencies: if step 3 reads a file written by step 1, it must list step 1 in depends_on
 - Implicit ordering: steps that must run sequentially need explicit depends_on, even if the order seems obvious
 - Overly vague descriptions: "process the data" tells the code-generating LLM nothing — be specific about format, method, and expected output
@@ -811,9 +819,36 @@ def critique_and_refine_plan(goal: str, steps: list[dict]) -> list[dict]:
     Single-pass review: if the LLM identifies issues it returns a corrected
     plan, otherwise returns the original steps unchanged.
     """
+    # Heuristic: flag steps that are likely overloaded
+    overload_warnings = []
+    for i, step in enumerate(steps):
+        desc = step.get("description", "")
+        if len(desc) > 1500:
+            # Count distinct output files mentioned in the description
+            file_mentions = re.findall(
+                r'[\w/]+\.(?:csv|json|txt|png|html|py|joblib|pkl|md)\b', desc
+            )
+            distinct_files = len(set(file_mentions))
+            if distinct_files > 2:
+                overload_warnings.append(
+                    f"Step {i + 1} (\"{step.get('title', '')}\") has a "
+                    f"{len(desc)}-char description mentioning {distinct_files} "
+                    f"distinct output files — likely overloaded and should be "
+                    f"split into smaller steps with one primary responsibility each."
+                )
+
     client = get_llm_client(role="planner")
     steps_json = json.dumps(steps, indent=2)
     prompt = CRITIQUE_PROMPT.format(goal=goal, steps_json=steps_json)
+
+    if overload_warnings:
+        overload_section = (
+            "\n<overload_warnings>\n"
+            "The following steps appear overloaded and should be split:\n"
+            + "\n".join(f"- {w}" for w in overload_warnings)
+            + "\n</overload_warnings>\n"
+        )
+        prompt += overload_section
 
     event_log = get_event_log()
     try:

@@ -208,7 +208,7 @@ prioritized the model and stubbed out the rest.
    description is longer than 1500 characters AND mentions more than 2 distinct
    output files, flag it for splitting in the critique prompt.
 
-- [ ] Done
+- [x] Done
 
 ---
 

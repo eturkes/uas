@@ -265,7 +265,7 @@ already exist.
    but the CLAUDE.md doesn't explicitly tell the generator to reuse rather than
    reinvent.
 
-- [ ] Done
+- [x] Done
 
 ---
 

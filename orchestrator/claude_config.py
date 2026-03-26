@@ -145,6 +145,15 @@ def _format_step_context(ctx: dict) -> str:
                 parts.append(f"constants=[{', '.join(api['constants'])}]")
             if parts:
                 lines.append(f"- `{filepath}`: {', '.join(parts)}")
+        lines.append("")
+        lines.append(
+            "IMPORTANT: Before writing a new helper function, check if an equivalent\n"
+            "already exists in the modules listed above. Import and reuse existing\n"
+            "functions rather than reimplementing them. In particular:\n"
+            "- Translation helpers: use the one from dashboard/translations.py\n"
+            "- Data loading: use the one from data_loader.py\n"
+            "- Feature engineering: use functions from feature_engineering.py"
+        )
 
     return "\n".join(lines) + "\n"
 

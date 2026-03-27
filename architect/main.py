@@ -2944,11 +2944,14 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
     if result["exit_code"] == 0 and "VERIFICATION PASSED" in all_output:
         return None
 
-    # If the orchestrator produced no meaningful output at all, the
-    # verification is inconclusive (e.g. LLM failed to generate a script,
+    # If the orchestrator exited cleanly but produced no meaningful output,
+    # the verification is inconclusive (e.g. LLM failed to generate a script,
     # sandbox produced no output).  Treat as a pass rather than penalising
-    # the step for an infrastructure issue.
-    if not all_output.strip() and "VERIFICATION FAILED" not in all_output:
+    # the step for an infrastructure issue.  Non-zero exits (crashes,
+    # timeouts) are still treated as failures.
+    if (result["exit_code"] == 0
+            and not all_output.strip()
+            and "VERIFICATION FAILED" not in all_output):
         logger.warning(
             "  Verification produced no output — treating as inconclusive (pass)."
         )
@@ -4600,6 +4603,7 @@ def main():
             state,
             completed_step,
             detail,
+            requirements=state.get("requirements"),
         )
 
         if new_remaining is None:

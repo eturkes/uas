@@ -90,7 +90,7 @@ address it. If any requirement is uncovered, add steps before execution begins.
 
 ---
 
-### Section 2 — Protect requirements during replanning
+### Section 2 — Protect requirements during replanning [x] Done
 
 **Problem:** `replan_remaining_steps()` in `architect/planner.py` can drop steps
 that were the sole coverage for a goal requirement. In the rehab run, steps

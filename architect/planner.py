@@ -2063,6 +2063,8 @@ Step {step_id} ({step_title}) produced an unexpected result:
 {remaining_steps_json}
 </remaining_steps>
 
+{protected_requirements_block}
+
 <instructions>
 The plan is being executed but a step has produced output that doesn't match \
 what downstream steps expect. Given what has been accomplished so far, adjust \
@@ -2079,6 +2081,9 @@ Rules:
 after the last completed step.
 8. Use the EXACT same directory names that completed steps created (e.g., if step 1 \
 used "outputs/", do NOT switch to "output/" or "results/" in later steps).
+9. You MUST NOT remove coverage for any protected requirement listed above. \
+You may rewrite, merge, split, or reorder steps, but every protected requirement \
+must still be addressed by at least one step in the new plan.
 
 Respond with ONLY a JSON array of the REMAINING steps (not completed ones). \
 Each element:
@@ -2091,21 +2096,10 @@ Each element:
 """
 
 
-def replan_remaining_steps(goal: str, state: dict,
-                           unexpected_step: dict,
-                           unexpected_detail: str) -> list[dict] | None:
-    """Incrementally re-plan remaining steps after an unexpected result.
-
-    Instead of re-decomposing from scratch, adjusts pending steps based on
-    actual outputs from completed steps. Returns the new list of remaining
-    steps, or None if re-planning fails.
-
-    Section 6b of PLAN.md.
-    """
-    client = get_llm_client(role="planner")
-    event_log = get_event_log()
-
-    # Build completed steps info
+def _build_replan_prompt(goal: str, state: dict, unexpected_step: dict,
+                         unexpected_detail: str,
+                         requirements: list[str] | None = None) -> str:
+    """Build the re-planning prompt with optional protected requirements."""
     completed_info_lines = []
     for s in state.get("steps", []):
         if s["status"] == "completed":
@@ -2117,7 +2111,6 @@ def replan_remaining_steps(goal: str, state: dict,
             )
     completed_steps_info = "\n".join(completed_info_lines) or "None yet."
 
-    # Build remaining steps JSON
     remaining = [
         s for s in state.get("steps", [])
         if s["status"] not in ("completed",) and s["id"] != unexpected_step["id"]
@@ -2134,85 +2127,190 @@ def replan_remaining_steps(goal: str, state: dict,
         for s in remaining
     ], indent=2)
 
-    prompt = REPLAN_PROMPT.format(
+    if requirements:
+        reqs_text = "\n".join(f"- {r}" for r in requirements)
+        protected_block = (
+            "<protected_requirements>\n"
+            "The following requirements MUST each be addressed by at least one "
+            "step in the new plan. You may rewrite, merge, split, or reorder "
+            "steps, but you MUST NOT remove coverage for any of these:\n"
+            f"{reqs_text}\n"
+            "</protected_requirements>"
+        )
+    else:
+        protected_block = ""
+
+    return REPLAN_PROMPT.format(
         goal=goal,
         completed_steps_info=completed_steps_info,
         step_id=unexpected_step["id"],
         step_title=unexpected_step["title"],
         unexpected_detail=unexpected_detail,
         remaining_steps_json=remaining_json,
+        protected_requirements_block=protected_block,
     )
 
-    event_log.emit(EventType.LLM_CALL_START,
-                   data={"purpose": "replan_remaining_steps"})
-    try:
-        response = client.generate(prompt, stream=True)
-        event_log.emit(EventType.LLM_CALL_COMPLETE,
-                       data={"purpose": "replan_remaining_steps"})
-    except Exception as e:
-        logger.warning("Re-planning LLM call failed: %s", e)
-        return None
 
-    try:
-        new_steps = parse_steps_json(response)
-        if not new_steps:
-            return None
-        for step in new_steps:
-            if "title" not in step or "description" not in step:
-                return None
-            step.setdefault("depends_on", [])
-            step.setdefault("verify", "")
-            step.setdefault("environment", [])
-        # Normalize 0-indexed depends_on
-        has_zero_ref = any(0 in s.get("depends_on", []) for s in new_steps)
-        if has_zero_ref:
-            for step in new_steps:
-                step["depends_on"] = [d + 1 for d in step["depends_on"]]
-        # Re-planned steps may reference completed step IDs outside this
-        # list, so we can't use validate_depends_on (which assumes a
-        # self-contained 1-indexed list).  Instead, validate that deps
-        # reference either completed steps or other new steps, and that
-        # there are no cycles among the new steps themselves.
-        #
-        # The LLM may use different numbering schemes for new steps:
-        #   - Positional 1-based indices (1, 2, 3, ...)
-        #   - Continuation IDs after max completed (e.g. 4, 5, 6, ...)
-        #   - Explicit "id" fields in the JSON
-        # Accept all of these as valid references.
-        completed_ids = {
-            s["id"] for s in state.get("steps", [])
-            if s["status"] == "completed"
-        }
-        max_completed = max(completed_ids) if completed_ids else 0
-        n = len(new_steps)
-        # Build the set of all valid new-step IDs the LLM might use
-        positional_ids = set(range(1, n + 1))
-        continuation_ids = {max_completed + i + 1 for i in range(n)}
-        llm_ids = {s["id"] for s in new_steps if "id" in s}
-        valid_new_ids = positional_ids | continuation_ids | llm_ids
-        all_valid = completed_ids | valid_new_ids
-        for i, step in enumerate(new_steps):
-            for dep in step.get("depends_on", []):
-                if not isinstance(dep, int):
-                    raise ValueError(
-                        f"New step {i + 1} has non-integer dep: {dep}"
-                    )
-                if dep not in all_valid:
-                    raise ValueError(
-                        f"New step {i + 1} references unknown step {dep}"
-                    )
-                # Self-reference check using all possible IDs for this step
-                self_ids = {i + 1, max_completed + i + 1}
-                if "id" in step:
-                    self_ids.add(step["id"])
-                if dep in self_ids and dep not in completed_ids:
-                    raise ValueError(
-                        f"New step {i + 1} depends on itself."
-                    )
-        return new_steps
-    except (ValueError, json.JSONDecodeError) as e:
-        logger.warning("Could not parse re-planned steps: %s", e)
+def _validate_replan_steps(new_steps: list[dict],
+                           state: dict) -> list[dict] | None:
+    """Validate and normalize re-planned steps.
+
+    Returns the validated steps or None if validation fails.
+    """
+    if not new_steps:
         return None
+    for step in new_steps:
+        if "title" not in step or "description" not in step:
+            return None
+        step.setdefault("depends_on", [])
+        step.setdefault("verify", "")
+        step.setdefault("environment", [])
+    # Normalize 0-indexed depends_on
+    has_zero_ref = any(0 in s.get("depends_on", []) for s in new_steps)
+    if has_zero_ref:
+        for step in new_steps:
+            step["depends_on"] = [d + 1 for d in step["depends_on"]]
+    # Re-planned steps may reference completed step IDs outside this
+    # list, so we can't use validate_depends_on (which assumes a
+    # self-contained 1-indexed list).  Instead, validate that deps
+    # reference either completed steps or other new steps, and that
+    # there are no cycles among the new steps themselves.
+    #
+    # The LLM may use different numbering schemes for new steps:
+    #   - Positional 1-based indices (1, 2, 3, ...)
+    #   - Continuation IDs after max completed (e.g. 4, 5, 6, ...)
+    #   - Explicit "id" fields in the JSON
+    # Accept all of these as valid references.
+    completed_ids = {
+        s["id"] for s in state.get("steps", [])
+        if s["status"] == "completed"
+    }
+    max_completed = max(completed_ids) if completed_ids else 0
+    n = len(new_steps)
+    # Build the set of all valid new-step IDs the LLM might use
+    positional_ids = set(range(1, n + 1))
+    continuation_ids = {max_completed + i + 1 for i in range(n)}
+    llm_ids = {s["id"] for s in new_steps if "id" in s}
+    valid_new_ids = positional_ids | continuation_ids | llm_ids
+    all_valid = completed_ids | valid_new_ids
+    for i, step in enumerate(new_steps):
+        for dep in step.get("depends_on", []):
+            if not isinstance(dep, int):
+                raise ValueError(
+                    f"New step {i + 1} has non-integer dep: {dep}"
+                )
+            if dep not in all_valid:
+                raise ValueError(
+                    f"New step {i + 1} references unknown step {dep}"
+                )
+            # Self-reference check using all possible IDs for this step
+            self_ids = {i + 1, max_completed + i + 1}
+            if "id" in step:
+                self_ids.add(step["id"])
+            if dep in self_ids and dep not in completed_ids:
+                raise ValueError(
+                    f"New step {i + 1} depends on itself."
+                )
+    return new_steps
+
+
+def replan_remaining_steps(goal: str, state: dict,
+                           unexpected_step: dict,
+                           unexpected_detail: str,
+                           requirements: list[str] | None = None,
+                           ) -> list[dict] | None:
+    """Incrementally re-plan remaining steps after an unexpected result.
+
+    Instead of re-decomposing from scratch, adjusts pending steps based on
+    actual outputs from completed steps. Returns the new list of remaining
+    steps, or None if re-planning fails.
+
+    When *requirements* is provided (Section 2 of PLAN.md), the new plan
+    is verified for coverage. If any protected requirement is dropped, the
+    LLM is retried up to 2 times with the dropped requirements highlighted.
+    If still uncovered after retries, ``fill_coverage_gaps()`` adds the
+    missing steps.
+    """
+    client = get_llm_client(role="planner")
+    event_log = get_event_log()
+
+    max_coverage_retries = 2
+    dropped: list[str] = []
+
+    for attempt in range(1 + max_coverage_retries):
+        # On retry, append dropped requirements to the detail so the LLM
+        # knows exactly what it missed.
+        retry_detail = unexpected_detail
+        if attempt > 0 and dropped:
+            retry_detail += (
+                "\n\nIMPORTANT: Your previous re-plan dropped coverage for "
+                "these requirements — you MUST include steps that address "
+                "them:\n" + "\n".join(f"- {r}" for r in dropped)
+            )
+
+        prompt = _build_replan_prompt(
+            goal, state, unexpected_step, retry_detail,
+            requirements=requirements,
+        )
+
+        event_log.emit(EventType.LLM_CALL_START,
+                       data={"purpose": "replan_remaining_steps",
+                             "attempt": attempt + 1})
+        try:
+            response = client.generate(prompt, stream=True)
+            event_log.emit(EventType.LLM_CALL_COMPLETE,
+                           data={"purpose": "replan_remaining_steps",
+                                 "attempt": attempt + 1})
+        except Exception as e:
+            logger.warning("Re-planning LLM call failed: %s", e)
+            return None
+
+        try:
+            new_steps = parse_steps_json(response)
+            new_steps = _validate_replan_steps(new_steps, state)
+            if new_steps is None:
+                return None
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning("Could not parse re-planned steps: %s", e)
+            return None
+
+        # Section 2a: Verify coverage is preserved
+        if not requirements:
+            return new_steps
+
+        # Combine completed + new steps for coverage check
+        completed_steps = [
+            s for s in state.get("steps", [])
+            if s["status"] == "completed"
+        ]
+        all_steps = completed_steps + new_steps
+        matrix = verify_coverage(requirements, all_steps)
+        dropped = [
+            e["requirement"] for e in matrix
+            if not e.get("covered", True)
+        ]
+
+        if not dropped:
+            logger.info("  Re-plan preserves all %d requirements.",
+                        len(requirements))
+            return new_steps
+
+        logger.info(
+            "  Re-plan attempt %d dropped %d requirement(s): %s",
+            attempt + 1, len(dropped),
+            ", ".join(dropped[:3]) + ("..." if len(dropped) > 3 else ""),
+        )
+
+    # Section 2a: Exhausted retries — fill gaps as fallback
+    logger.info(
+        "  Re-plan retries exhausted, filling %d coverage gap(s).",
+        len(dropped),
+    )
+    gap_steps = fill_coverage_gaps(goal, dropped, new_steps)
+    if gap_steps:
+        new_steps = new_steps + gap_steps
+
+    return new_steps
 
 
 def _extract_file_schema(filepath: str) -> str | None:

@@ -33,7 +33,7 @@ class TestBuildContext:
         # Step 2 has no output, should not crash
         assert "out2" not in result
 
-    def test_empty_dependency_output(self):
+    def test_empty_dependency_output(self, tmp_workspace):
         step = {"depends_on": [1]}
         outputs = {1: ""}
         result = build_context(step, outputs)
@@ -78,7 +78,7 @@ class TestBuildContext:
         assert "some warning" in result
         assert "/workspace/result.txt" in result
 
-    def test_dict_output_empty_fields_omitted(self):
+    def test_dict_output_empty_fields_omitted(self, tmp_workspace):
         step = {"depends_on": [1]}
         outputs = {1: {"stdout": "", "stderr": "", "files": []}}
         result = build_context(step, outputs)

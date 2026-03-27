@@ -39,7 +39,7 @@ ordered by impact. Each is scoped to be completable in a single coding session.
 
 ---
 
-### Section 1 — Goal-coverage matrix before execution
+### Section 1 — Goal-coverage matrix before execution [x] Done
 
 **Problem:** UAS decomposes the goal into steps but never verifies that ALL goal
 requirements are covered. In the rehab run, modeling, SHAP explainability,

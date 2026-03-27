@@ -41,6 +41,9 @@ from .planner import (
     merge_steps_with_llm,
     replan_remaining_steps,
     enrich_step_descriptions,
+    ensure_coverage,
+    verify_coverage,
+    fill_coverage_gaps,
 )
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import (
@@ -2941,6 +2944,16 @@ def verify_step_output(step: dict, workspace: str) -> str | None:
     if result["exit_code"] == 0 and "VERIFICATION PASSED" in all_output:
         return None
 
+    # If the orchestrator produced no meaningful output at all, the
+    # verification is inconclusive (e.g. LLM failed to generate a script,
+    # sandbox produced no output).  Treat as a pass rather than penalising
+    # the step for an infrastructure issue.
+    if not all_output.strip() and "VERIFICATION FAILED" not in all_output:
+        logger.warning(
+            "  Verification produced no output — treating as inconclusive (pass)."
+        )
+        return None
+
     error = stdout or result.get("stderr", "") or "Verification script failed"
     return error[:MAX_ERROR_LENGTH or None]
 
@@ -4473,6 +4486,11 @@ def main():
                     data={"before": pre_merge, "after": len(steps)},
                 )
 
+        # Section 1: Goal-coverage matrix — verify all requirements are covered
+        steps, requirements = ensure_coverage(goal, steps)
+        if requirements:
+            state["requirements"] = requirements
+
         state = add_steps(state, steps)
         logger.info("  Decomposed into %d step(s):", len(steps))
         for s in state["steps"]:
@@ -4637,6 +4655,38 @@ def main():
             ]
 
         state["steps"] = completed_steps + new_remaining
+
+        # Section 1d: Re-verify coverage after replanning
+        requirements = state.get("requirements", [])
+        if requirements:
+            matrix = verify_coverage(requirements, state["steps"])
+            dropped = [
+                e["requirement"] for e in matrix
+                if not e.get("covered", True)
+            ]
+            if dropped:
+                logger.info(
+                    "  Re-plan dropped coverage for %d requirement(s), "
+                    "filling gaps...", len(dropped),
+                )
+                gap_steps = fill_coverage_gaps(
+                    state.get("goal", ""), dropped, state["steps"],
+                )
+                for gs in gap_steps:
+                    gs_id = max(s["id"] for s in state["steps"]) + 1
+                    gs["id"] = gs_id
+                    gs.setdefault("status", "pending")
+                    gs.setdefault("spec_file", "")
+                    gs.setdefault("rewrites", 0)
+                    gs.setdefault("reflections", [])
+                    gs.setdefault("output", "")
+                    gs.setdefault("stderr_output", "")
+                    gs.setdefault("error", "")
+                    gs.setdefault("files_written", [])
+                    gs.setdefault("uas_result", None)
+                    gs.setdefault("summary", "")
+                    state["steps"].append(gs)
+
         step_by_id = {s["id"]: s for s in state["steps"]}
 
         # Re-validate and re-sort

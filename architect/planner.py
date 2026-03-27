@@ -797,6 +797,291 @@ def decompose_goal_with_voting(
 decompose_goal_with_voting.last_complexity = None
 
 
+# ---------------------------------------------------------------------------
+# Section 1 — Goal-coverage matrix
+# ---------------------------------------------------------------------------
+
+EXTRACT_REQUIREMENTS_PROMPT = """\
+<goal>{goal}</goal>
+
+<instructions>
+Extract every discrete, testable requirement from the goal above. Each \
+requirement should be a single deliverable or capability that the final output \
+must include. Be exhaustive — if the goal mentions it, list it.
+
+Guidelines:
+- Split compound requirements (e.g., "build a dashboard with 3 tabs" → one \
+requirement per tab).
+- Include non-functional requirements (bilingual support, performance targets) \
+only if they are explicitly stated.
+- Keep each requirement to one short sentence.
+
+Return ONLY a JSON array of strings, e.g.:
+["data simulator from spec", "cleaning pipeline", "XGBoost predictive model"]
+</instructions>
+"""
+
+VERIFY_COVERAGE_PROMPT = """\
+<requirements>
+{requirements_json}
+</requirements>
+
+<steps>
+{steps_json}
+</steps>
+
+<instructions>
+For each requirement, determine whether at least one step in the plan \
+addresses it. A step "covers" a requirement if completing that step would \
+deliver or substantially contribute to the requirement.
+
+Return ONLY a JSON array of objects:
+[{{"requirement": "...", "covered": true/false, "covering_steps": [step_numbers]}}]
+
+Use 1-based step numbers matching the step list order.
+</instructions>
+"""
+
+FILL_GAPS_PROMPT = """\
+<goal>{goal}</goal>
+
+<uncovered_requirements>
+{uncovered_json}
+</uncovered_requirements>
+
+<existing_steps>
+{steps_json}
+</existing_steps>
+
+<instructions>
+The existing plan is missing coverage for the requirements listed above. \
+Generate new steps to fill these gaps. Each new step must:
+1. Address one or more of the uncovered requirements.
+2. Be a self-contained Python script task.
+3. Have correct depends_on references (1-based, referencing existing step \
+numbers or other new steps).
+4. NOT duplicate work already covered by existing steps.
+
+Number the new steps starting from {next_step_number}.
+
+Return ONLY a JSON array of step objects:
+[{{"title": "...", "description": "...", "depends_on": [...], \
+"verify": "...", "environment": [...]}}]
+</instructions>
+"""
+
+
+def extract_requirements(goal: str) -> list[str]:
+    """Extract atomic requirements from a goal using LLM.
+
+    Section 1a of PLAN.md.
+    """
+    client = get_llm_client(role="planner")
+    prompt = EXTRACT_REQUIREMENTS_PROMPT.format(goal=goal)
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START,
+                   data={"purpose": "extract_requirements"})
+    try:
+        response = client.generate(prompt)
+    except Exception as e:
+        logger.warning("Requirement extraction failed: %s", e)
+        return []
+    event_log.emit(EventType.LLM_CALL_COMPLETE,
+                   data={"purpose": "extract_requirements"})
+
+    # Parse JSON array of strings
+    try:
+        # Strip markdown fences if present
+        text = response.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```\w*\n?", "", text)
+            text = re.sub(r"\n?```\s*$", "", text)
+        reqs = json.loads(text)
+        if isinstance(reqs, list) and all(isinstance(r, str) for r in reqs):
+            return reqs
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fallback: try to find a JSON array in the response
+    match = re.search(r"\[.*\]", response, re.DOTALL)
+    if match:
+        try:
+            reqs = json.loads(match.group())
+            if isinstance(reqs, list) and all(isinstance(r, str) for r in reqs):
+                return reqs
+        except (json.JSONDecodeError, ValueError):
+            pass
+    logger.warning("Could not parse requirements from LLM response.")
+    return []
+
+
+def verify_coverage(
+    requirements: list[str],
+    steps: list[dict],
+) -> list[dict]:
+    """Check which requirements are covered by steps.
+
+    Returns a list of dicts with keys: requirement, covered, covering_steps.
+    Section 1b of PLAN.md.
+    """
+    if not requirements:
+        return []
+
+    client = get_llm_client(role="planner")
+    steps_for_prompt = [
+        {"step_number": i + 1, "title": s["title"],
+         "description": s["description"]}
+        for i, s in enumerate(steps)
+    ]
+    prompt = VERIFY_COVERAGE_PROMPT.format(
+        requirements_json=json.dumps(requirements, indent=2),
+        steps_json=json.dumps(steps_for_prompt, indent=2),
+    )
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START,
+                   data={"purpose": "verify_coverage"})
+    try:
+        response = client.generate(prompt)
+    except Exception as e:
+        logger.warning("Coverage verification failed: %s", e)
+        # Fail-open: assume all covered to avoid blocking execution
+        return [
+            {"requirement": r, "covered": True, "covering_steps": []}
+            for r in requirements
+        ]
+    event_log.emit(EventType.LLM_CALL_COMPLETE,
+                   data={"purpose": "verify_coverage"})
+
+    # Parse JSON array
+    try:
+        text = response.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```\w*\n?", "", text)
+            text = re.sub(r"\n?```\s*$", "", text)
+        matrix = json.loads(text)
+        if isinstance(matrix, list):
+            return matrix
+    except (json.JSONDecodeError, ValueError):
+        pass
+    match = re.search(r"\[.*\]", response, re.DOTALL)
+    if match:
+        try:
+            matrix = json.loads(match.group())
+            if isinstance(matrix, list):
+                return matrix
+        except (json.JSONDecodeError, ValueError):
+            pass
+    logger.warning("Could not parse coverage matrix from LLM response.")
+    return [
+        {"requirement": r, "covered": True, "covering_steps": []}
+        for r in requirements
+    ]
+
+
+def fill_coverage_gaps(
+    goal: str,
+    uncovered: list[str],
+    existing_steps: list[dict],
+) -> list[dict]:
+    """Generate new steps to cover uncovered requirements.
+
+    Returns a list of new step dicts to append to the plan.
+    Section 1c of PLAN.md.
+    """
+    if not uncovered:
+        return []
+
+    client = get_llm_client(role="planner")
+    next_step = len(existing_steps) + 1
+    steps_for_prompt = [
+        {"step_number": i + 1, "title": s["title"],
+         "description": s["description"],
+         "depends_on": s.get("depends_on", [])}
+        for i, s in enumerate(existing_steps)
+    ]
+    prompt = FILL_GAPS_PROMPT.format(
+        goal=goal,
+        uncovered_json=json.dumps(uncovered, indent=2),
+        steps_json=json.dumps(steps_for_prompt, indent=2),
+        next_step_number=next_step,
+    )
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START,
+                   data={"purpose": "fill_coverage_gaps"})
+    try:
+        response = client.generate(prompt)
+    except Exception as e:
+        logger.warning("Gap-filling failed: %s", e)
+        return []
+    event_log.emit(EventType.LLM_CALL_COMPLETE,
+                   data={"purpose": "fill_coverage_gaps"})
+
+    try:
+        new_steps = parse_steps_json(response)
+    except ValueError:
+        logger.warning("Could not parse gap-filling steps.")
+        return []
+
+    if not new_steps:
+        return []
+
+    for step in new_steps:
+        step.setdefault("depends_on", [])
+        step.setdefault("verify", "")
+        step.setdefault("environment", [])
+        if "title" not in step or "description" not in step:
+            continue
+
+    # Filter out any steps missing required fields
+    new_steps = [s for s in new_steps if "title" in s and "description" in s]
+
+    return new_steps
+
+
+def ensure_coverage(goal: str, steps: list[dict]) -> tuple[list[dict], list[str]]:
+    """Extract requirements, verify coverage, fill gaps if needed.
+
+    Convenience function that chains extract → verify → fill.
+    Returns (updated_steps, requirements).
+    """
+    requirements = extract_requirements(goal)
+    if not requirements:
+        logger.info("  No requirements extracted, skipping coverage check.")
+        return steps, []
+
+    logger.info("  Extracted %d requirements from goal.", len(requirements))
+
+    matrix = verify_coverage(requirements, steps)
+    uncovered = [
+        entry["requirement"]
+        for entry in matrix
+        if not entry.get("covered", True)
+    ]
+
+    if not uncovered:
+        logger.info("  All %d requirements covered.", len(requirements))
+        return steps, requirements
+
+    logger.info(
+        "  %d/%d requirements uncovered: %s",
+        len(uncovered), len(requirements),
+        ", ".join(uncovered[:5]) + ("..." if len(uncovered) > 5 else ""),
+    )
+
+    new_steps = fill_coverage_gaps(goal, uncovered, steps)
+    if new_steps:
+        logger.info("  Added %d steps to fill coverage gaps.", len(new_steps))
+        steps = steps + new_steps
+        # Re-validate dependencies with the expanded step list
+        try:
+            validate_depends_on(steps)
+        except ValueError:
+            # Normalize deps: new steps may reference by absolute number
+            # which is already correct since they start at len(existing)+1
+            logger.debug("Dependency validation after gap-fill — adjusting.")
+
+    return steps, requirements
+
+
 CRITIQUE_PROMPT = """\
 <goal>{goal}</goal>
 

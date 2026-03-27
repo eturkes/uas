@@ -110,6 +110,9 @@ class TestWriteJsonOutput:
 
 
 class TestOutputIntegration:
+    @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
+    @patch("architect.main.expand_goal", side_effect=lambda g: g)
+    @patch("architect.main.post_run_meta_learning", return_value=None)
     @patch("architect.main.research_goal", return_value="")
     @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
@@ -118,7 +121,8 @@ class TestOutputIntegration:
     @patch("architect.main.build_task_from_spec")
     def test_output_written_on_success(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
-        mock_complexity, mock_research, tmp_workspace, monkeypatch,
+        mock_complexity, mock_research, mock_meta, mock_expand, mock_coverage,
+        tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},
@@ -139,6 +143,8 @@ class TestOutputIntegration:
         assert len(data["steps"]) == 1
         assert data["steps"][0]["status"] == "completed"
 
+    @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
+    @patch("architect.main.expand_goal", side_effect=lambda g: g)
     @patch("architect.main.research_goal", return_value="")
     @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
@@ -147,10 +153,12 @@ class TestOutputIntegration:
     @patch("architect.main.build_task_from_spec")
     @patch("architect.main.decompose_failing_step")
     @patch("architect.main.reflect_and_rewrite")
+    @patch("architect.main.generate_reflection")
     def test_output_written_on_blocked(
-        self, mock_reflect, mock_decompose_step, mock_build_task, mock_gen_spec,
+        self, mock_gen_refl, mock_reflect, mock_decompose_step,
+        mock_build_task, mock_gen_spec,
         mock_run_orch, mock_decompose, mock_complexity, mock_research,
-        tmp_workspace, monkeypatch,
+        mock_expand, mock_coverage, tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},
@@ -162,6 +170,11 @@ class TestOutputIntegration:
         }
         mock_reflect.return_value = "rewritten task"
         mock_decompose_step.return_value = "decomposed task"
+        mock_gen_refl.return_value = {
+            "attempt": 1, "error_type": "logic_error",
+            "root_cause": "test failure", "strategy_tried": "attempt 1",
+            "lesson": "", "what_to_try_next": "",
+        }
 
         import architect.main as main_mod
         monkeypatch.setattr(main_mod, "WORKSPACE", str(tmp_workspace))
@@ -179,6 +192,9 @@ class TestOutputIntegration:
         assert data["status"] == "blocked"
         assert data["steps"][0]["status"] == "failed"
 
+    @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
+    @patch("architect.main.expand_goal", side_effect=lambda g: g)
+    @patch("architect.main.post_run_meta_learning", return_value=None)
     @patch("architect.main.research_goal", return_value="")
     @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
@@ -187,7 +203,8 @@ class TestOutputIntegration:
     @patch("architect.main.build_task_from_spec")
     def test_output_env_var(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
-        mock_complexity, mock_research, tmp_workspace, monkeypatch,
+        mock_complexity, mock_research, mock_meta, mock_expand, mock_coverage,
+        tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},
@@ -207,6 +224,9 @@ class TestOutputIntegration:
             data = json.load(f)
         assert data["status"] == "completed"
 
+    @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
+    @patch("architect.main.expand_goal", side_effect=lambda g: g)
+    @patch("architect.main.post_run_meta_learning", return_value=None)
     @patch("architect.main.research_goal", return_value="")
     @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
@@ -215,7 +235,8 @@ class TestOutputIntegration:
     @patch("architect.main.build_task_from_spec")
     def test_no_output_when_not_requested(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
-        mock_complexity, mock_research, tmp_workspace, monkeypatch,
+        mock_complexity, mock_research, mock_meta, mock_expand, mock_coverage,
+        tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},

@@ -8,7 +8,10 @@ import pytest
 from orchestrator.llm_client import (
     ClaudeCodeClient,
     DEFAULT_TIMEOUT,
+    INITIAL_BACKOFF,
     MAX_RETRIES,
+    OVERLOADED_BACKOFF,
+    _is_overloaded,
     _is_transient,
     get_llm_client,
 )
@@ -129,8 +132,40 @@ class TestRetryBehaviour:
         client.generate("test")
         assert mock_sleep.call_count == 2
         # First backoff: 2 * 2^0 = 2s, second: 2 * 2^1 = 4s
-        mock_sleep.assert_any_call(2)
-        mock_sleep.assert_any_call(4)
+        mock_sleep.assert_any_call(INITIAL_BACKOFF)
+        mock_sleep.assert_any_call(INITIAL_BACKOFF * 2)
+
+    @patch("orchestrator.llm_client.time.sleep")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_overloaded_uses_longer_backoff(self, _mock_which, mock_stream, mock_sleep):
+        """529 overloaded errors should use OVERLOADED_BACKOFF, not INITIAL_BACKOFF."""
+        mock_stream.side_effect = [
+            ("", 'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}', 1),
+            ("ok", "", 0),
+        ]
+        client = ClaudeCodeClient()
+        result = client.generate("test")
+        assert result == "ok"
+        assert mock_stream.call_count == 2
+        # Overloaded backoff: OVERLOADED_BACKOFF * 2^0
+        mock_sleep.assert_called_with(OVERLOADED_BACKOFF)
+
+    @patch("orchestrator.llm_client.time.sleep")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_529_retries_until_success(self, _mock_which, mock_stream, mock_sleep):
+        """529 errors should be retried across multiple attempts."""
+        mock_stream.side_effect = [
+            ("", "529 overloaded_error", 1),
+            ("", "529 overloaded_error", 1),
+            ("", "529 overloaded_error", 1),
+            ("ok", "", 0),
+        ]
+        client = ClaudeCodeClient()
+        result = client.generate("test")
+        assert result == "ok"
+        assert mock_stream.call_count == 4
 
 
 class TestIsTransient:
@@ -154,6 +189,36 @@ class TestIsTransient:
 
     def test_overloaded_is_transient(self):
         assert _is_transient("API is overloaded") is True
+
+    def test_529_is_transient(self):
+        assert _is_transient(
+            'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+        ) is True
+
+    def test_overloaded_error_type_is_transient(self):
+        assert _is_transient("overloaded_error") is True
+
+
+class TestIsOverloaded:
+    def test_529_is_overloaded(self):
+        assert _is_overloaded(
+            'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+        ) is True
+
+    def test_overloaded_is_overloaded(self):
+        assert _is_overloaded("API is overloaded") is True
+
+    def test_rate_limit_is_overloaded(self):
+        assert _is_overloaded("rate limit exceeded") is True
+
+    def test_429_is_overloaded(self):
+        assert _is_overloaded("HTTP 429 Too Many Requests") is True
+
+    def test_timeout_is_not_overloaded(self):
+        assert _is_overloaded("request timed out") is False
+
+    def test_connection_error_is_not_overloaded(self):
+        assert _is_overloaded("Connection refused") is False
 
 
 class TestRateLimitInStdout:
@@ -197,8 +262,8 @@ class TestRateLimitInStdout:
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError):
             client.generate("test")
-        # Should have attempted initial + MAX_RETRIES = 3 calls
-        assert mock_stream.call_count == 3
+        # Should have attempted initial + MAX_RETRIES = 5 calls
+        assert mock_stream.call_count == 1 + MAX_RETRIES
 
     @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")

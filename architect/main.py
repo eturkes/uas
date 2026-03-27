@@ -82,7 +82,7 @@ MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
 # Rate limit detection patterns and backoff configuration.
 _RATE_LIMIT_PATTERNS = [
     "rate limit", "rate_limit", "hit your limit", "too many requests",
-    "429", "overloaded", "capacity",
+    "429", "529", "overloaded", "overloaded_error", "capacity",
 ]
 _RATE_LIMIT_RESET_RE = re.compile(r"resets?\s+(\d{1,2})(?::(\d{2}))?\s*(?:am|pm)?\s*\(?utc\)?", re.IGNORECASE)
 RATE_LIMIT_BASE_WAIT = int(os.environ.get("UAS_RATE_LIMIT_WAIT", "120"))

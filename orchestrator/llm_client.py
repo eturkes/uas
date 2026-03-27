@@ -9,8 +9,9 @@ import threading
 import time
 
 DEFAULT_TIMEOUT = None
-MAX_RETRIES = 2
+MAX_RETRIES = 4
 INITIAL_BACKOFF = 2
+OVERLOADED_BACKOFF = 30
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,31 @@ TRANSIENT_PATTERNS = [
     "hit your limit",
     "too many requests",
     "429",
+    "529",
     "overloaded",
+    "overloaded_error",
     "503",
     "capacity",
 ]
+
+# Patterns that indicate API overload / rate-limiting (need longer backoff).
+_OVERLOADED_PATTERNS = [
+    "529",
+    "overloaded",
+    "overloaded_error",
+    "capacity",
+    "rate limit",
+    "rate_limit",
+    "hit your limit",
+    "too many requests",
+    "429",
+]
+
+
+def _is_overloaded(error_message: str) -> bool:
+    """Return True if the error indicates API overload or rate limiting."""
+    lower = error_message.lower()
+    return any(pat in lower for pat in _OVERLOADED_PATTERNS)
 
 
 HEARTBEAT_INTERVAL = 15
@@ -215,7 +237,13 @@ class ClaudeCodeClient:
                 )
                 is_transient = _is_transient(combined)
                 if is_transient and attempt < MAX_RETRIES:
-                    wait = INITIAL_BACKOFF * (2 ** attempt)
+                    # Use longer backoff for API overload/rate-limit errors
+                    # (529, 429, "overloaded", etc.) since hammering the API
+                    # only makes things worse.
+                    if _is_overloaded(combined):
+                        wait = OVERLOADED_BACKOFF * (2 ** attempt)
+                    else:
+                        wait = INITIAL_BACKOFF * (2 ** attempt)
                     logger.warning(
                         "Transient error (attempt %d/%d), retrying in %ds: %s",
                         attempt + 1, 1 + MAX_RETRIES, wait, error,

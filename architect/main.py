@@ -44,6 +44,7 @@ from .planner import (
     ensure_coverage,
     verify_coverage,
     fill_coverage_gaps,
+    split_coupled_steps,
 )
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import (
@@ -4493,6 +4494,9 @@ def main():
         steps, requirements = ensure_coverage(goal, steps)
         if requirements:
             state["requirements"] = requirements
+
+        # Section 3: Split coupled creation/integration steps
+        steps = split_coupled_steps(steps)
 
         state = add_steps(state, steps)
         logger.info("  Decomposed into %d step(s):", len(steps))

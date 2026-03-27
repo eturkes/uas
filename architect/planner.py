@@ -201,6 +201,11 @@ specify that it must read from the actual file or use names established by the p
 For example, if a data source has column "SEX" (numeric 1/2), don't tell a downstream \
 visualization step to look for "Sex" (string "Male"/"Female") — the consumer must either \
 use the exact source column name or a data-loading step must explicitly perform the mapping.
+- Coupling creation and integration: NEVER have a single step that both \
+creates a new module AND modifies an existing one to import/use it. \
+Split into two steps: (1) create the module with its own tests/verification, \
+(2) integrate it into the existing codebase. This is the #1 cause of \
+rewrite failures.
 - Assuming knowledge instead of verifying: don't assume specific API endpoints, library \
 interfaces, or data formats are current — they may have changed. \
 BAD: "Use the Twitter API v2 endpoint /tweets/search/recent" (may be outdated) \
@@ -790,6 +795,9 @@ def decompose_goal_with_voting(
         "winning_score": score_plan(best_plan),
     })
 
+    # Section 3: Split coupled creation/integration steps
+    best_plan = split_coupled_steps(best_plan)
+
     return best_plan
 
 
@@ -1080,6 +1088,206 @@ def ensure_coverage(goal: str, steps: list[dict]) -> tuple[list[dict], list[str]
             logger.debug("Dependency validation after gap-fill — adjusting.")
 
     return steps, requirements
+
+
+# ---------------------------------------------------------------------------
+# Section 3 — Enforce creation/integration separation
+# ---------------------------------------------------------------------------
+
+SPLIT_COUPLED_PROMPT = """\
+<steps>
+{steps_json}
+</steps>
+
+<instructions>
+The following step has been flagged as coupling creation and integration — it \
+both creates a new module AND modifies/integrates into an existing one. This \
+is the #1 cause of rewrite failures.
+
+Flagged step (number {step_number}):
+  Title: {step_title}
+  Description: {step_description}
+
+Split this into exactly TWO steps:
+1. **Creation step**: Create the new module with its own tests/verification. \
+   Keep the same depends_on as the original step.
+2. **Integration step**: Modify the existing codebase to import and use the \
+   new module. This step depends on the creation step (step {step_number}) \
+   plus any other dependencies from the original.
+
+Return ONLY a JSON array of exactly 2 step objects:
+[
+  {{"title": "...", "description": "...", "depends_on": [...], "verify": "...", "environment": [...]}},
+  {{"title": "...", "description": "...", "depends_on": [{step_number}, ...], "verify": "...", "environment": [...]}}
+]
+
+Use the SAME step numbering context: the creation step replaces step \
+{step_number}, and the integration step becomes step {next_step_number}.
+</instructions>
+"""
+
+# Heuristic patterns for detecting coupled steps.
+_CREATE_PATTERNS = re.compile(
+    r"\b(create|write|build|implement|generate|produce|develop|add new)\b",
+    re.IGNORECASE,
+)
+_INTEGRATE_PATTERNS = re.compile(
+    r"\b(update|modify|integrate|import into|wire into|add to|hook into|"
+    r"incorporate into|connect to|plug into|extend existing)\b",
+    re.IGNORECASE,
+)
+
+
+def _step_is_coupled(step: dict) -> bool:
+    """Return True if a step description couples creation and integration."""
+    text = step.get("description", "") + " " + step.get("title", "")
+    return bool(_CREATE_PATTERNS.search(text) and _INTEGRATE_PATTERNS.search(text))
+
+
+def split_coupled_steps(steps: list[dict]) -> list[dict]:
+    """Detect steps that couple creation + integration and split them.
+
+    Section 3b of PLAN.md.
+
+    Uses heuristic detection followed by LLM-assisted splitting. Returns a
+    new step list with coupled steps replaced by creation + integration pairs.
+    Dependency references in subsequent steps are adjusted to point to the
+    integration step (which is the one that "completes" the original work).
+    """
+    coupled_indices = [i for i, s in enumerate(steps) if _step_is_coupled(s)]
+    if not coupled_indices:
+        logger.info("  No coupled creation/integration steps detected.")
+        return steps
+
+    logger.info(
+        "  Detected %d coupled step(s): %s",
+        len(coupled_indices),
+        ", ".join(str(i + 1) for i in coupled_indices),
+    )
+
+    client = get_llm_client(role="planner")
+    event_log = get_event_log()
+
+    result: list[dict] = []
+    # Map from old 1-based step number → new 1-based step number for the
+    # integration half (the step that "replaces" the original in the DAG).
+    remap: dict[int, int] = {}
+    # Track creation deps to add AFTER the remap pass (since creation_num
+    # is a new number that would be incorrectly remapped otherwise).
+    # Maps result list index → creation step's new 1-based number.
+    _creation_deps: dict[int, int] = {}
+    next_new = 1
+
+    for i, step in enumerate(steps):
+        old_num = i + 1
+
+        if i not in coupled_indices:
+            remap[old_num] = next_new
+            result.append(step)
+            next_new += 1
+            continue
+
+        # Ask LLM to split
+        steps_for_prompt = [
+            {"step_number": j + 1, "title": s["title"],
+             "description": s["description"]}
+            for j, s in enumerate(steps)
+        ]
+        prompt = SPLIT_COUPLED_PROMPT.format(
+            steps_json=json.dumps(steps_for_prompt, indent=2),
+            step_number=old_num,
+            step_title=step["title"],
+            step_description=step["description"],
+            next_step_number=old_num + 1,
+        )
+
+        event_log.emit(EventType.LLM_CALL_START,
+                       data={"purpose": "split_coupled_step",
+                             "step": old_num})
+        try:
+            response = client.generate(prompt)
+        except Exception as e:
+            logger.warning("  Split failed for step %d: %s — keeping as-is.", old_num, e)
+            remap[old_num] = next_new
+            result.append(step)
+            next_new += 1
+            continue
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "split_coupled_step",
+                             "step": old_num})
+
+        pair = _parse_split_response(response)
+        if pair is None or len(pair) != 2:
+            logger.warning("  Could not parse split for step %d — keeping as-is.", old_num)
+            remap[old_num] = next_new
+            result.append(step)
+            next_new += 1
+            continue
+
+        creation, integration = pair
+        for s in (creation, integration):
+            s.setdefault("depends_on", [])
+            s.setdefault("verify", "")
+            s.setdefault("environment", [])
+
+        creation_num = next_new
+        integration_num = next_new + 1
+
+        # Creation step gets the original's old dependencies (remapped later)
+        creation["depends_on"] = step.get("depends_on", [])[:]
+        # Integration step gets the original's old dependencies (remapped later);
+        # the creation dep is added after remap to avoid incorrect remapping.
+        integration["depends_on"] = step.get("depends_on", [])[:]
+
+        remap[old_num] = integration_num  # downstream should depend on integration
+        result.append(creation)
+        integration_idx = len(result)
+        result.append(integration)
+        _creation_deps[integration_idx] = creation_num
+        next_new += 2
+
+        logger.info(
+            "  Split step %d → %d (create: %s) + %d (integrate: %s)",
+            old_num, creation_num, creation["title"],
+            integration_num, integration["title"],
+        )
+
+    # Remap depends_on in all steps (old step numbers → new step numbers)
+    for step in result:
+        step["depends_on"] = sorted(set(
+            remap.get(d, d) for d in step.get("depends_on", [])
+        ))
+
+    # Add creation step dependencies to integration steps (post-remap)
+    for result_idx, creation_num in _creation_deps.items():
+        step = result[result_idx]
+        if creation_num not in step["depends_on"]:
+            step["depends_on"] = sorted(set(step["depends_on"] + [creation_num]))
+
+    return result
+
+
+def _parse_split_response(response: str) -> list[dict] | None:
+    """Parse the LLM response for split_coupled_steps into a 2-element list."""
+    text = response.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list) and len(parsed) == 2:
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+    match = re.search(r"\[.*\]", response, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group())
+            if isinstance(parsed, list) and len(parsed) == 2:
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
 
 
 CRITIQUE_PROMPT = """\

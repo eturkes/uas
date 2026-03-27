@@ -132,7 +132,7 @@ one covering a requirement without adding a replacement.
 
 ---
 
-### Section 3 — Enforce creation/integration separation in decomposition
+### Section 3 — Enforce creation/integration separation in decomposition [x] Done
 
 **Problem:** Steps that both create a new module AND integrate it into an
 existing pipeline are the primary source of rewrite failures. The rehab run's

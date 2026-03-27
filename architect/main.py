@@ -46,6 +46,9 @@ from .planner import (
     fill_coverage_gaps,
     split_coupled_steps,
     insert_integration_checkpoints,
+    generate_corrective_steps,
+    MAX_CORRECTIVE_STEPS_PER_ROUND,
+    MAX_CORRECTION_ROUNDS,
 )
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import (
@@ -4929,7 +4932,7 @@ def main():
     state["status"] = "completed"
     save_state(state)
 
-    # Final workspace validation
+    # Final workspace validation + correction loop (Section 6 of PLAN.md)
     validation = validate_workspace(state, PROJECT_DIR)
     if validation["missing_files"]:
         logger.warning(
@@ -4940,6 +4943,117 @@ def main():
         logger.warning("  Warning: workspace is empty")
     for bp_warn in validation.get("best_practice_warnings", []):
         logger.warning("  Best practice: %s", bp_warn)
+
+    # Section 6: Validation-driven correction loop
+    # If confidence is below "high", generate and execute corrective steps.
+    if not MINIMAL_MODE:
+        correction_rounds_done = state.get("correction_rounds", 0)
+        llm_assessment = validation.get("llm_assessment") or {}
+        confidence = llm_assessment.get("confidence", "high")
+        issues = llm_assessment.get("issues", [])
+
+        while (
+            confidence in ("medium", "low")
+            and issues
+            and correction_rounds_done < MAX_CORRECTION_ROUNDS
+        ):
+            correction_rounds_done += 1
+            state["correction_rounds"] = correction_rounds_done
+            logger.info(
+                "\nCorrection round %d/%d: confidence=%s, %d issue(s)",
+                correction_rounds_done, MAX_CORRECTION_ROUNDS,
+                confidence, len(issues),
+            )
+            event_log.emit(EventType.LLM_CALL_START,
+                           data={"purpose": "correction_loop",
+                                 "round": correction_rounds_done})
+
+            corrective_steps = generate_corrective_steps(
+                state.get("goal", ""), issues, state,
+            )
+
+            if not corrective_steps:
+                logger.warning("  No corrective steps generated, exiting loop.")
+                break
+
+            # Assign IDs and register in state
+            max_id = max((s["id"] for s in state["steps"]), default=0)
+            for i, cs in enumerate(corrective_steps):
+                cs["id"] = max_id + i + 1
+                cs.setdefault("status", "pending")
+                cs.setdefault("spec_file", "")
+                cs.setdefault("rewrites", 0)
+                cs.setdefault("reflections", [])
+                cs.setdefault("output", "")
+                cs.setdefault("stderr_output", "")
+                cs.setdefault("error", "")
+                cs.setdefault("files_written", [])
+                cs.setdefault("uas_result", None)
+                cs.setdefault("summary", "")
+                cs.setdefault("timing", {
+                    "llm_time": 0.0, "sandbox_time": 0.0, "total_time": 0.0,
+                })
+                state["steps"].append(cs)
+
+            save_state(state)
+
+            logger.info(
+                "  Generated %d corrective step(s): %s",
+                len(corrective_steps),
+                ", ".join(f"#{s['id']}" for s in corrective_steps),
+            )
+
+            # Execute corrective steps sequentially
+            correction_failed = False
+            for cs in corrective_steps:
+                step_by_id[cs["id"]] = cs
+                success = execute_step(
+                    cs, state, completed_outputs,
+                    progress_counts, dashboard=dashboard,
+                )
+                if success:
+                    completed_outputs[cs["id"]] = {
+                        "stdout": cs.get("output", ""),
+                        "stderr": cs.get("stderr_output", ""),
+                        "files": cs.get("files_written", []),
+                    }
+                else:
+                    logger.warning(
+                        "  Corrective step %d failed, stopping correction.",
+                        cs["id"],
+                    )
+                    correction_failed = True
+                    break
+
+            save_state(state)
+
+            if correction_failed:
+                break
+
+            # Re-validate after corrections
+            validation = validate_workspace(state, PROJECT_DIR)
+            llm_assessment = validation.get("llm_assessment") or {}
+            confidence = llm_assessment.get("confidence", "high")
+            issues = llm_assessment.get("issues", [])
+
+            logger.info(
+                "  Post-correction validation: confidence=%s, %d issue(s)",
+                confidence, len(issues),
+            )
+
+            if confidence == "high":
+                logger.info("  Confidence reached 'high', exiting correction loop.")
+                break
+
+        if correction_rounds_done > 0:
+            state["correction_rounds"] = correction_rounds_done
+            save_state(state)
+            if confidence != "high":
+                logger.warning(
+                    "  Correction loop finished after %d round(s) "
+                    "with confidence=%s.",
+                    correction_rounds_done, confidence,
+                )
 
     if not MINIMAL_MODE:
         post_run_meta_learning(state)

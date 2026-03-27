@@ -271,7 +271,7 @@ This is a validation step — it must not modify any files."""
 
 ---
 
-### Section 6 — Validation-driven correction loop
+### Section 6 — Validation-driven correction loop [x] Done
 
 **Problem:** `validate_workspace()` in `architect/main.py` produces a report
 with concrete issues (missing tabs, mapping bugs, unused analysis) but never

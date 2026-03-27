@@ -2833,3 +2833,118 @@ def decompose_failing_step(step: dict, orchestrator_stdout: str,
 
     result = client.generate(prompt).strip()
     return result if result else step["description"]
+
+
+# ---------------------------------------------------------------------------
+# Section 6b: Corrective step generation from validation issues
+# ---------------------------------------------------------------------------
+
+CORRECTIVE_STEPS_PROMPT = """\
+<goal>{goal}</goal>
+
+<validation_issues>
+{issues_json}
+</validation_issues>
+
+<completed_steps>
+{steps_json}
+</completed_steps>
+
+<instructions>
+The workspace was validated after all steps completed. The validation found \
+the issues listed above. Generate corrective steps to fix these issues. Rules:
+1. One step per issue (do NOT bundle multiple fixes into one step).
+2. Each step must be a self-contained Python script task.
+3. Each step should modify or create specific files to address its issue.
+4. Set depends_on to reference the completed step(s) whose output is relevant, \
+or leave empty if the fix is independent.
+5. Maximum {max_steps} steps. If there are more issues than the limit, \
+prioritize the most impactful ones.
+
+Number the steps starting from {next_step_number}.
+
+Return ONLY a JSON array of step objects:
+[{{"title": "Fix: ...", "description": "...", "depends_on": [...], \
+"verify": "...", "environment": [...]}}]
+</instructions>
+"""
+
+MAX_CORRECTIVE_STEPS_PER_ROUND = 5
+MAX_CORRECTION_ROUNDS = 2
+
+
+def generate_corrective_steps(
+    goal: str,
+    issues: list[str],
+    state: dict,
+) -> list[dict]:
+    """Generate corrective steps from validation issues.
+
+    Takes a list of issue descriptions from workspace validation and produces
+    step dicts that each target one specific issue. Returns at most
+    ``MAX_CORRECTIVE_STEPS_PER_ROUND`` steps.
+
+    Section 6b of PLAN.md.
+    """
+    if not issues:
+        return []
+
+    client = get_llm_client(role="planner")
+    event_log = get_event_log()
+
+    completed_steps = [
+        s for s in state.get("steps", [])
+        if s.get("status") == "completed"
+    ]
+    max_id = max((s["id"] for s in state.get("steps", [])), default=0)
+    next_step_number = max_id + 1
+
+    steps_for_prompt = [
+        {
+            "step_number": s["id"],
+            "title": s.get("title", ""),
+            "description": s.get("description", ""),
+            "files_written": s.get("files_written", []),
+        }
+        for s in completed_steps
+    ]
+
+    capped_issues = issues[:MAX_CORRECTIVE_STEPS_PER_ROUND]
+    prompt = CORRECTIVE_STEPS_PROMPT.format(
+        goal=goal,
+        issues_json=json.dumps(capped_issues, indent=2),
+        steps_json=json.dumps(steps_for_prompt, indent=2),
+        next_step_number=next_step_number,
+        max_steps=MAX_CORRECTIVE_STEPS_PER_ROUND,
+    )
+
+    event_log.emit(EventType.LLM_CALL_START,
+                   data={"purpose": "generate_corrective_steps"})
+    try:
+        response = client.generate(prompt)
+    except Exception as e:
+        logger.warning("Corrective step generation failed: %s", e)
+        return []
+    event_log.emit(EventType.LLM_CALL_COMPLETE,
+                   data={"purpose": "generate_corrective_steps"})
+
+    try:
+        new_steps = parse_steps_json(response)
+    except ValueError:
+        logger.warning("Could not parse corrective steps from LLM response.")
+        return []
+
+    if not new_steps:
+        return []
+
+    # Enforce per-round cap and fill defaults
+    new_steps = new_steps[:MAX_CORRECTIVE_STEPS_PER_ROUND]
+    for step in new_steps:
+        step.setdefault("depends_on", [])
+        step.setdefault("verify", "")
+        step.setdefault("environment", [])
+
+    # Filter out malformed steps
+    new_steps = [s for s in new_steps if "title" in s and "description" in s]
+
+    return new_steps

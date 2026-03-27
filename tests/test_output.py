@@ -110,6 +110,9 @@ class TestWriteJsonOutput:
 
 
 class TestOutputIntegration:
+    @patch("architect.main.insert_integration_checkpoints", side_effect=lambda s: s)
+    @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
+    @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
     @patch("architect.main.expand_goal", side_effect=lambda g: g)
     @patch("architect.main.post_run_meta_learning", return_value=None)
@@ -122,6 +125,7 @@ class TestOutputIntegration:
     def test_output_written_on_success(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
         mock_complexity, mock_research, mock_meta, mock_expand, mock_coverage,
+        mock_enforce, mock_split, mock_checkpoints,
         tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
@@ -143,6 +147,9 @@ class TestOutputIntegration:
         assert len(data["steps"]) == 1
         assert data["steps"][0]["status"] == "completed"
 
+    @patch("architect.main.insert_integration_checkpoints", side_effect=lambda s: s)
+    @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
+    @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
     @patch("architect.main.expand_goal", side_effect=lambda g: g)
     @patch("architect.main.research_goal", return_value="")
@@ -158,7 +165,8 @@ class TestOutputIntegration:
         self, mock_gen_refl, mock_reflect, mock_decompose_step,
         mock_build_task, mock_gen_spec,
         mock_run_orch, mock_decompose, mock_complexity, mock_research,
-        mock_expand, mock_coverage, tmp_workspace, monkeypatch,
+        mock_expand, mock_coverage, mock_enforce, mock_split, mock_checkpoints,
+        tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
             {"title": "Step A", "description": "Do A", "depends_on": []},
@@ -192,6 +200,9 @@ class TestOutputIntegration:
         assert data["status"] == "blocked"
         assert data["steps"][0]["status"] == "failed"
 
+    @patch("architect.main.insert_integration_checkpoints", side_effect=lambda s: s)
+    @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
+    @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
     @patch("architect.main.expand_goal", side_effect=lambda g: g)
     @patch("architect.main.post_run_meta_learning", return_value=None)
@@ -204,6 +215,7 @@ class TestOutputIntegration:
     def test_output_env_var(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
         mock_complexity, mock_research, mock_meta, mock_expand, mock_coverage,
+        mock_enforce, mock_split, mock_checkpoints,
         tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
@@ -224,6 +236,9 @@ class TestOutputIntegration:
             data = json.load(f)
         assert data["status"] == "completed"
 
+    @patch("architect.main.insert_integration_checkpoints", side_effect=lambda s: s)
+    @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
+    @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
     @patch("architect.main.expand_goal", side_effect=lambda g: g)
     @patch("architect.main.post_run_meta_learning", return_value=None)
@@ -236,6 +251,7 @@ class TestOutputIntegration:
     def test_no_output_when_not_requested(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
         mock_complexity, mock_research, mock_meta, mock_expand, mock_coverage,
+        mock_enforce, mock_split, mock_checkpoints,
         tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [

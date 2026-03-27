@@ -72,6 +72,9 @@ class TestPrintPlan:
 
 
 class TestDryRunMode:
+    @patch("architect.main.insert_integration_checkpoints", side_effect=lambda s: s)
+    @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
+    @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
     @patch("architect.main.expand_goal", side_effect=lambda g: g)
     @patch("architect.main.critique_and_refine_plan", side_effect=lambda g, s: s)
@@ -82,6 +85,7 @@ class TestDryRunMode:
     def test_dry_run_skips_executor(self, mock_decompose, mock_complexity,
                                     mock_research, mock_merge, mock_critique,
                                     mock_expand, mock_coverage,
+                                    mock_enforce, mock_split, mock_checkpoints,
                                     tmp_workspace, monkeypatch):
         """Dry-run should decompose but not call run_orchestrator."""
         mock_decompose.return_value = [
@@ -99,6 +103,9 @@ class TestDryRunMode:
         mock_decompose.assert_called_once()
         mock_orch.assert_not_called()
 
+    @patch("architect.main.insert_integration_checkpoints", side_effect=lambda s: s)
+    @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
+    @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
     @patch("architect.main.expand_goal", side_effect=lambda g: g)
     @patch("architect.main.research_goal", return_value="")
@@ -107,6 +114,8 @@ class TestDryRunMode:
     def test_dry_run_env_var_skips_executor(self, mock_decompose, mock_complexity,
                                             mock_research, mock_expand,
                                             mock_coverage,
+                                            mock_enforce, mock_split,
+                                            mock_checkpoints,
                                             tmp_workspace, monkeypatch):
         """UAS_DRY_RUN=1 should also trigger dry-run mode."""
         mock_decompose.return_value = [

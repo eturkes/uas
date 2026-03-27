@@ -362,7 +362,7 @@ decomposition example to the prompt.
 
 ---
 
-### Section 8 — Tests and verification
+### Section 8 — Tests and verification [x] Done
 
 Run the full test suite after all sections are implemented and fix any
 regressions. Verify the improvements work together:

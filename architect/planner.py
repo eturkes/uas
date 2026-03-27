@@ -1033,13 +1033,6 @@ def decompose_goal_with_voting(
         "winning_score": score_plan(best_plan),
     })
 
-    # Section 7: Enforce minimum step count for the complexity level
-    best_plan = enforce_minimum_steps(goal, best_plan, complexity,
-                                      research_context=research_context)
-
-    # Section 3: Split coupled creation/integration steps
-    best_plan = split_coupled_steps(best_plan)
-
     return best_plan
 
 

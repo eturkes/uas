@@ -28,7 +28,7 @@ from .state import (
 from .planner import (
     decompose_goal,
     decompose_goal_with_voting,
-    expand_goal,
+    generate_project_spec,
     estimate_complexity,
     research_goal,
     reflect_and_rewrite,
@@ -4432,21 +4432,17 @@ def main():
                     _gf.write(goal + "\n")
 
         original_goal = goal
-        # Section 18: Skip goal expansion in minimal mode.
-        if not MINIMAL_MODE:
-            goal = expand_goal(goal)
-            if goal != original_goal:
-                logger.info("Expanded goal: %s", goal)
 
         logger.info("Goal: %s\n", goal)
         event_log.emit(EventType.GOAL_RECEIVED, data={"goal": goal})
         goal_entity = prov.add_entity("goal", content=goal)
         planner_agent = prov.add_agent("planner_llm")
 
-        # Research phase: estimate complexity, then research for
-        # medium/complex goals before decomposition.
+        # Specification phase: estimate complexity, research domain for
+        # medium/complex goals, then generate a structured project spec.
         research_context = ""
         complexity = None
+        spec = ""
         if not MINIMAL_MODE:
             complexity = estimate_complexity(goal)
             if complexity in ("medium", "complex"):
@@ -4462,18 +4458,36 @@ def main():
                         "  Research complete (%d chars)", len(research_context)
                     )
 
+            logger.info("Generating project specification...")
+            spec = generate_project_spec(
+                goal,
+                research_context=research_context,
+                complexity=complexity or "medium",
+            )
+            if spec:
+                logger.info("  Spec generated (%d chars).", len(spec))
+                # Persist spec alongside the goal file.
+                _spec_path = os.path.join(
+                    WORKSPACE, ".uas_goals", "SPEC.md",
+                )
+                os.makedirs(os.path.dirname(_spec_path), exist_ok=True)
+                with open(_spec_path, "w", encoding="utf-8") as _sf:
+                    _sf.write(spec + "\n")
+
         # Phase 1: Decompose (with multi-plan voting for complex goals)
         logger.info("Phase 1: Decomposing goal into atomic steps...")
         event_log.emit(EventType.DECOMPOSITION_START)
         decompose_start = time.monotonic()
         state = init_state(goal, run_id=run_id)
         state["original_goal"] = original_goal
+        if spec:
+            state["spec"] = spec
         if research_context:
             state["research_context"] = research_context
         try:
             steps = decompose_goal_with_voting(
                 goal,
-                research_context=research_context,
+                spec=spec,
                 complexity=complexity,
             )
         except Exception as e:

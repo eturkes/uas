@@ -17,47 +17,120 @@ logger = logging.getLogger(__name__)
 MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
 
-def _goal_is_specific(goal: str) -> bool:
-    """Return True if the goal is already detailed enough to skip expansion."""
-    if len(goal) > 500:
-        return True
-    # Numbered lists (e.g., "1.", "2.")
-    if re.search(r"(?m)^\s*\d+[\.\)]\s", goal):
-        return True
-    # Markdown headers
-    if re.search(r"(?m)^#{1,6}\s", goal):
-        return True
-    # Code blocks
-    if "```" in goal:
-        return True
-    return False
+SPEC_GENERATION_PROMPT = """\
+<goal>{goal}</goal>
+{research_context}
+<instructions>
+You are a technical architect. Given the goal above, produce a structured \
+project specification that will guide an autonomous coding agent through \
+implementation.
+
+Scale the depth to the project's complexity:
+- For simple projects (1-3 components), keep sections brief.
+- For complex projects (many components, data pipelines, UIs), be thorough.
+
+Write the spec as a Markdown document with these sections:
+</instructions>
+
+<format>
+# Project Specification
+
+## 1. Overview
+One paragraph: what this project is and what problem it solves.
+
+## 2. Goals
+Bulleted list of concrete, verifiable outcomes. What MUST be true when the \
+project is complete. Each goal should be testable.
+
+## 3. Non-Goals
+What is explicitly out of scope. This prevents the implementing agent from \
+gold-plating or adding unrequested features. If the goal is narrow, a single \
+bullet like "- Production deployment" is fine.
+
+## 4. Architecture
+Key components, their responsibilities, and how they interact. For simple \
+projects, this can be one sentence ("Single Python script"). For complex \
+projects, describe the component graph and data flow.
+
+## 5. Data Model
+Core data structures, file formats, and schemas that components must agree on. \
+Specify exact column names, JSON keys, and types where relevant. This is the \
+contract between producer and consumer components — ambiguity here causes \
+integration failures.
+
+## 6. Interface Contracts
+How components communicate: file paths, API endpoints, function signatures, \
+CLI arguments. Specify the exact names and formats so that independently-built \
+components are compatible. For simple projects with no inter-component \
+boundaries, write "N/A — single component."
+
+## 7. Acceptance Criteria
+Specific, testable conditions for project completion. Not just "it works" — \
+measurable outcomes. These will be used to validate the final result.
+
+## 8. Constraints
+Required tools, libraries, environment requirements, and technical boundaries. \
+Include specific version requirements if known. Prefer modern, best-in-class \
+tools over legacy defaults.
+</format>
+
+<rules>
+- Write a SPECIFICATION, not a description of a finished product.
+- Be precise about data formats, file names, and interfaces — vagueness here \
+  causes downstream failures.
+- Every goal in section 2 must have a corresponding acceptance criterion in \
+  section 7.
+- Respond with ONLY the Markdown specification. No preamble or explanation.
+</rules>
+"""
 
 
-def expand_goal(goal: str) -> str:
-    """Expand a vague goal with reasonable defaults using LLM judgment."""
-    if _goal_is_specific(goal):
-        logger.debug("Goal already specific (%d chars), skipping expansion", len(goal))
-        return goal
+def generate_project_spec(
+    goal: str,
+    research_context: str = "",
+    complexity: str = "medium",
+) -> str:
+    """Generate a structured project specification from a goal.
+
+    Produces a Markdown document with sections for goals, non-goals,
+    architecture, data model, interface contracts, acceptance criteria,
+    and constraints.  For trivial goals (single-action tasks), returns
+    an empty string to skip the spec overhead.
+
+    Args:
+        goal: The user's goal text.
+        research_context: Pre-computed research findings to incorporate.
+        complexity: Estimated complexity (trivial/simple/medium/complex).
+
+    Returns:
+        The specification as a Markdown string, or empty string for
+        trivial goals.
+    """
+    if complexity == "trivial":
+        logger.info("  Skipping spec generation for trivial goal.")
+        return ""
 
     client = get_llm_client(role="planner")
-    prompt = f"""The user wants to accomplish this goal:
-"{goal}"
+    rc_section = ""
+    if research_context:
+        rc_section = (
+            f"\n<research_findings>\n{research_context}\n</research_findings>\n"
+        )
+    prompt = SPEC_GENERATION_PROMPT.format(
+        goal=goal, research_context=rc_section,
+    )
 
-If this goal is already clear and specific, return it unchanged.
-If it's vague or ambiguous, expand it with sensible defaults:
-- What should the output format be?
-- Where should outputs be saved?
-- What quality level is expected?
-- What scope is appropriate (prototype vs production)?
-- Use the latest best-in-class tools and libraries for the task, not legacy defaults.
-
-Return ONLY the goal text (expanded or unchanged). No explanation."""
-
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START, data={"purpose": "generate_spec"})
     try:
-        expanded = client.generate(prompt)
-        return expanded.strip() if expanded.strip() else goal
-    except Exception:
-        return goal
+        spec = client.generate(prompt, stream=True)
+        event_log.emit(
+            EventType.LLM_CALL_COMPLETE, data={"purpose": "generate_spec"},
+        )
+        return spec.strip() if spec.strip() else ""
+    except Exception as e:
+        logger.warning("Spec generation failed, continuing without spec: %s", e)
+        return ""
 
 
 RESEARCH_PROMPT = """\
@@ -127,7 +200,7 @@ Use what you learn to make your decomposition more specific and accurate.
 Don't guess at API formats or library capabilities — verify when uncertain.
 Always specify the most modern, widely-adopted tools and libraries for the job.
 </research>
-{research_context}
+{spec}
 <goal>{goal}</goal>
 
 <examples>
@@ -302,6 +375,12 @@ Think like a senior engineer planning this project:
 <instructions>
 You are a task decomposition engine. Given the goal above, break it into \
 atomic, independently executable steps that form a directed acyclic graph (DAG).
+
+If a <project_spec> is provided, use it as your primary reference. The spec's \
+architecture, data model, and interface contracts define the boundaries between \
+steps. Each step should map to one component or responsibility from the spec. \
+Ensure step descriptions use the exact names, formats, and contracts from the \
+spec — do not invent alternatives.
 
 First, in <analysis> tags, thoroughly reason about:
 - Key sub-problems and how they relate to each other
@@ -507,20 +586,20 @@ def topological_sort(steps: list[dict]) -> list[list[int]]:
     return levels
 
 
-def _format_research_context(research_context: str) -> str:
-    """Wrap research context in XML tags for the decomposition prompt."""
-    if not research_context:
+def _format_spec(spec: str) -> str:
+    """Wrap project specification in XML tags for the decomposition prompt."""
+    if not spec:
         return ""
     return (
-        f"\n<research_findings>\n{research_context}\n</research_findings>\n"
+        f"\n<project_spec>\n{spec}\n</project_spec>\n"
     )
 
 
-def decompose_goal(goal: str, research_context: str = "") -> list[dict]:
+def decompose_goal(goal: str, spec: str = "") -> list[dict]:
     client = get_llm_client(role="planner")
     prompt = DECOMPOSITION_PROMPT.format(
         goal=goal,
-        research_context=_format_research_context(research_context),
+        spec=_format_spec(spec),
     )
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "decompose_goal"})
@@ -928,7 +1007,7 @@ def score_plan(steps: list[dict]) -> float:
 def decompose_goal_with_voting(
     goal: str,
     n_samples: int = 3,
-    research_context: str = "",
+    spec: str = "",
     complexity: str | None = None,
 ) -> list[dict]:
     """Generate multiple decomposition plans and select the best one.
@@ -938,8 +1017,8 @@ def decompose_goal_with_voting(
     the highest-scoring one.
 
     Args:
-        research_context: Pre-computed research findings to include in
-            the decomposition prompt. Empty string means no research.
+        spec: Structured project specification to guide decomposition.
+            Empty string means no spec (trivial goals).
         complexity: Pre-computed complexity estimate. If None, will be
             estimated via LLM call.
 
@@ -959,12 +1038,12 @@ def decompose_goal_with_voting(
 
     if complexity in ("trivial", "simple"):
         logger.info("  Skipping voting for %s goal, using single decomposition.", complexity)
-        return decompose_goal(goal, research_context=research_context)
+        return decompose_goal(goal, spec=spec)
 
     # 2a: Generate N plans in parallel
     logger.info("  Generating %d plans for voting...", n_samples)
 
-    rc_formatted = _format_research_context(research_context)
+    spec_formatted = _format_spec(spec)
 
     def _generate_plan(suffix_idx: int) -> list[dict] | None:
         """Generate a single plan variant. Returns None on failure."""
@@ -972,7 +1051,7 @@ def decompose_goal_with_voting(
             client = get_llm_client(role="planner")
             suffix = _VOTING_SUFFIXES[suffix_idx] if suffix_idx < len(_VOTING_SUFFIXES) else ""
             prompt = DECOMPOSITION_PROMPT.format(
-                goal=goal, research_context=rc_formatted,
+                goal=goal, spec=spec_formatted,
             ) + suffix
             response = client.generate(prompt)
             steps = parse_steps_json(response)
@@ -1008,7 +1087,7 @@ def decompose_goal_with_voting(
 
     if not plans:
         logger.warning("  All voting plans failed, falling back to single decomposition.")
-        return decompose_goal(goal, research_context=research_context)
+        return decompose_goal(goal, spec=spec)
 
     if len(plans) == 1:
         logger.info("  Only 1 valid plan generated, using it directly.")

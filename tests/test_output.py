@@ -114,7 +114,7 @@ class TestOutputIntegration:
     @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
     @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
-    @patch("architect.main.expand_goal", side_effect=lambda g: g)
+    @patch("architect.main.generate_project_spec", return_value="")
     @patch("architect.main.post_run_meta_learning", return_value=None)
     @patch("architect.main.research_goal", return_value="")
     @patch("architect.main.estimate_complexity", return_value="simple")
@@ -124,7 +124,7 @@ class TestOutputIntegration:
     @patch("architect.main.build_task_from_spec")
     def test_output_written_on_success(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
-        mock_complexity, mock_research, mock_meta, mock_expand, mock_coverage,
+        mock_complexity, mock_research, mock_meta, mock_proj_spec, mock_coverage,
         mock_enforce, mock_split, mock_checkpoints,
         tmp_workspace, monkeypatch,
     ):
@@ -151,7 +151,7 @@ class TestOutputIntegration:
     @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
     @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
-    @patch("architect.main.expand_goal", side_effect=lambda g: g)
+    @patch("architect.main.generate_project_spec", return_value="")
     @patch("architect.main.research_goal", return_value="")
     @patch("architect.main.estimate_complexity", return_value="simple")
     @patch("architect.main.decompose_goal_with_voting")
@@ -165,7 +165,7 @@ class TestOutputIntegration:
         self, mock_gen_refl, mock_reflect, mock_decompose_step,
         mock_build_task, mock_gen_spec,
         mock_run_orch, mock_decompose, mock_complexity, mock_research,
-        mock_expand, mock_coverage, mock_enforce, mock_split, mock_checkpoints,
+        mock_proj_spec, mock_coverage, mock_enforce, mock_split, mock_checkpoints,
         tmp_workspace, monkeypatch,
     ):
         mock_decompose.return_value = [
@@ -204,7 +204,7 @@ class TestOutputIntegration:
     @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
     @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
-    @patch("architect.main.expand_goal", side_effect=lambda g: g)
+    @patch("architect.main.generate_project_spec", return_value="")
     @patch("architect.main.post_run_meta_learning", return_value=None)
     @patch("architect.main.research_goal", return_value="")
     @patch("architect.main.estimate_complexity", return_value="simple")
@@ -214,7 +214,7 @@ class TestOutputIntegration:
     @patch("architect.main.build_task_from_spec")
     def test_output_env_var(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
-        mock_complexity, mock_research, mock_meta, mock_expand, mock_coverage,
+        mock_complexity, mock_research, mock_meta, mock_proj_spec, mock_coverage,
         mock_enforce, mock_split, mock_checkpoints,
         tmp_workspace, monkeypatch,
     ):
@@ -240,7 +240,7 @@ class TestOutputIntegration:
     @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
     @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)
     @patch("architect.main.ensure_coverage", side_effect=lambda g, s: (s, []))
-    @patch("architect.main.expand_goal", side_effect=lambda g: g)
+    @patch("architect.main.generate_project_spec", return_value="")
     @patch("architect.main.post_run_meta_learning", return_value=None)
     @patch("architect.main.research_goal", return_value="")
     @patch("architect.main.estimate_complexity", return_value="simple")
@@ -250,7 +250,7 @@ class TestOutputIntegration:
     @patch("architect.main.build_task_from_spec")
     def test_no_output_when_not_requested(
         self, mock_build_task, mock_gen_spec, mock_run_orch, mock_decompose,
-        mock_complexity, mock_research, mock_meta, mock_expand, mock_coverage,
+        mock_complexity, mock_research, mock_meta, mock_proj_spec, mock_coverage,
         mock_enforce, mock_split, mock_checkpoints,
         tmp_workspace, monkeypatch,
     ):

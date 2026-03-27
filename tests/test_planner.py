@@ -402,10 +402,10 @@ class TestResearchGoal:
         assert "citations" in prompt.lower()
 
 
-class TestResearchInDecomposition:
+class TestSpecInDecomposition:
     @patch("architect.planner.get_llm_client")
-    def test_research_context_appears_in_decompose_prompt(self, mock_get_client):
-        """Research context is injected into decompose_goal's prompt."""
+    def test_spec_appears_in_decompose_prompt(self, mock_get_client):
+        """Project spec is injected into decompose_goal's prompt."""
         steps_json = json.dumps([
             {"title": "step1", "description": "do X", "depends_on": []}
         ])
@@ -413,16 +413,16 @@ class TestResearchInDecomposition:
         client.generate.return_value = steps_json
         mock_get_client.return_value = client
 
-        research = "Use ISNCSCI scoring standards v2023."
-        decompose_goal("Build analytics tool", research_context=research)
+        spec = "## 1. Overview\nBuild an analytics tool using ISNCSCI standards."
+        decompose_goal("Build analytics tool", spec=spec)
         prompt = client.generate.call_args[0][0]
-        assert "<research_findings>" in prompt
-        assert "ISNCSCI scoring standards v2023" in prompt
-        assert "</research_findings>" in prompt
+        assert "<project_spec>" in prompt
+        assert "ISNCSCI standards" in prompt
+        assert "</project_spec>" in prompt
 
     @patch("architect.planner.get_llm_client")
-    def test_no_research_context_no_tags(self, mock_get_client):
-        """When research_context is empty, no research_findings tags appear."""
+    def test_no_spec_no_block(self, mock_get_client):
+        """When spec is empty, no project_spec content block appears."""
         steps_json = json.dumps([
             {"title": "step1", "description": "do X", "depends_on": []}
         ])
@@ -430,13 +430,13 @@ class TestResearchInDecomposition:
         client.generate.return_value = steps_json
         mock_get_client.return_value = client
 
-        decompose_goal("Print hello", research_context="")
+        decompose_goal("Print hello", spec="")
         prompt = client.generate.call_args[0][0]
-        assert "<research_findings>" not in prompt
+        assert "</project_spec>" not in prompt
 
     @patch("architect.planner.get_llm_client")
-    def test_voting_passes_research_to_all_plans(self, mock_get_client):
-        """decompose_goal_with_voting passes research_context to plan generation."""
+    def test_voting_passes_spec_to_all_plans(self, mock_get_client):
+        """decompose_goal_with_voting passes spec to plan generation."""
         steps_json = json.dumps([
             {"title": "s1", "description": "d1", "depends_on": []},
             {"title": "s2", "description": "d2", "depends_on": [1]},
@@ -446,20 +446,20 @@ class TestResearchInDecomposition:
         client.generate.return_value = steps_json
         mock_get_client.return_value = client
 
-        research = "Use library X v3.0 for best results."
+        spec = "## 8. Constraints\nUse library X v3.0 for best results."
         decompose_goal_with_voting(
             "Complex analytics project",
-            research_context=research,
+            spec=spec,
             complexity="complex",
         )
-        # At least one generate call should contain the research context
+        # At least one generate call should contain the spec
         prompts = [c.args[0] for c in client.generate.call_args_list]
         assert any("library X v3.0" in p for p in prompts)
-        assert any("<research_findings>" in p for p in prompts)
+        assert any("<project_spec>" in p for p in prompts)
 
     @patch("architect.planner.get_llm_client")
-    def test_trivial_goal_passes_research_to_single_decompose(self, mock_get_client):
-        """Even trivial goals pass through research_context if provided."""
+    def test_trivial_goal_passes_spec_to_single_decompose(self, mock_get_client):
+        """Even trivial goals pass through spec if provided."""
         steps_json = json.dumps([
             {"title": "s1", "description": "d1", "depends_on": []}
         ])
@@ -467,13 +467,13 @@ class TestResearchInDecomposition:
         client.generate.return_value = steps_json
         mock_get_client.return_value = client
 
-        research = "Relevant finding here."
+        spec = "## 1. Overview\nRelevant finding here."
         decompose_goal_with_voting(
             "Simple task",
-            research_context=research,
+            spec=spec,
             complexity="trivial",
         )
-        # The decompose call should include research context
+        # The decompose call should include spec
         prompts = [c.args[0] for c in client.generate.call_args_list]
         assert any("Relevant finding here" in p for p in prompts)
 

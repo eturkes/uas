@@ -47,6 +47,7 @@ from .planner import (
     split_coupled_steps,
     insert_integration_checkpoints,
     generate_corrective_steps,
+    enforce_minimum_steps,
     MAX_CORRECTIVE_STEPS_PER_ROUND,
     MAX_CORRECTION_ROUNDS,
 )
@@ -4518,6 +4519,10 @@ def main():
                     EventType.STEP_MERGE,
                     data={"before": pre_merge, "after": len(steps)},
                 )
+
+        # Section 7: Enforce minimum steps after merge (complexity may require more)
+        if complexity:
+            steps = enforce_minimum_steps(goal, steps, complexity)
 
         # Section 1: Goal-coverage matrix — verify all requirements are covered
         steps, requirements = ensure_coverage(goal, steps)

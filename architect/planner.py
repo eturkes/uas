@@ -172,6 +172,40 @@ Failure modes: blocked by site, empty results, no matching products.
   {{"title": "Scrape site B", "description": "Scrape product names and prices from site B using requests and BeautifulSoup. Save results as site_b_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_b_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"]}},
   {{"title": "Compare prices", "description": "Read site_a_products.json and site_b_products.json from the workspace. Match products by name and compare prices. Save comparison to price_comparison.csv and print a summary of which site is cheaper on average.", "depends_on": [1, 2], "verify": "price_comparison.csv exists and contains matched products", "environment": ["pandas"]}}
 ]
+
+Example 4 — Complex multi-phase project:
+Goal: "Build a clinical trial dashboard with data simulation, predictive modeling, \
+explainability, subgroup discovery, and a multi-tab interactive dashboard with \
+bilingual support"
+<analysis>
+Complexity: complex (12+ steps). Three major phases: data preparation, modeling/analysis, \
+and dashboard/visualization. Each phase has multiple distinct deliverables. Creation and \
+integration must be separated. Integration checkpoints needed between phases.
+Sub-problems: realistic data simulation, feature engineering, model training, SHAP \
+explainability, subgroup clustering, 4 dashboard tabs, bilingual i18n.
+Risk areas: data leakage in modeling, SHAP compatibility, dashboard tab wiring, \
+translation coverage.
+Parallelization: within each phase, independent modules can be built in parallel \
+(e.g., model training and subgroup discovery can be independent; dashboard tabs can \
+be built in parallel after data is ready).
+Failure modes: model training references wrong columns, SHAP fails on model type, \
+dashboard tabs render empty, translation keys missing.
+</analysis>
+<complexity_assessment>complex — 12 steps across 3 phases with integration checkpoints</complexity_assessment>
+[
+  {{"title": "Data simulator", "description": "Create a data simulation module that generates realistic clinical trial data matching the specification. Save simulated data as data/patients.csv with columns: patient_id, age, sex, injury_level, treatment_group, admission_score, motor_score_week4, motor_score_week12, discharge_status. Print row count and column summary.", "depends_on": [], "verify": "data/patients.csv has >100 rows, all specified columns present, no nulls in required fields, value ranges are clinically plausible", "environment": ["pandas", "numpy"]}},
+  {{"title": "Data cleaning pipeline", "description": "Create a cleaning module that reads data/patients.csv, validates data types, handles missing values, creates derived features (improvement_rate, time_to_discharge), and saves cleaned_data.csv. Print cleaning report with before/after row counts.", "depends_on": [1], "verify": "cleaned_data.csv exists, derived columns present, no unexpected nulls, row count logged", "environment": ["pandas"]}},
+  {{"title": "Bilingual translation strings", "description": "Create a translations module with all UI strings in English and Japanese. Export as translations.json with structure {{\"en\": {{...}}, \"ja\": {{...}}}}. Include labels for all dashboard elements, column display names, and status descriptions.", "depends_on": [], "verify": "translations.json has en and ja keys with identical key sets, no empty values", "environment": []}},
+  {{"title": "Phase 1 integration checkpoint", "description": "Validate that the data simulator, cleaning pipeline, and translations module work together. Import each module, run the pipeline end-to-end, verify cleaned_data.csv columns match translation keys, print interface summary.", "depends_on": [1, 2, 3], "verify": "all imports succeed, pipeline runs without errors, column-translation alignment verified", "environment": ["pandas"]}},
+  {{"title": "Predictive model training", "description": "Train an XGBoost model to predict discharge_status from admission-time features ONLY (age, sex, injury_level, treatment_group, admission_score). Save trained model to models/xgb_model.joblib and metrics to models/metrics.json. Print accuracy, F1, and confusion matrix.", "depends_on": [4], "verify": "model file exists, metrics.json shows accuracy > majority-class baseline, confusion matrix is not degenerate", "environment": ["xgboost", "scikit-learn", "joblib"]}},
+  {{"title": "SHAP explainability", "description": "Load models/xgb_model.joblib and compute SHAP values for the test set. Save SHAP summary plot as outputs/shap_summary.png and feature importance as outputs/shap_importance.json. Print top 5 features.", "depends_on": [5], "verify": "shap_summary.png exists and is >1KB, shap_importance.json has entries for all features", "environment": ["shap", "matplotlib"]}},
+  {{"title": "Subgroup discovery", "description": "Perform clustering on cleaned_data.csv to discover patient subgroups with distinct recovery patterns. Save subgroup assignments to outputs/subgroups.csv and profiles to outputs/subgroup_profiles.json. Print subgroup sizes and key characteristics.", "depends_on": [4], "verify": "subgroups.csv has a subgroup column with 2-5 distinct values, profiles describe each subgroup", "environment": ["scikit-learn", "pandas"]}},
+  {{"title": "Phase 2 integration checkpoint", "description": "Validate that model, SHAP, and subgroup outputs are compatible. Load all artifacts, verify SHAP features match model features, verify subgroup IDs align with patient IDs in cleaned data. Print summary.", "depends_on": [5, 6, 7], "verify": "all artifacts load, feature alignment verified, no orphaned patient IDs", "environment": ["joblib", "pandas"]}},
+  {{"title": "Dashboard tab: cohort overview", "description": "Create the cohort overview tab showing patient demographics, treatment group distribution, and outcome summary charts. Read from cleaned_data.csv and translations.json. Save as src/tab_overview.py.", "depends_on": [8], "verify": "tab_overview.py imports successfully, renders without errors when called with test data", "environment": ["plotly", "dash"]}},
+  {{"title": "Dashboard tab: patient simulator", "description": "Create the patient simulator tab allowing users to input patient features and see predicted outcomes using the trained model. Read model from models/xgb_model.joblib. Save as src/tab_simulator.py.", "depends_on": [8], "verify": "tab_simulator.py imports and renders, prediction returns valid probability", "environment": ["plotly", "dash", "joblib"]}},
+  {{"title": "Dashboard tab: insight engine", "description": "Create the insight engine tab displaying SHAP explanations and subgroup profiles. Read from outputs/shap_importance.json and outputs/subgroup_profiles.json. Save as src/tab_insights.py.", "depends_on": [8], "verify": "tab_insights.py imports and renders, shows SHAP and subgroup data", "environment": ["plotly", "dash"]}},
+  {{"title": "Dashboard assembly and bilingual toggle", "description": "Assemble all tabs into a unified Dash application with bilingual language toggle. Import tab_overview, tab_simulator, tab_insights, and translations. Save as app.py. Print startup confirmation.", "depends_on": [9, 10, 11, 3], "verify": "app.py starts without import errors, all 3 tabs render, language toggle switches strings", "environment": ["dash"]}}
+]
 </examples>
 
 <anti_patterns>
@@ -568,6 +602,210 @@ def estimate_complexity(goal: str) -> str:
     return "medium"
 
 
+# ---------------------------------------------------------------------------
+# Section 7 — Decomposition depth scaling for complex goals
+# ---------------------------------------------------------------------------
+
+# Minimum step counts by complexity category.
+MINIMUM_STEPS = {
+    "trivial": 1,
+    "simple": 2,
+    "medium": 4,
+    "complex": 8,
+}
+
+# Maximum distinct deliverables per step before flagging for a split.
+MAX_DELIVERABLES_PER_STEP = 3
+
+# Patterns that indicate a deliverable in a step description.
+_DELIVERABLE_PATTERNS = re.compile(
+    r"\b(?:create|write|build|generate|produce|save|train|implement|export)\s+"
+    r"(?:a\s+|the\s+|an\s+)?(\S+)",
+    re.IGNORECASE,
+)
+
+# Patterns for distinct output files referenced in a description.
+_FILE_OUTPUT_PATTERN = re.compile(
+    r"(?:save\s+(?:as|to|into)|write\s+(?:to|into)|export\s+(?:as|to))\s+"
+    r"['\"]?(\S+\.\w{1,5})['\"]?",
+    re.IGNORECASE,
+)
+
+
+def count_step_deliverables(step: dict) -> int:
+    """Count the number of distinct deliverables in a step description.
+
+    Section 7c of PLAN.md. Uses heuristics to count output files mentioned
+    and creation verbs to estimate deliverable count. Returns the higher of
+    the two counts (file outputs vs. creation actions).
+    """
+    desc = step.get("description", "")
+    if not desc:
+        return 0
+
+    # Count distinct output files
+    file_matches = set(_FILE_OUTPUT_PATTERN.findall(desc))
+
+    # Count creation-verb targets, deduplicating by the target noun
+    action_matches = set(_DELIVERABLE_PATTERNS.findall(desc))
+
+    return max(len(file_matches), len(action_matches))
+
+
+def flag_overloaded_steps(steps: list[dict]) -> list[int]:
+    """Return 0-based indices of steps with more than MAX_DELIVERABLES_PER_STEP deliverables.
+
+    Section 7c of PLAN.md. These steps should be split into smaller pieces.
+    """
+    overloaded = []
+    for i, step in enumerate(steps):
+        count = count_step_deliverables(step)
+        if count > MAX_DELIVERABLES_PER_STEP:
+            logger.info(
+                "  Step %d ('%s') has %d deliverables (max %d) — flagged for splitting.",
+                i + 1, step.get("title", "Untitled"), count, MAX_DELIVERABLES_PER_STEP,
+            )
+            overloaded.append(i)
+    return overloaded
+
+
+REDECOMPOSE_PROMPT = """\
+<goal>{goal}</goal>
+
+<current_plan>
+{plan_json}
+</current_plan>
+
+<instructions>
+The current plan has only {num_steps} steps, but this goal is classified as \
+{complexity} complexity and requires at least {min_steps} steps. The plan \
+under-decomposes the goal.
+
+{overloaded_note}
+
+Re-decompose the goal into at least {min_steps} steps. Follow these rules:
+- Each step must have ONE primary responsibility
+- No step should have more than 3 distinct deliverables
+- Separate creation from integration (never create a module and wire it in the same step)
+- Mark phase boundaries with integration checkpoint steps
+
+Return the same JSON array format as the original plan.
+</instructions>
+"""
+
+
+def enforce_minimum_steps(
+    goal: str,
+    steps: list[dict],
+    complexity: str,
+    research_context: str = "",
+) -> list[dict]:
+    """Re-prompt if the plan has fewer steps than the complexity minimum.
+
+    Section 7a of PLAN.md. If the initial decomposition returns fewer steps
+    than MINIMUM_STEPS[complexity], asks the LLM to re-decompose with an
+    explicit minimum. Also flags overloaded steps (>3 deliverables) in the
+    re-prompt. Returns the original steps if already sufficient or on failure.
+    """
+    min_steps = MINIMUM_STEPS.get(complexity, 4)
+    overloaded = flag_overloaded_steps(steps)
+
+    if len(steps) >= min_steps and not overloaded:
+        return steps
+
+    reason_parts = []
+    if len(steps) < min_steps:
+        reason_parts.append(
+            f"plan has {len(steps)} steps but minimum is {min_steps}"
+        )
+    if overloaded:
+        reason_parts.append(
+            f"steps {', '.join(str(i + 1) for i in overloaded)} have >3 deliverables"
+        )
+    logger.info(
+        "  Enforcing minimum steps: %s. Re-decomposing...",
+        "; ".join(reason_parts),
+    )
+
+    overloaded_note = ""
+    if overloaded:
+        overloaded_descs = []
+        for idx in overloaded:
+            s = steps[idx]
+            overloaded_descs.append(
+                f"- Step {idx + 1} ('{s.get('title', '')}') has too many "
+                f"deliverables and should be split."
+            )
+        overloaded_note = (
+            "The following steps are overloaded (>3 deliverables each):\n"
+            + "\n".join(overloaded_descs)
+        )
+
+    plan_json = json.dumps(
+        [{"step": i + 1, "title": s.get("title", ""), "description": s.get("description", "")}
+         for i, s in enumerate(steps)],
+        indent=2,
+    )
+
+    prompt = REDECOMPOSE_PROMPT.format(
+        goal=goal,
+        plan_json=plan_json,
+        num_steps=len(steps),
+        complexity=complexity,
+        min_steps=min_steps,
+        overloaded_note=overloaded_note,
+    )
+
+    event_log = get_event_log()
+    client = get_llm_client(role="planner")
+    event_log.emit(EventType.LLM_CALL_START,
+                   data={"purpose": "enforce_minimum_steps"})
+    try:
+        response = client.generate(prompt)
+    except Exception as e:
+        logger.warning("  Re-decomposition failed: %s — keeping original plan.", e)
+        return steps
+    event_log.emit(EventType.LLM_CALL_COMPLETE,
+                   data={"purpose": "enforce_minimum_steps"})
+
+    try:
+        new_steps = parse_steps_json(response)
+    except ValueError:
+        logger.warning("  Could not parse re-decomposed steps — keeping original plan.")
+        return steps
+
+    if not new_steps or len(new_steps) < len(steps):
+        logger.warning(
+            "  Re-decomposition produced %d steps (need >= %d) — keeping original.",
+            len(new_steps) if new_steps else 0, min_steps,
+        )
+        return steps
+
+    # Fill defaults
+    for step in new_steps:
+        step.setdefault("depends_on", [])
+        step.setdefault("verify", "")
+        step.setdefault("environment", [])
+
+    # Normalize 0-indexed depends_on
+    has_zero_ref = any(0 in s.get("depends_on", []) for s in new_steps)
+    if has_zero_ref:
+        for step in new_steps:
+            step["depends_on"] = [d + 1 for d in step["depends_on"]]
+
+    try:
+        validate_depends_on(new_steps)
+    except ValueError as e:
+        logger.warning("  Re-decomposed plan has invalid deps: %s — keeping original.", e)
+        return steps
+
+    logger.info(
+        "  Re-decomposition: %d → %d steps.",
+        len(steps), len(new_steps),
+    )
+    return new_steps
+
+
 PLAN_SELECTION_PROMPT = """\
 <goal>{goal}</goal>
 
@@ -794,6 +1032,10 @@ def decompose_goal_with_voting(
         "winning_plan": best_idx,
         "winning_score": score_plan(best_plan),
     })
+
+    # Section 7: Enforce minimum step count for the complexity level
+    best_plan = enforce_minimum_steps(goal, best_plan, complexity,
+                                      research_context=research_context)
 
     # Section 3: Split coupled creation/integration steps
     best_plan = split_coupled_steps(best_plan)

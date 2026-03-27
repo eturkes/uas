@@ -317,7 +317,7 @@ execute corrective steps before finalizing.
 
 ---
 
-### Section 7 — Decomposition depth scaling for complex goals
+### Section 7 — Decomposition depth scaling for complex goals [x] Done
 
 **Problem:** The rehab goal is ~2500 words across 3 major phases with 10+
 distinct deliverables, but UAS produced only 9 steps. The decomposition prompt

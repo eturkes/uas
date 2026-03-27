@@ -296,5 +296,8 @@ def get_llm_client(role: str | None = None) -> ClaudeCodeClient:
     if not model:
         model = os.environ.get("UAS_MODEL") or None
 
-    logger.info("Using Claude Code CLI (role=%s, model=%s)", role, model)
+    if model:
+        logger.info("Using Claude Code CLI (role=%s, model=%s)", role, model)
+    else:
+        logger.info("Using Claude Code CLI (role=%s)", role)
     return ClaudeCodeClient(timeout=timeout, model=model, role=role)

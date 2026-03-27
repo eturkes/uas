@@ -1,6 +1,15 @@
 # Runtime artifacts
 hello.txt
 
+# Ad-hoc test/verification scripts
+check_environment.py
+run_test_verification.py
+test_goal_output.txt
+test_goal_result.py
+test_goal_verify.py
+test_verification_result.txt
+verify_test_goal.py
+
 # Sandbox build artifact
 Sandbox.Dockerfile
 

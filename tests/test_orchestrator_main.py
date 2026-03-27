@@ -473,13 +473,15 @@ class TestRetryStrategy:
 
 
 class TestToolCallDetection:
-    def test_detects_tool_call_xml(self):
-        response = "Sure, I'll help.\n<tool_call>\n<tool_name>write_file</tool_name>\n</tool_call>"
-        assert _contains_tool_calls(response) is True
+    """Tool calls are now allowed — _contains_tool_calls always returns False."""
 
-    def test_detects_tool_name_tag(self):
+    def test_allows_tool_call_xml(self):
+        response = "Sure, I'll help.\n<tool_call>\n<tool_name>write_file</tool_name>\n</tool_call>"
+        assert _contains_tool_calls(response) is False
+
+    def test_allows_tool_name_tag(self):
         response = "Let me use a tool.\n<tool_name>read_file</tool_name>"
-        assert _contains_tool_calls(response) is True
+        assert _contains_tool_calls(response) is False
 
     def test_no_tool_calls_in_normal_text(self):
         response = "I cannot do that. Please try again."
@@ -488,35 +490,6 @@ class TestToolCallDetection:
     def test_no_tool_calls_in_code_block(self):
         response = '```python\nprint("hello")\n```'
         assert _contains_tool_calls(response) is False
-
-    @patch("orchestrator.main.MINIMAL_MODE", True)
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
-    @patch("orchestrator.main.parse_args")
-    @patch("orchestrator.main.run_in_sandbox")
-    @patch("orchestrator.main.get_llm_client")
-    def test_tool_call_response_gives_specific_error(
-        self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry
-    ):
-        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
-        mock_client = MagicMock()
-        # First response has tool calls, second is valid code
-        mock_client.generate.side_effect = [
-            "<tool_call>\n<tool_name>write_file</tool_name>\n</tool_call>",
-            '```python\nprint("hello")\n```',
-        ]
-        mock_client_factory.return_value = mock_client
-        mock_sandbox.side_effect = [
-            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},  # verify
-            {"exit_code": 0, "stdout": "hello", "stderr": ""},       # attempt 2
-        ]
-
-        with pytest.raises(SystemExit) as exc_info:
-            main()
-        assert exc_info.value.code == 0
-        # The retry prompt should contain the tool-call-specific error
-        second_call_prompt = mock_client.generate.call_args_list[1][0][0]
-        assert "tool calls" in second_call_prompt.lower()
-        assert "tools are disabled" in second_call_prompt
 
 
 class TestWorkspacePathGuidance:

@@ -306,8 +306,12 @@ def _extract_header_context(code: str, max_lines: int = 40) -> str:
 
 
 def _contains_tool_calls(response: str) -> bool:
-    """Check if an LLM response contains tool call patterns instead of code."""
-    return bool(re.search(r"<tool_call>|<tool_name>|tool_name|</tool_call>", response))
+    """Check if an LLM response contains tool call patterns instead of code.
+
+    With full tool access enabled, tool calls are expected and handled by
+    the CLI. This now always returns False.
+    """
+    return False
 
 
 def _request_continuation(client, truncated_code: str) -> str | None:
@@ -741,15 +745,17 @@ better code because you researched first.
     # Data sections at top (environment, task, workspace state)
     prompt = f"""\
 <environment>
-You are running inside an isolated, disposable container. You have FULL AUTONOMY:
+You are running inside an isolated, disposable container. You have FULL AUTONOMY with ALL TOOLS ENABLED:
 - ROOT ACCESS. Install any system packages with apt-get. No sudo needed.
 - UNRESTRICTED NETWORK. Fetch any URL, call any API, clone any repo. No firewall, no proxy.
 - PACKAGE INSTALLATION. `uv` is pre-installed. Use `uv pip install --system` for fast package installation. Do it proactively at the top of your script.
 - COMMAND EXECUTION. Run any shell command via subprocess. No restrictions whatsoever.
-- WEB SEARCH. If you need to look something up — current library versions, API docs, best practices — you can and should use the network.
+- FULL TOOL ACCESS. All tools are enabled — file operations, web search, web fetch, bash, and any other available tools or skills. Use them aggressively to research, verify, and build.
+- AGENT SKILLS. Install and use any agent skills that would help. You can extend your own capabilities.
+- WEB SEARCH. If you need to look something up — current library versions, API docs, best practices — you can and should use your tools and the network.
 - FILESYSTEM. Full read/write. Workspace: os.environ.get("WORKSPACE", "/workspace").
 
-This container is disposable. Nothing here affects the host. Be bold, not cautious.
+This container is disposable. Nothing here affects the host. Be bold, not cautious. Use every tool at your disposal.
 {pkg_hint}
 System info:
 {system_state_block}
@@ -808,23 +814,26 @@ the script was too long. You MUST keep your script concise to avoid truncation:
 
 <role>
 You are an expert engineer with full system access in a disposable container.
-Generate a complete, self-contained Python script.
+You have ALL tools enabled and should use them aggressively:
 
-Before writing code, think about what you need:
-- What packages does this task require? For each one, use the current
-  best-in-class option — not a legacy default. If a newer, faster, or
-  better-maintained tool has superseded an older one, use the newer tool.
-- Are there tools that would improve quality? Install and use them if it
-  would meaningfully improve the result.
-- Is there information you're uncertain about (API formats, library versions,
-  current best practices)? Use the network to check.
+- USE TOOLS FREELY. You have full tool access — file read/write, web search,
+  web fetch, bash execution, and any other available tools or skills. Use them
+  whenever they would help you produce a better result.
+- RESEARCH FIRST. Before writing code, use your tools to check current library
+  versions, read API docs, verify best practices. Don't guess — look it up.
+- INSTALL ANYTHING. Use apt-get for system packages, uv/pip for Python packages.
+  Install linters, formatters, dev tools — whatever improves quality.
+- MODIFY YOUR ENVIRONMENT. Configure your workspace, install editor plugins or
+  agent skills, set up whatever tooling you need. This container is disposable.
+- ACCESS THE NETWORK. Fetch URLs, call APIs, clone repos, download datasets.
+  No restrictions. Use the network proactively to verify assumptions.
 
-Act like a senior engineer who stays current and sets up their own environment
-before starting work.
+Act like a senior engineer with root access who sets up their own environment
+and uses every tool at their disposal before starting work.
 
-CRITICAL OUTPUT FORMAT: Your response must contain exactly ONE fenced code block
-tagged as ```python ... ```. The script must be complete and self-contained.
-Do NOT use any XML tags, tool_call blocks, or analysis sections.
+After using tools to research and prepare, generate a complete, self-contained
+Python script in a ```python code fence. The script must be complete and
+self-contained.
 </role>
 
 <constraints>

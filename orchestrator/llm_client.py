@@ -159,15 +159,11 @@ class ClaudeCodeClient:
         """Send a prompt to Claude Code CLI and return the text response.
 
         Output is always streamed line-by-line to the logger, providing
-        real-time visibility into LLM generation.  When stream=True,
-        an "ultrathink" prefix is added for deeper reasoning and effort
-        level is set to high.
+        real-time visibility into LLM generation.  All calls use
+        ultrathink for maximum reasoning depth.
         """
-        # "ultrathink" is only beneficial for planning/reasoning tasks.
-        # For code generation, it can cause the LLM to exhaust output tokens
-        # on thinking without producing the actual code block.
-        if stream:
-            prompt = f"ultrathink\n\n{prompt}"
+        # Always use maximum thinking for all agents.
+        prompt = f"ultrathink\n\n{prompt}"
 
         # Resolve the absolute path to the claude binary so subprocess
         # never fails due to a missing or overwritten PATH.
@@ -182,11 +178,9 @@ class ClaudeCodeClient:
                 "-p", "--dangerously-skip-permissions",
             ]
 
-        # Coder calls disable tools to force fenced code output instead
-        # of a multi-turn tool-use conversation.  Planner calls keep
-        # tools enabled so the LLM can research APIs and libraries.
-        if self.role == "coder":
-            cmd.extend(["--tools", ""])
+        # All agents have full tool access — they can research APIs,
+        # install packages, modify their environment, and use any
+        # available tools and skills.
 
         cmd.extend(["--model", self.model or "claude-opus-4-6"])
         cmd.extend(["--effort", "max"])

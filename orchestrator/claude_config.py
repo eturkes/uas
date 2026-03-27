@@ -4,15 +4,18 @@ CLAUDE_MD_TEMPLATE = """\
 # CLAUDE.md - Workspace Instructions for UAS Code Generation
 
 ## Autonomy
-You are in an isolated, disposable container with full autonomy:
+You are in an isolated, disposable container with full autonomy and ALL TOOLS ENABLED:
 - Root access, unrestricted network, no firewalls, no permission boundaries
+- Full tool access — file operations, web search, web fetch, bash, all agent skills
 - Install any packages, run any commands, access any URLs, clone any repos
-- If you need a tool, install it. If you need information, fetch it.
-- If you're unsure about a library version or API, check the docs or registry.
-Act decisively. Never hedge about permissions or capabilities.
+- If you need a tool, install it. If you need a skill, add it. If you need information, fetch it.
+- If you're unsure about a library version or API, use your tools to check the docs or registry.
+- Modify your environment freely — install system packages, configure tooling, add capabilities.
+Act decisively. Use every tool at your disposal. Never hedge about permissions or capabilities.
 
 ## Role
 You are generating a self-contained Python script to accomplish a specific task.
+You have all tools enabled and should use them to research and verify before coding.
 Your script will run inside an isolated workspace directory.
 
 ## Environment

@@ -1,6 +1,9 @@
 """Interface to the Orchestrator: local subprocess or container modes."""
 
+import ast
+import csv
 import hashlib
+import json
 import logging
 import os
 import re
@@ -820,3 +823,200 @@ def parse_uas_result(orchestrator_output: str) -> dict | None:
         except (json.JSONDecodeError, ValueError):
             continue
     return None
+
+
+# ---------------------------------------------------------------------------
+# Section 4 — File signature extraction
+# ---------------------------------------------------------------------------
+
+def extract_file_signatures(files_written: list[str],
+                            max_chars_per_file: int = 2000) -> str:
+    """Extract structural signatures from files produced by a step.
+
+    For .py files: function signatures with parameter types, class outlines
+    with method signatures, module-level constants, and docstring excerpts.
+    For .csv/.tsv files: column names and row count.
+    For .json files: top-level keys and first 3 list entries.
+
+    Returns a structured string suitable for inclusion in ``<file_signatures>``
+    XML blocks.  Each file's output is capped at *max_chars_per_file* chars.
+    """
+    parts = []
+    for fpath in files_written:
+        if not os.path.isfile(fpath):
+            continue
+        ext = os.path.splitext(fpath)[1].lower()
+        sig = ""
+        if ext == ".py":
+            sig = _extract_py_signatures(fpath)
+        elif ext in (".csv", ".tsv"):
+            sig = _extract_csv_file_signatures(fpath, ext)
+        elif ext == ".json":
+            sig = _extract_json_file_signatures(fpath)
+        if not sig:
+            continue
+        if len(sig) > max_chars_per_file:
+            sig = sig[:max_chars_per_file] + "\n    ... [truncated]"
+        parts.append(f'  <file path="{fpath}">\n{sig}\n  </file>')
+    return "\n".join(parts)
+
+
+def _format_func_sig(node) -> str:
+    """Format a function/method signature from an AST node."""
+    prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+    params = []
+    args = node.args
+
+    # Positional-only args
+    for arg in args.posonlyargs:
+        p = arg.arg
+        if arg.annotation:
+            p += f": {ast.unparse(arg.annotation)}"
+        params.append(p)
+    if args.posonlyargs:
+        params.append("/")
+
+    # Regular args
+    defaults_offset = len(args.args) - len(args.defaults)
+    for i, arg in enumerate(args.args):
+        p = arg.arg
+        if arg.annotation:
+            p += f": {ast.unparse(arg.annotation)}"
+        if i >= defaults_offset:
+            p += " = ..."
+        params.append(p)
+
+    # *args
+    if args.vararg:
+        p = f"*{args.vararg.arg}"
+        if args.vararg.annotation:
+            p += f": {ast.unparse(args.vararg.annotation)}"
+        params.append(p)
+    elif args.kwonlyargs:
+        params.append("*")
+
+    # Keyword-only args
+    for i, arg in enumerate(args.kwonlyargs):
+        p = arg.arg
+        if arg.annotation:
+            p += f": {ast.unparse(arg.annotation)}"
+        if args.kw_defaults[i] is not None:
+            p += " = ..."
+        params.append(p)
+
+    # **kwargs
+    if args.kwarg:
+        p = f"**{args.kwarg.arg}"
+        if args.kwarg.annotation:
+            p += f": {ast.unparse(args.kwarg.annotation)}"
+        params.append(p)
+
+    ret = ""
+    if node.returns:
+        ret = f" -> {ast.unparse(node.returns)}"
+    return f"{prefix} {node.name}({', '.join(params)}){ret}"
+
+
+def _extract_py_signatures(fpath: str) -> str:
+    """Extract function/class/constant signatures from a Python file."""
+    try:
+        with open(fpath, encoding="utf-8", errors="replace") as f:
+            source = f.read()
+        tree = ast.parse(source, filename=fpath)
+    except Exception:
+        return ""
+
+    lines = []
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("_"):
+                continue
+            lines.append(f"    {_format_func_sig(node)}")
+            doc = ast.get_docstring(node)
+            if doc:
+                for dl in doc.strip().split("\n")[:2]:
+                    lines.append(f"      # {dl.strip()}")
+
+        elif isinstance(node, ast.ClassDef):
+            if node.name.startswith("_"):
+                continue
+            lines.append(f"    class {node.name}:")
+            doc = ast.get_docstring(node)
+            if doc:
+                for dl in doc.strip().split("\n")[:2]:
+                    lines.append(f"      # {dl.strip()}")
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if not child.name.startswith("_") or child.name in (
+                        "__init__", "__call__", "__repr__", "__str__",
+                    ):
+                        lines.append(f"      {_format_func_sig(child)}")
+
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    if target.id.isupper() or not target.id.startswith("_"):
+                        lines.append(f"    {target.id} = ...")
+
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                name = node.target.id
+                if name.isupper() or not name.startswith("_"):
+                    ann = ast.unparse(node.annotation)
+                    lines.append(f"    {name}: {ann}")
+
+    return "\n".join(lines)
+
+
+def _extract_csv_file_signatures(fpath: str, ext: str) -> str:
+    """Extract column names and row count from a CSV/TSV file."""
+    try:
+        sep = "\t" if ext == ".tsv" else ","
+        with open(fpath, encoding="utf-8", errors="replace",
+                  newline="") as f:
+            reader = csv.reader(f, delimiter=sep)
+            header = next(reader, None)
+            if not header:
+                return ""
+            row_count = sum(1 for _ in reader)
+        cols_str = ", ".join(header)
+        return (f"    columns: [{cols_str}] ({len(header)} columns)\n"
+                f"    rows: {row_count}")
+    except Exception:
+        return ""
+
+
+def _extract_json_file_signatures(fpath: str) -> str:
+    """Extract top-level keys and list structure from a JSON file."""
+    try:
+        with open(fpath, encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+    except Exception:
+        return ""
+
+    if isinstance(data, dict):
+        keys = list(data.keys())
+        lines = [f"    keys: {keys}"]
+        for k, v in list(data.items())[:5]:
+            if isinstance(v, list):
+                lines.append(f"    {k}: list[{len(v)} items]")
+                for item in v[:3]:
+                    if isinstance(item, dict):
+                        lines.append(
+                            f"      - {{{', '.join(item.keys())}}}")
+                    else:
+                        lines.append(f"      - {type(item).__name__}")
+            elif isinstance(v, dict):
+                lines.append(f"    {k}: {{{', '.join(v.keys())}}}")
+        return "\n".join(lines)
+
+    if isinstance(data, list):
+        lines = [f"    list[{len(data)} items]"]
+        for item in data[:3]:
+            if isinstance(item, dict):
+                lines.append(f"      - {{{', '.join(item.keys())}}}")
+            else:
+                lines.append(f"      - {type(item).__name__}")
+        return "\n".join(lines)
+
+    return f"    {type(data).__name__}: {str(data)[:200]}"

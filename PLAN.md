@@ -174,7 +174,7 @@ post-decomposition validation that splits coupled steps.
 
 ---
 
-### Section 4 — Richer dependency context with file signatures
+### Section 4 — Richer dependency context with file signatures [x] Done
 
 **Problem:** When step N depends on step M, the context passed includes only
 a summary and file list. Exact column names, function signatures, and class

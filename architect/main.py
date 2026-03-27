@@ -51,6 +51,7 @@ from .executor import (
     run_orchestrator,
     extract_sandbox_stdout,
     extract_sandbox_stderr,
+    extract_file_signatures,
     extract_workspace_files,
     parse_uas_result,
     scan_workspace_files,
@@ -1147,6 +1148,10 @@ def _distill_dependency_output(dep_id: int, dep_step: dict,
         parts.append(f"  <relevant_data>{relevant_data}</relevant_data>")
     if module_api_parts:
         parts.extend(module_api_parts)
+    # Section 4: File signatures for richer dependency context
+    file_sigs = extract_file_signatures(files_written)
+    if file_sigs:
+        parts.append(f"  <file_signatures>\n{file_sigs}\n  </file_signatures>")
     if verify:
         parts.append(f"  <verification>{verify}</verification>")
     parts.append("</dependency>")
@@ -1191,6 +1196,7 @@ Output:
 </completed_step>
 
 {module_apis}
+{file_signatures_block}
 <consuming_step>
 {consumer_desc}
 </consuming_step>
@@ -1198,12 +1204,14 @@ Output:
 Return a concise summary containing ONLY:
 - File paths the consuming step will need to read or reference
 - Data schemas, column names, or key structures if the consuming step processes data
+- Function signatures with exact parameter names and types
 - API responses, configuration values, or computed results the consuming step depends on
 - Any error or warning information relevant to the consuming step
 
-Module APIs (exact exported names — downstream steps MUST use these):
-Preserve all module API information exactly as provided above. \
-Downstream steps must use these exact names when importing.
+Module APIs and file signatures (exact exported names — downstream steps MUST use these):
+Preserve all module API and file signature information exactly as provided above. \
+Downstream steps must use these exact names, parameter types, and column names \
+when importing or referencing.
 
 Do NOT include generic status information or redundant details. Be as brief as possible."""
 
@@ -1257,6 +1265,16 @@ def _distill_dependency_output_llm(dep_id: int, dep_step: dict,
                 + "\n</module_apis>"
             )
 
+        # Section 4: File signatures for richer dependency context
+        file_sigs = extract_file_signatures(files_written)
+        file_signatures_block = ""
+        if file_sigs:
+            file_signatures_block = (
+                "<file_signatures>\n"
+                + file_sigs
+                + "\n</file_signatures>"
+            )
+
         prompt = TARGETED_DISTILL_PROMPT.format(
             dep_id=dep_id,
             dep_title=title,
@@ -1264,6 +1282,7 @@ def _distill_dependency_output_llm(dep_id: int, dep_step: dict,
             output_preview=output_preview or "(no output)",
             consumer_desc=consumer_desc or "(no description)",
             module_apis=module_apis,
+            file_signatures_block=file_signatures_block,
         )
 
         response = client.generate(prompt)
@@ -1275,6 +1294,12 @@ def _distill_dependency_output_llm(dep_id: int, dep_step: dict,
             verify = dep_step.get("verify", "")
             parts = [f'<dependency step="{dep_id}" title="{title}">']
             parts.append(f"  {response.strip()}")
+            # Section 4: Include raw file signatures so exact names
+            # are preserved even if the LLM summary paraphrases them.
+            if file_sigs:
+                parts.append(
+                    f"  <file_signatures>\n{file_sigs}\n"
+                    f"  </file_signatures>")
             if verify:
                 parts.append(
                     f"  <verification>{verify}</verification>")

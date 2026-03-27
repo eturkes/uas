@@ -38,6 +38,13 @@ def generate_spec(step: dict, total_steps: int, context: str = "",
 
     if context:
         spec += "## Context\n"
+        if "<file_signatures>" in context:
+            spec += (
+                "**File signatures from dependency steps are included "
+                "below. Use the exact function names, parameter types, "
+                "and column names shown in `<file_signatures>` "
+                "sections.**\n\n"
+            )
         spec += f"{context}\n\n"
 
     # Section 7: For modeling steps, prepend a data-quality review directive.
@@ -89,4 +96,11 @@ def build_task_from_spec(step: dict, context: str = "") -> str:
         )
     if context:
         task += f"\n\nContext from previous steps:\n{context}"
+        if "<file_signatures>" in context:
+            task += (
+                "\n\nIMPORTANT: The <file_signatures> sections above "
+                "contain exact function signatures, parameter types, "
+                "and column names from dependency steps. Use these "
+                "exact names in your code — do not guess or rename."
+            )
     return task

@@ -1290,6 +1290,180 @@ def _parse_split_response(response: str) -> list[dict] | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Section 5 — Integration checkpoint steps
+# ---------------------------------------------------------------------------
+
+CHECKPOINT_TEMPLATE = """\
+Write a Python script that validates the interface between completed modules. \
+For each module produced by steps {step_ids}:
+1. Import the module
+2. Call its main function(s) with minimal valid inputs
+3. Print the return type, shape (if DataFrame), and column names (if applicable)
+4. Assert no errors occur
+This is a validation step — it must not modify any files."""
+
+
+def _find_phase_boundaries(
+    steps: list[dict], levels: list[list[int]]
+) -> list[int]:
+    """Return level indices after which to insert integration checkpoints.
+
+    A boundary is placed after a level where parallel work completes (>=2
+    steps in the level) or where a subsequent step converges dependencies
+    from multiple prior steps.  Returns sorted indices with a minimum
+    spacing of 2 levels between them.
+
+    Section 5a helper.
+    """
+    if len(levels) < 3:
+        return []
+
+    step_by_id = {s["id"]: s for s in steps}
+    candidates: list[int] = []
+
+    for i in range(1, len(levels) - 1):
+        # Pattern 1: parallel completion — >=2 steps finishing at this level
+        if len(levels[i]) >= 2:
+            candidates.append(i)
+            continue
+
+        # Pattern 2: convergence — a step in the next level depends on
+        # >=2 steps from earlier levels (work is merging)
+        if i + 1 < len(levels):
+            prior_ids: set[int] = set()
+            for j in range(i + 1):
+                prior_ids.update(levels[j])
+            for sid in levels[i + 1]:
+                deps = set(step_by_id[sid].get("depends_on", []))
+                if len(deps & prior_ids) >= 2:
+                    candidates.append(i)
+                    break
+
+    # Enforce minimum spacing of 2 levels between checkpoints
+    result: list[int] = []
+    for c in candidates:
+        if not result or c - result[-1] >= 2:
+            result.append(c)
+
+    return result
+
+
+def insert_integration_checkpoints(steps: list[dict]) -> list[dict]:
+    """Insert checkpoint steps at phase boundaries in the step DAG.
+
+    Section 5a of PLAN.md.  For plans with 7+ steps, finds natural phase
+    boundaries where parallel work converges and inserts validation steps
+    that check cross-module interfaces before downstream steps proceed.
+
+    Checkpoint steps are appended to the end of the step list with
+    dependencies on all steps in the preceding phase.  Steps after the
+    boundary gain an additional dependency on the checkpoint.
+    """
+    if len(steps) < 7:
+        logger.info(
+            "  Plan has %d steps (< 7), skipping integration checkpoints.",
+            len(steps),
+        )
+        return steps
+
+    # Assign temporary IDs for topological sort (1-based index)
+    for i, step in enumerate(steps):
+        step["id"] = i + 1
+
+    try:
+        levels = topological_sort(steps)
+    except ValueError:
+        logger.warning(
+            "  Could not topologically sort steps; skipping checkpoints."
+        )
+        for step in steps:
+            del step["id"]
+        return steps
+
+    if len(levels) < 3:
+        logger.info(
+            "  Plan has %d level(s) (< 3), skipping integration checkpoints.",
+            len(levels),
+        )
+        for step in steps:
+            del step["id"]
+        return steps
+
+    boundaries = _find_phase_boundaries(steps, levels)
+    if not boundaries:
+        # Fallback: insert at midpoint for plans with enough levels
+        mid = len(levels) // 2
+        if 0 < mid < len(levels) - 1:
+            boundaries = [mid]
+
+    if not boundaries:
+        for step in steps:
+            del step["id"]
+        return steps
+
+    logger.info(
+        "  Inserting %d integration checkpoint(s) at level boundaries: %s",
+        len(boundaries),
+        [b + 1 for b in boundaries],
+    )
+
+    step_by_id = {s["id"]: s for s in steps}
+    new_checkpoints: list[dict] = []
+
+    for boundary_idx in boundaries:
+        # All step IDs in the phase up to and including the boundary level
+        preceding_ids: list[int] = []
+        for lvl_idx in range(boundary_idx + 1):
+            preceding_ids.extend(levels[lvl_idx])
+        preceding_set = set(preceding_ids)
+
+        # All step IDs after the boundary
+        following_ids: list[int] = []
+        for lvl_idx in range(boundary_idx + 1, len(levels)):
+            following_ids.extend(levels[lvl_idx])
+
+        # Create checkpoint step (numbered after all existing + prior new)
+        checkpoint_num = len(steps) + len(new_checkpoints) + 1
+        checkpoint = {
+            "title": (
+                f"Integration checkpoint: validate phase "
+                f"{boundary_idx + 1} outputs"
+            ),
+            "description": CHECKPOINT_TEMPLATE.format(
+                step_ids=", ".join(str(sid) for sid in sorted(preceding_ids)),
+            ),
+            "depends_on": sorted(preceding_ids),
+            "verify": (
+                "All imports succeed, function calls return without error, "
+                "data shapes are valid"
+            ),
+            "environment": [],
+        }
+        new_checkpoints.append(checkpoint)
+
+        # Add checkpoint as dependency for following steps whose deps
+        # overlap with the preceding phase
+        for fid in following_ids:
+            s = step_by_id[fid]
+            if any(d in preceding_set for d in s.get("depends_on", [])):
+                if checkpoint_num not in s["depends_on"]:
+                    s["depends_on"] = sorted(
+                        set(s["depends_on"] + [checkpoint_num])
+                    )
+
+    # Clean up temporary IDs (add_steps assigns final IDs)
+    for step in steps:
+        del step["id"]
+
+    result = steps + new_checkpoints
+    logger.info(
+        "  Plan expanded from %d to %d steps.", len(steps), len(result),
+    )
+
+    return result
+
+
 CRITIQUE_PROMPT = """\
 <goal>{goal}</goal>
 

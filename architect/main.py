@@ -45,6 +45,7 @@ from .planner import (
     verify_coverage,
     fill_coverage_gaps,
     split_coupled_steps,
+    insert_integration_checkpoints,
 )
 from .spec_generator import generate_spec, build_task_from_spec
 from .executor import (
@@ -4522,6 +4523,9 @@ def main():
 
         # Section 3: Split coupled creation/integration steps
         steps = split_coupled_steps(steps)
+
+        # Section 5: Insert integration checkpoints at phase boundaries
+        steps = insert_integration_checkpoints(steps)
 
         state = add_steps(state, steps)
         logger.info("  Decomposed into %d step(s):", len(steps))

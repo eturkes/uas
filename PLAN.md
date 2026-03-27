@@ -220,7 +220,7 @@ first lines of docstrings) from files produced by dependency steps.
 
 ---
 
-### Section 5 — Integration checkpoint steps
+### Section 5 — Integration checkpoint steps [x] Done
 
 **Problem:** Each step verifies itself in isolation. The rehab run had steps
 that passed individually but produced incompatible outputs (e.g., temporal

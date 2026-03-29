@@ -44,6 +44,8 @@ TRANSIENT_PATTERNS = [
     "rate_limit",
     "hit your limit",
     "too many requests",
+    "out of extra usage",
+    "out of usage",
     "429",
     "529",
     "overloaded",
@@ -62,6 +64,8 @@ _OVERLOADED_PATTERNS = [
     "rate_limit",
     "hit your limit",
     "too many requests",
+    "out of extra usage",
+    "out of usage",
     "429",
 ]
 

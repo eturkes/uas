@@ -653,6 +653,8 @@ but `UAS_MINIMAL` is the simplest single switch to disable everything.
 | `UAS_RATE_LIMIT_WAIT` | Base wait (seconds) for rate-limit backoff at the Architect level | `120` |
 | `UAS_RATE_LIMIT_MAX_WAIT` | Maximum wait (seconds) per rate-limit retry | `600` |
 | `UAS_RATE_LIMIT_RETRIES` | Max rate-limit retries per step before failing | `3` |
+| `UAS_USAGE_LIMIT_WAIT` | Wait (seconds) between usage-limit retries | `3600` |
+| `UAS_USAGE_LIMIT_RETRIES` | Max usage-limit retries per step before failing | `5` |
 | `UAS_MINIMAL` | Disable all optional enhancements (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_NO_LLM_GUARDRAILS` | Skip LLM-based guardrail review (`1`) | *(off)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |

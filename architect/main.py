@@ -83,11 +83,26 @@ MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
 _RATE_LIMIT_PATTERNS = [
     "rate limit", "rate_limit", "hit your limit", "too many requests",
     "429", "529", "overloaded", "overloaded_error", "capacity",
+    "out of extra usage", "out of usage",
 ]
 _RATE_LIMIT_RESET_RE = re.compile(r"resets?\s+(\d{1,2})(?::(\d{2}))?\s*(?:am|pm)?\s*\(?utc\)?", re.IGNORECASE)
 RATE_LIMIT_BASE_WAIT = int(os.environ.get("UAS_RATE_LIMIT_WAIT", "120"))
 RATE_LIMIT_MAX_WAIT = int(os.environ.get("UAS_RATE_LIMIT_MAX_WAIT", "600"))
 MAX_RATE_LIMIT_RETRIES = int(os.environ.get("UAS_RATE_LIMIT_RETRIES", "3"))
+
+# Usage-limit patterns (account-level quota exhaustion, needs long waits).
+_USAGE_LIMIT_PATTERNS = [
+    "out of extra usage", "out of usage", "usage limit",
+    "exceeded your limit", "plan limit",
+]
+USAGE_LIMIT_WAIT = int(os.environ.get("UAS_USAGE_LIMIT_WAIT", "3600"))
+MAX_USAGE_LIMIT_RETRIES = int(os.environ.get("UAS_USAGE_LIMIT_RETRIES", "5"))
+
+
+def _is_usage_limited(error_text: str) -> bool:
+    """Return True if the error indicates account-level usage exhaustion."""
+    lower = error_text.lower()
+    return any(pat in lower for pat in _USAGE_LIMIT_PATTERNS)
 
 
 def _is_rate_limited(error_text: str) -> bool:
@@ -4341,31 +4356,42 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 f"(exit {result['exit_code']}, {orch_elapsed:.1f}s)"
             )
 
-        # Rate-limit detection: if the orchestrator failed due to rate
-        # limiting, wait and retry without burning a spec rewrite attempt.
-        # Uses an inner retry loop so rate-limit waits don't consume the
-        # outer spec_attempt budget.
+        # Rate-limit / usage-limit detection: if the orchestrator failed
+        # due to rate or usage limiting, wait and retry without burning a
+        # spec rewrite attempt.  Usage limits (account-level quota
+        # exhaustion) use longer waits (default 1h × 5 retries) since the
+        # quota typically resets on the hour.
         rate_limit_retries = 0
-        while result["exit_code"] != 0 and rate_limit_retries < MAX_RATE_LIMIT_RETRIES:
+        while result["exit_code"] != 0:
             combined_output = (
                 (result.get("stderr") or "") + " " + (result.get("stdout") or "")
             )
-            if not _is_rate_limited(combined_output):
+            is_usage = _is_usage_limited(combined_output)
+            is_rate = _is_rate_limited(combined_output)
+            if not is_rate and not is_usage:
+                break
+            max_retries = MAX_USAGE_LIMIT_RETRIES if is_usage else MAX_RATE_LIMIT_RETRIES
+            if rate_limit_retries >= max_retries:
                 break
             rate_limit_retries += 1
-            wait = min(
-                RATE_LIMIT_BASE_WAIT * (2 ** (rate_limit_retries - 1)),
-                RATE_LIMIT_MAX_WAIT,
-            )
+            if is_usage:
+                wait = USAGE_LIMIT_WAIT
+                label = "Usage limit"
+            else:
+                wait = min(
+                    RATE_LIMIT_BASE_WAIT * (2 ** (rate_limit_retries - 1)),
+                    RATE_LIMIT_MAX_WAIT,
+                )
+                label = "Rate limit"
             logger.warning(
-                "  Rate limit detected for step %s. "
+                "  %s detected for step %s. "
                 "Waiting %ds before retry %d/%d...",
-                step["id"], wait, rate_limit_retries, MAX_RATE_LIMIT_RETRIES,
+                label, step["id"], wait, rate_limit_retries, max_retries,
             )
             if dashboard:
                 dashboard.set_step_activity(
                     step["id"],
-                    f"Rate limited — waiting {wait}s...",
+                    f"{label} — waiting {wait}s...",
                 )
             step["status"] = "pending"
             _save_state_threadsafe(state)

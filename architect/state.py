@@ -106,8 +106,14 @@ def save_state(state: dict):
     else:
         os.makedirs(STATE_DIR, exist_ok=True)
         path = _LEGACY_STATE_FILE
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
+    # Strip runtime-only keys (prefixed with '_') that are not JSON-serialisable.
+    runtime_keys = [k for k in state if k.startswith("_")]
+    stashed = {k: state.pop(k) for k in runtime_keys}
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    finally:
+        state.update(stashed)
 
 
 def load_state(run_id: str | None = None) -> dict | None:

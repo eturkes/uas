@@ -2352,6 +2352,325 @@ def resolve_nested_duplication(workspace: str, nested_name: str) -> list[str]:
     return promoted
 
 
+# ---------------------------------------------------------------------------
+# Section 12: Project structure manifest with stale file detection
+# ---------------------------------------------------------------------------
+
+
+class ProjectManifest:
+    """Track the canonical set of project files across steps.
+
+    Every file claimed by a completed step is recorded with its originating
+    step ID.  When a new step produces files that functionally replace earlier
+    ones (same module name in a different location), the old files are flagged
+    as superseded so they can be removed.
+    """
+
+    def __init__(self, files: dict[str, int] | None = None):
+        # rel_path → step_id that created it
+        self.files: dict[str, int] = dict(files) if files else {}
+
+    # -- serialisation -------------------------------------------------------
+
+    def to_dict(self) -> dict[str, int]:
+        """Serialise to a plain dict for state.json storage."""
+        return dict(self.files)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, int]) -> "ProjectManifest":
+        """Reconstruct from a state.json dict."""
+        return cls(files=data)
+
+    # -- mutation ------------------------------------------------------------
+
+    def add_step_output(self, step_id: int, files: list[str]) -> None:
+        """Register files produced by *step_id*."""
+        for f in files:
+            self.files[os.path.normpath(f)] = step_id
+
+    def remove(self, rel_path: str) -> None:
+        """Remove a file from the manifest."""
+        self.files.pop(os.path.normpath(rel_path), None)
+
+    # -- supersession detection ----------------------------------------------
+
+    def detect_superseded(self, new_files: list[str]) -> list[str]:
+        """Find existing manifest files that are functionally replaced by *new_files*.
+
+        A file is considered superseded when a new file has the **same
+        basename** but lives at a **different relative path**.  For example,
+        ``src/rehab/cleaner.py`` is superseded by
+        ``src/rehab/data/cleaner.py``.
+        """
+        superseded: list[str] = []
+        new_normed = {os.path.normpath(f) for f in new_files}
+        new_basenames: dict[str, str] = {}
+        for nf in new_normed:
+            base = os.path.basename(nf)
+            if base != "__init__.py":
+                new_basenames[base] = nf
+        for old_f in list(self.files.keys()):
+            if old_f in new_normed:
+                continue
+            old_base = os.path.basename(old_f)
+            if old_base in new_basenames and old_base != "__init__.py":
+                superseded.append(old_f)
+        return sorted(superseded)
+
+    def detect_superseded_dirs(self, new_files: list[str]) -> list[tuple[str, str]]:
+        """Detect when an entire directory is superseded by a new one.
+
+        Returns a list of ``(old_dir, new_dir)`` pairs where *old_dir* and
+        *new_dir* share overlapping module names but live at different paths.
+        For example ``src/rehab/tabs/`` superseded by
+        ``src/rehab/dashboard/``.
+        """
+        new_normed = [os.path.normpath(f) for f in new_files]
+        # Collect module names per directory for new files
+        new_dir_modules: dict[str, set[str]] = {}
+        for nf in new_normed:
+            d = os.path.dirname(nf)
+            if not d:
+                continue
+            mod = os.path.splitext(os.path.basename(nf))[0]
+            if mod != "__init__":
+                new_dir_modules.setdefault(d, set()).add(mod)
+        # Collect module names per directory for existing manifest files
+        old_dir_modules: dict[str, set[str]] = {}
+        for of in self.files:
+            d = os.path.dirname(of)
+            if not d:
+                continue
+            mod = os.path.splitext(os.path.basename(of))[0]
+            if mod != "__init__":
+                old_dir_modules.setdefault(d, set()).add(mod)
+        pairs: list[tuple[str, str]] = []
+        for new_d, new_mods in new_dir_modules.items():
+            for old_d, old_mods in old_dir_modules.items():
+                if new_d == old_d:
+                    continue
+                overlap = new_mods & old_mods
+                # Flag if at least 2 overlapping module names and the overlap
+                # covers a significant fraction of the old directory.
+                if len(overlap) >= 2 and len(overlap) >= len(old_mods) // 2:
+                    pairs.append((old_d, new_d))
+        return sorted(pairs)
+
+
+_SUPERSESSION_CONFIRM_PROMPT = """\
+A project step produced a new file that may supersede an older one.
+
+Old file: {old_path}  (created by step {old_step})
+New file: {new_path}  (created by step {new_step})
+
+Both share the same filename but live in different directories.
+Does the new file functionally replace the old one?
+
+Reply with ONLY a JSON object:
+{{"superseded": true}}  or  {{"superseded": false}}
+"""
+
+_DIR_SUPERSESSION_CONFIRM_PROMPT = """\
+A project step produced files in a new directory that may supersede an older
+directory.
+
+Old directory: {old_dir}  (modules: {old_modules})
+New directory: {new_dir}  (modules: {new_modules})
+
+Both directories contain overlapping module names: {overlap}.
+Does the new directory functionally replace the old one?
+
+Reply with ONLY a JSON object:
+{{"superseded": true}}  or  {{"superseded": false}}
+"""
+
+
+def confirm_supersession_llm(
+    old_path: str,
+    old_step: int,
+    new_path: str,
+    new_step: int,
+) -> bool:
+    """Ask the LLM whether *new_path* functionally replaces *old_path*.
+
+    Returns ``True`` if the LLM confirms supersession, ``False`` otherwise
+    (including on any error).
+    """
+    try:
+        from orchestrator.llm_client import get_llm_client
+
+        client = get_llm_client(role="planner")
+        prompt = _SUPERSESSION_CONFIRM_PROMPT.format(
+            old_path=old_path,
+            old_step=old_step,
+            new_path=new_path,
+            new_step=new_step,
+        )
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START,
+                       data={"purpose": "supersession_confirm"})
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "supersession_confirm"})
+        text = response.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [ln for ln in lines if not ln.startswith("```")]
+            text = "\n".join(lines).strip()
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end != -1:
+            text = text[brace_start:brace_end + 1]
+        result = json.loads(text)
+        return bool(result.get("superseded", False))
+    except Exception as exc:
+        logger.debug("Supersession LLM confirmation failed: %s", exc)
+        return False
+
+
+def confirm_dir_supersession_llm(
+    old_dir: str,
+    new_dir: str,
+    old_modules: set[str],
+    new_modules: set[str],
+) -> bool:
+    """Ask the LLM whether *new_dir* functionally replaces *old_dir*.
+
+    Returns ``True`` if the LLM confirms supersession, ``False`` otherwise.
+    """
+    try:
+        from orchestrator.llm_client import get_llm_client
+
+        client = get_llm_client(role="planner")
+        overlap = old_modules & new_modules
+        prompt = _DIR_SUPERSESSION_CONFIRM_PROMPT.format(
+            old_dir=old_dir,
+            new_dir=new_dir,
+            old_modules=", ".join(sorted(old_modules)),
+            new_modules=", ".join(sorted(new_modules)),
+            overlap=", ".join(sorted(overlap)),
+        )
+        event_log = get_event_log()
+        event_log.emit(EventType.LLM_CALL_START,
+                       data={"purpose": "dir_supersession_confirm"})
+        response = client.generate(prompt)
+        event_log.emit(EventType.LLM_CALL_COMPLETE,
+                       data={"purpose": "dir_supersession_confirm"})
+        text = response.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [ln for ln in lines if not ln.startswith("```")]
+            text = "\n".join(lines).strip()
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end != -1:
+            text = text[brace_start:brace_end + 1]
+        result = json.loads(text)
+        return bool(result.get("superseded", False))
+    except Exception as exc:
+        logger.debug("Dir supersession LLM confirmation failed: %s", exc)
+        return False
+
+
+def remove_superseded_files(
+    workspace: str,
+    manifest: "ProjectManifest",
+    new_step_id: int,
+    new_files: list[str],
+    use_llm: bool = True,
+) -> list[str]:
+    """Detect and remove files superseded by *new_files*.
+
+    For each candidate returned by ``manifest.detect_superseded()``, ask the
+    LLM to confirm (when *use_llm* is ``True``).  Confirmed superseded files
+    are deleted from disk and removed from the manifest.
+
+    Returns the list of removed relative paths.
+    """
+    # Detect both file-level and directory-level supersession BEFORE any
+    # removals, so the manifest state is consistent for both checks.
+    candidates = manifest.detect_superseded(new_files)
+    dir_pairs = manifest.detect_superseded_dirs(new_files)
+    # Snapshot directory-level old-file lists before file-level removal
+    # modifies the manifest.
+    dir_old_files: dict[str, list[str]] = {}
+    dir_old_mods: dict[str, set[str]] = {}
+    for old_dir, new_dir in dir_pairs:
+        dir_old_files[(old_dir, new_dir)] = [
+            f for f in list(manifest.files.keys())
+            if os.path.dirname(f) == old_dir
+        ]
+        dir_old_mods[(old_dir, new_dir)] = {
+            os.path.splitext(os.path.basename(f))[0]
+            for f in manifest.files if os.path.dirname(f) == old_dir
+            and os.path.basename(f) != "__init__.py"
+        }
+
+    removed: list[str] = []
+
+    # File-level supersession
+    for old_f in candidates:
+        old_base = os.path.basename(old_f)
+        # Find the new file that caused the supersession
+        new_f = None
+        for nf in new_files:
+            if os.path.basename(os.path.normpath(nf)) == old_base:
+                new_f = os.path.normpath(nf)
+                break
+        if new_f is None:
+            continue
+        old_step = manifest.files.get(old_f, 0)
+        confirmed = True
+        if use_llm and not MINIMAL_MODE:
+            confirmed = confirm_supersession_llm(
+                old_f, old_step, new_f, new_step_id,
+            )
+        if confirmed:
+            fpath = os.path.join(workspace, old_f)
+            try:
+                os.remove(fpath)
+                manifest.remove(old_f)
+                removed.append(old_f)
+                logger.info(
+                    "  Removed stale file %s (superseded by %s in step %d)",
+                    old_f, new_f, new_step_id,
+                )
+            except OSError:
+                pass
+
+    # Directory-level supersession
+    for old_dir, new_dir in dir_pairs:
+        new_mods = {
+            os.path.splitext(os.path.basename(os.path.normpath(nf)))[0]
+            for nf in new_files if os.path.dirname(os.path.normpath(nf)) == new_dir
+            and os.path.basename(nf) != "__init__.py"
+        }
+        old_mods = dir_old_mods.get((old_dir, new_dir), set())
+        dir_confirmed = True
+        if use_llm and not MINIMAL_MODE:
+            dir_confirmed = confirm_dir_supersession_llm(
+                old_dir, new_dir, old_mods, new_mods,
+            )
+        if dir_confirmed:
+            for of in dir_old_files.get((old_dir, new_dir), []):
+                if of in removed:
+                    continue
+                fpath = os.path.join(workspace, of)
+                try:
+                    os.remove(fpath)
+                    manifest.remove(of)
+                    removed.append(of)
+                    logger.info(
+                        "  Removed stale file %s (directory %s superseded by %s)",
+                        of, old_dir, new_dir,
+                    )
+                except OSError:
+                    pass
+            # Clean up empty directory
+            _remove_empty_dirs(workspace)
+    return sorted(removed)
+
+
 import re as _re
 
 # Patterns that indicate best-practice violations in generated code.
@@ -4003,6 +4322,26 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     else:
                         dashboard.log(f"Step {step['id']} completed successfully")
                 logger.info("  Step %s SUCCEEDED.", step["id"])
+
+                # Section 12: Update project manifest and remove stale files.
+                _manifest = state.get("_manifest_obj")
+                if _manifest is None:
+                    _manifest_data = state.get("file_manifest", {})
+                    _manifest = ProjectManifest.from_dict(_manifest_data)
+                    state["_manifest_obj"] = _manifest
+                _new_files = step.get("files_written", [])
+                if _new_files:
+                    _stale_removed = remove_superseded_files(
+                        PROJECT_DIR, _manifest, step["id"], _new_files,
+                    )
+                    if _stale_removed:
+                        logger.info(
+                            "  Removed %d stale file(s) superseded by step %d",
+                            len(_stale_removed), step["id"],
+                        )
+                    _manifest.add_step_output(step["id"], _new_files)
+                    state["file_manifest"] = _manifest.to_dict()
+                    _save_state_threadsafe(state)
 
                 # Record provenance for successful step
                 orchestrator_agent = prov.add_agent("orchestrator_llm")

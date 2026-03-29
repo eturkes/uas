@@ -635,7 +635,7 @@ the canonical project, while the workspace root has stale partial copies.
 
 ---
 
-### Section 12 — Project structure manifest with stale file detection
+### Section 12 — Project structure manifest with stale file detection [x] Done
 
 **Problem:** As steps execute and the architecture evolves, old files persist.
 In the rehab run: `src/rehab/tabs/` (5 files, created step 3) coexists with

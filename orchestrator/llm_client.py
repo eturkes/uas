@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -105,7 +106,7 @@ class ClaudeCodeClient:
         self.model = model
         self.role = role
 
-    def _run_streaming(self, cmd, env, input_text=None):
+    def _run_streaming(self, cmd, env, input_text=None, cwd=None):
         """Run the CLI streaming stdout to the logger line-by-line.
 
         When *input_text* is provided it is written to the process's stdin
@@ -120,6 +121,7 @@ class ClaudeCodeClient:
             text=True,
             stdin=subprocess.PIPE if input_text else subprocess.DEVNULL,
             env=env,
+            cwd=cwd,
         )
         # Feed the prompt via stdin and close the pipe so the process
         # knows input is complete.  Must happen before reading stdout
@@ -194,78 +196,88 @@ class ClaudeCodeClient:
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "128000"
 
-        last_error: RuntimeError | None = None
-        for attempt in range(1 + MAX_RETRIES):
-            try:
-                stdout, stderr, returncode = self._run_streaming(
-                    cmd, env, input_text=prompt,
-                )
-            except subprocess.TimeoutExpired:
-                last_error = RuntimeError(
-                    f"Claude Code CLI timed out after {self.timeout} seconds."
-                )
-                if attempt < MAX_RETRIES:
-                    wait = INITIAL_BACKOFF * (2 ** attempt)
-                    logger.warning(
-                        "Transient error (attempt %d/%d), retrying in %ds: %s",
-                        attempt + 1, 1 + MAX_RETRIES, wait, last_error,
-                    )
-                    time.sleep(wait)
-                    continue
-                raise last_error
-            except FileNotFoundError as e:
-                raise RuntimeError(
-                    f"Claude CLI executable not found in PATH: {e}"
-                )
+        # Section 9: Isolate the CLI so tool side effects (file writes,
+        # .uas_auth/, step scripts) don't land in the workspace.
+        env.pop("WORKSPACE", None)
+        env.pop("UAS_WORKSPACE", None)
+        isolation_dir = tempfile.mkdtemp(prefix="uas_llm_")
+        env["CLAUDE_CONFIG_DIR"] = os.path.join(isolation_dir, ".claude")
 
-            if returncode != 0:
-                stderr_s = stderr.strip()
-                stdout_s = stdout.strip()
-                # Check both stdout and stderr for transient errors
-                # (rate limits, network issues, etc.) BEFORE attempting
-                # to salvage partial output — a rate-limit message in
-                # stdout must not be returned as valid LLM content.
-                combined = f"{stderr_s} {stdout_s}"
-                error = RuntimeError(
-                    f"Claude Code CLI exited with code {returncode}: {stderr_s}"
-                )
-                is_transient = _is_transient(combined)
-                if is_transient and attempt < MAX_RETRIES:
-                    # Use longer backoff for API overload/rate-limit errors
-                    # (529, 429, "overloaded", etc.) since hammering the API
-                    # only makes things worse.
-                    if _is_overloaded(combined):
-                        wait = OVERLOADED_BACKOFF * (2 ** attempt)
-                    else:
+        try:
+            last_error: RuntimeError | None = None
+            for attempt in range(1 + MAX_RETRIES):
+                try:
+                    stdout, stderr, returncode = self._run_streaming(
+                        cmd, env, input_text=prompt, cwd=isolation_dir,
+                    )
+                except subprocess.TimeoutExpired:
+                    last_error = RuntimeError(
+                        f"Claude Code CLI timed out after {self.timeout} seconds."
+                    )
+                    if attempt < MAX_RETRIES:
                         wait = INITIAL_BACKOFF * (2 ** attempt)
-                    logger.warning(
-                        "Transient error (attempt %d/%d), retrying in %ds: %s",
-                        attempt + 1, 1 + MAX_RETRIES, wait, error,
+                        logger.warning(
+                            "Transient error (attempt %d/%d), retrying in %ds: %s",
+                            attempt + 1, 1 + MAX_RETRIES, wait, last_error,
+                        )
+                        time.sleep(wait)
+                        continue
+                    raise last_error
+                except FileNotFoundError as e:
+                    raise RuntimeError(
+                        f"Claude CLI executable not found in PATH: {e}"
                     )
-                    time.sleep(wait)
-                    last_error = error
-                    continue
-                # If the CLI produced substantial output before failing
-                # (e.g. truncated due to output token limit), return what
-                # we have so downstream truncation handling can attempt
-                # a continuation rather than wasting the partial output.
-                # Only do this for non-transient failures — a rate-limit
-                # or network error message must never be returned as
-                # valid LLM content.
-                if stdout_s and not is_transient:
-                    logger.warning(
-                        "Claude Code CLI exited with code %d but produced "
-                        "output (%d chars); returning partial output for "
-                        "truncation recovery.",
-                        returncode, len(stdout_s),
+
+                if returncode != 0:
+                    stderr_s = stderr.strip()
+                    stdout_s = stdout.strip()
+                    # Check both stdout and stderr for transient errors
+                    # (rate limits, network issues, etc.) BEFORE attempting
+                    # to salvage partial output — a rate-limit message in
+                    # stdout must not be returned as valid LLM content.
+                    combined = f"{stderr_s} {stdout_s}"
+                    error = RuntimeError(
+                        f"Claude Code CLI exited with code {returncode}: {stderr_s}"
                     )
-                    return stdout_s
-                raise error
+                    is_transient = _is_transient(combined)
+                    if is_transient and attempt < MAX_RETRIES:
+                        # Use longer backoff for API overload/rate-limit errors
+                        # (529, 429, "overloaded", etc.) since hammering the API
+                        # only makes things worse.
+                        if _is_overloaded(combined):
+                            wait = OVERLOADED_BACKOFF * (2 ** attempt)
+                        else:
+                            wait = INITIAL_BACKOFF * (2 ** attempt)
+                        logger.warning(
+                            "Transient error (attempt %d/%d), retrying in %ds: %s",
+                            attempt + 1, 1 + MAX_RETRIES, wait, error,
+                        )
+                        time.sleep(wait)
+                        last_error = error
+                        continue
+                    # If the CLI produced substantial output before failing
+                    # (e.g. truncated due to output token limit), return what
+                    # we have so downstream truncation handling can attempt
+                    # a continuation rather than wasting the partial output.
+                    # Only do this for non-transient failures — a rate-limit
+                    # or network error message must never be returned as
+                    # valid LLM content.
+                    if stdout_s and not is_transient:
+                        logger.warning(
+                            "Claude Code CLI exited with code %d but produced "
+                            "output (%d chars); returning partial output for "
+                            "truncation recovery.",
+                            returncode, len(stdout_s),
+                        )
+                        return stdout_s
+                    raise error
 
-            return stdout.strip()
+                return stdout.strip()
 
-        # Should not be reached, but satisfy type checker.
-        raise last_error  # type: ignore[misc]
+            # Should not be reached, but satisfy type checker.
+            raise last_error  # type: ignore[misc]
+        finally:
+            shutil.rmtree(isolation_dir, ignore_errors=True)
 
 
 def get_llm_client(role: str | None = None) -> ClaudeCodeClient:

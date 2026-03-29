@@ -3741,6 +3741,284 @@ def validate_workspace(state: dict, workspace: str, *,
     return validation_data
 
 
+# ---------------------------------------------------------------------------
+# Holistic end-of-run workspace validation (Section 13 of PLAN.md)
+# ---------------------------------------------------------------------------
+
+def _check_readme_accuracy(workspace: str) -> list[str]:
+    """Check that file paths and commands referenced in README actually exist."""
+    issues: list[str] = []
+    readme_path = None
+    for name in ("README.md", "README.rst", "README.txt", "README"):
+        candidate = os.path.join(workspace, name)
+        if os.path.isfile(candidate):
+            readme_path = candidate
+            break
+    if readme_path is None:
+        return issues
+
+    try:
+        with open(readme_path, encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except OSError:
+        return issues
+
+    seen: set[str] = set()
+
+    # 1. Shell commands: ``python script.py`` or ``python3 path/to/script.py``
+    for m in re.finditer(r"python[3]?\s+[\"']?([^\s\"'`]+\.py)", content):
+        script = m.group(1)
+        if script in seen:
+            continue
+        seen.add(script)
+        if not os.path.isfile(os.path.join(workspace, script)):
+            issues.append(
+                f"README references script `{script}` "
+                f"(via python command) but it does not exist"
+            )
+
+    # 2. File paths in backticks that contain a directory separator
+    for m in re.finditer(r"`([^`\n]+)`", content):
+        candidate = m.group(1).strip()
+        if not ("/" in candidate or os.sep in candidate):
+            continue
+        if candidate.startswith(("http://", "https://", "$", "#", "-")):
+            continue
+        path_part = candidate.split()[0] if " " in candidate else candidate
+        if not re.match(r"^[\w./-]+\.\w+$", path_part):
+            continue
+        if path_part in seen:
+            continue
+        seen.add(path_part)
+        if not os.path.isfile(os.path.join(workspace, path_part)):
+            issues.append(
+                f"README references path `{path_part}` but it does not exist"
+            )
+
+    return issues
+
+
+def _check_import_resolution(workspace: str) -> list[str]:
+    """Verify that local Python imports resolve to existing modules."""
+    _skip = {".uas_state", ".git", "__pycache__", "venv", ".venv",
+             "node_modules", ".tox", ".eggs"}
+    issues: list[str] = []
+
+    py_files: list[str] = []
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in _skip]
+        for fname in files:
+            if fname.endswith(".py"):
+                py_files.append(os.path.join(root, fname))
+
+    # Identify local top-level packages and modules
+    local_packages: set[str] = set()
+    try:
+        entries = os.listdir(workspace)
+    except OSError:
+        return issues
+    for entry in entries:
+        pkg_init = os.path.join(workspace, entry, "__init__.py")
+        if os.path.isdir(os.path.join(workspace, entry)) and os.path.isfile(pkg_init):
+            local_packages.add(entry)
+    for entry in entries:
+        if entry.endswith(".py") and entry != "__init__.py":
+            local_packages.add(entry[:-3])
+
+    for fpath in py_files:
+        try:
+            with open(fpath, encoding="utf-8", errors="replace") as fh:
+                source = fh.read()
+            tree = ast.parse(source, filename=fpath)
+        except Exception:
+            continue
+
+        rel_file = os.path.relpath(fpath, workspace)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module is None:
+                continue
+            level = node.level or 0
+            if level > 0:
+                resolved = _resolve_import_module(
+                    workspace, fpath, node.module, level
+                )
+                if resolved is None:
+                    issues.append(
+                        f"`{rel_file}` line {node.lineno}: relative import "
+                        f"`from {'.' * level}{node.module}` cannot be resolved"
+                    )
+            else:
+                top = node.module.split(".")[0]
+                if top in local_packages:
+                    resolved = _resolve_import_module(
+                        workspace, fpath, node.module, 0
+                    )
+                    if resolved is None:
+                        issues.append(
+                            f"`{rel_file}` line {node.lineno}: import "
+                            f"`from {node.module}` targets local package "
+                            f"but module not found"
+                        )
+
+    return issues
+
+
+def _check_orphaned_files(workspace: str, state: dict) -> list[str]:
+    """Find files on disk that no step claims as output."""
+    issues: list[str] = []
+
+    claimed: set[str] = set()
+    for step in state.get("steps", []):
+        for f in step.get("files_written", []):
+            claimed.add(os.path.normpath(f))
+
+    expected_roots = {
+        ".gitignore", "pyproject.toml", "setup.py", "setup.cfg",
+        "requirements.txt", "Pipfile", "poetry.lock", "package.json",
+        "Makefile", "Dockerfile", "docker-compose.yml", "Containerfile",
+        "LICENSE", "MANIFEST.in", "tox.ini", ".flake8",
+        ".pre-commit-config.yaml", "pytest.ini", "mypy.ini", ".mypy.ini",
+    }
+    expected_lower_prefixes = ("readme", "changelog", "contributing", "authors")
+
+    _skip = {".git", ".uas_state", ".uas_auth", "__pycache__",
+             "node_modules", "venv", ".venv", ".tox", ".eggs"}
+
+    orphans: list[str] = []
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in _skip]
+        for fname in files:
+            rel = os.path.relpath(os.path.join(root, fname), workspace)
+            normed = os.path.normpath(rel)
+            if normed in expected_roots:
+                continue
+            if any(normed.lower().startswith(p) for p in expected_lower_prefixes):
+                continue
+            if fname.startswith(".") or fname.endswith(".pyc"):
+                continue
+            if normed not in claimed:
+                orphans.append(rel)
+
+    if orphans:
+        shown = orphans[:10]
+        suffix = f" (and {len(orphans) - 10} more)" if len(orphans) > 10 else ""
+        issues.append(
+            f"{len(orphans)} orphaned file(s) not claimed by any step: "
+            + ", ".join(f"`{f}`" for f in shown) + suffix
+        )
+
+    return issues
+
+
+def _check_entry_points(workspace: str) -> list[str]:
+    """Verify entry points declared in pyproject.toml exist."""
+    issues: list[str] = []
+
+    pyproject_path = os.path.join(workspace, "pyproject.toml")
+    if not os.path.isfile(pyproject_path):
+        return issues
+
+    try:
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            try:
+                import tomli as tomllib  # type: ignore[no-redef]
+            except ModuleNotFoundError:
+                return _check_entry_points_regex(workspace, pyproject_path)
+    except Exception:
+        return issues
+
+    try:
+        with open(pyproject_path, "rb") as fh:
+            data = tomllib.load(fh)
+    except Exception:
+        return issues
+
+    for section_name in ("scripts", "gui-scripts"):
+        scripts = data.get("project", {}).get(section_name, {})
+        for name, target in scripts.items():
+            module_part = target.split(":")[0] if ":" in target else target
+            module_path = module_part.replace(".", os.sep)
+            as_file = os.path.join(workspace, module_path + ".py")
+            as_pkg = os.path.join(workspace, module_path, "__init__.py")
+            if not os.path.isfile(as_file) and not os.path.isfile(as_pkg):
+                issues.append(
+                    f"pyproject.toml [{section_name}] entry `{name}` "
+                    f"targets `{target}` but module `{module_part}` not found"
+                )
+
+    poetry_scripts = data.get("tool", {}).get("poetry", {}).get("scripts", {})
+    for name, target in poetry_scripts.items():
+        module_part = target.split(":")[0] if ":" in target else target
+        module_path = module_part.replace(".", os.sep)
+        as_file = os.path.join(workspace, module_path + ".py")
+        as_pkg = os.path.join(workspace, module_path, "__init__.py")
+        if not os.path.isfile(as_file) and not os.path.isfile(as_pkg):
+            issues.append(
+                f"pyproject.toml [tool.poetry.scripts] entry `{name}` "
+                f"targets `{target}` but module `{module_part}` not found"
+            )
+
+    return issues
+
+
+def _check_entry_points_regex(
+    workspace: str, pyproject_path: str,
+) -> list[str]:
+    """Fallback entry-point check when no TOML parser is available."""
+    issues: list[str] = []
+    try:
+        with open(pyproject_path, encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except OSError:
+        return issues
+
+    in_scripts = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if re.match(r"\[project\.(?:gui-)?scripts\]", stripped):
+            in_scripts = True
+            continue
+        if stripped.startswith("["):
+            in_scripts = False
+            continue
+        if in_scripts:
+            m = re.match(r'(\w+)\s*=\s*"([^"]+)"', stripped)
+            if m:
+                name, target = m.group(1), m.group(2)
+                module_part = target.split(":")[0] if ":" in target else target
+                module_path = module_part.replace(".", os.sep)
+                as_file = os.path.join(workspace, module_path + ".py")
+                as_pkg = os.path.join(workspace, module_path, "__init__.py")
+                if not os.path.isfile(as_file) and not os.path.isfile(as_pkg):
+                    issues.append(
+                        f"pyproject.toml scripts entry `{name}` targets "
+                        f"`{target}` but module `{module_part}` not found"
+                    )
+
+    return issues
+
+
+def holistic_validation(workspace: str, state: dict) -> list[str]:
+    """Check project-wide coherence after all steps complete.
+
+    Returns a list of issue strings covering:
+    - README references to non-existent files
+    - Unresolvable local Python imports
+    - Orphaned files not claimed by any step
+    - Missing entry-point targets
+
+    Section 13 of PLAN.md.
+    """
+    issues: list[str] = []
+    issues.extend(_check_readme_accuracy(workspace))
+    issues.extend(_check_import_resolution(workspace))
+    issues.extend(_check_orphaned_files(workspace, state))
+    issues.extend(_check_entry_points(workspace))
+    return issues
+
+
 META_LEARNING_PROMPT = """\
 You are performing a post-run analysis of an automated code generation pipeline run.
 
@@ -5600,6 +5878,77 @@ def main():
                     "with confidence=%s.",
                     correction_rounds_done, confidence,
                 )
+
+    # Section 13: Holistic end-of-run workspace validation
+    if not MINIMAL_MODE:
+        holistic_issues = holistic_validation(PROJECT_DIR, state)
+        if holistic_issues:
+            for hi in holistic_issues:
+                logger.warning("  Holistic: %s", hi)
+            state.setdefault("holistic_issues", []).extend(holistic_issues)
+            save_state(state)
+
+            # Run one more correction round for critical issues
+            critical = [
+                i for i in holistic_issues
+                if any(kw in i.lower() for kw in (
+                    "does not exist", "cannot be resolved",
+                    "not found",
+                ))
+            ]
+            h_rounds = state.get("correction_rounds", 0)
+            if critical and h_rounds < MAX_CORRECTION_ROUNDS + 1:
+                logger.info(
+                    "\nHolistic correction: %d critical issue(s)", len(critical),
+                )
+                h_corrective = generate_corrective_steps(
+                    state.get("goal", ""), critical, state,
+                )
+                if h_corrective:
+                    max_id = max(
+                        (s["id"] for s in state["steps"]), default=0,
+                    )
+                    for i, cs in enumerate(h_corrective):
+                        cs["id"] = max_id + i + 1
+                        cs.setdefault("status", "pending")
+                        cs.setdefault("spec_file", "")
+                        cs.setdefault("rewrites", 0)
+                        cs.setdefault("reflections", [])
+                        cs.setdefault("output", "")
+                        cs.setdefault("stderr_output", "")
+                        cs.setdefault("error", "")
+                        cs.setdefault("files_written", [])
+                        cs.setdefault("uas_result", None)
+                        cs.setdefault("summary", "")
+                        cs.setdefault("timing", {
+                            "llm_time": 0.0, "sandbox_time": 0.0,
+                            "total_time": 0.0,
+                        })
+                        state["steps"].append(cs)
+                    save_state(state)
+                    logger.info(
+                        "  Generated %d holistic corrective step(s)",
+                        len(h_corrective),
+                    )
+                    for cs in h_corrective:
+                        step_by_id[cs["id"]] = cs
+                        success = execute_step(
+                            cs, state, completed_outputs,
+                            progress_counts, dashboard=dashboard,
+                        )
+                        if success:
+                            completed_outputs[cs["id"]] = {
+                                "stdout": cs.get("output", ""),
+                                "stderr": cs.get("stderr_output", ""),
+                                "files": cs.get("files_written", []),
+                            }
+                        else:
+                            logger.warning(
+                                "  Holistic corrective step %d failed.",
+                                cs["id"],
+                            )
+                            break
+                    save_state(state)
 
     if not MINIMAL_MODE:
         post_run_meta_learning(state)

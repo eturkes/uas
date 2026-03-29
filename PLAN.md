@@ -707,7 +707,7 @@ class ProjectManifest:
 
 ---
 
-### Section 13 — Holistic end-of-run workspace validation
+### Section 13 — Holistic end-of-run workspace validation [x] Done
 
 **Problem:** Step-level validation checks that each step's outputs exist and
 pass their verification criteria, but never validates the project as a whole.

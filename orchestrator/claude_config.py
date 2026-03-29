@@ -40,6 +40,13 @@ Any files created by tools during generation will be discarded.
   install everything you need, including dev tools (linters, formatters, test
   runners) when they'd improve quality.
 
+## Critical: Workspace IS the project root
+The workspace directory IS the project root. Do NOT create a subdirectory
+named after the project. If the project is called "myapp", do NOT create
+"myapp/" inside the workspace. Write files directly to the workspace:
+- CORRECT: os.path.join(workspace, "src", "myapp", "main.py")
+- WRONG:   os.path.join(workspace, "myapp", "src", "myapp", "main.py")
+
 ## Package Management
 - Use `uv` for all package installation -- it is dramatically faster than pip:
   `subprocess.run(["uv", "pip", "install", "--system", ...], check=True)`
@@ -151,6 +158,13 @@ def _format_step_context(ctx: dict) -> str:
         lines.append(f"- **Dependencies:** steps {deps}")
     else:
         lines.append("- **Dependencies:** none (independent step)")
+
+    workspace_name = ctx.get("workspace_name", "")
+    if workspace_name:
+        lines.append(
+            f"- **Workspace Name:** `{workspace_name}` — do NOT create a "
+            f"subdirectory called `{workspace_name}/` inside the workspace"
+        )
 
     prior_steps = ctx.get("prior_steps", [])
     if prior_steps:

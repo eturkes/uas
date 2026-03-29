@@ -561,7 +561,7 @@ def cleanup_step_artifacts(
 
 ---
 
-### Section 11 — Detect and prevent nested project duplication
+### Section 11 — Detect and prevent nested project duplication [x] Done
 
 **Problem:** Generated scripts sometimes create a subdirectory named after the
 project inside the workspace (e.g., `os.makedirs("rehab/src/rehab/")` when the

@@ -1518,6 +1518,12 @@ def build_context(step: dict, completed_outputs: dict,
         return ""
 
     parts = []
+
+    # Section 11d: Inject workspace name so generated scripts avoid nesting
+    ws_name = os.path.basename(workspace_path) if workspace_path else ""
+    if ws_name and ws_name != ".":
+        parts.append(f"<workspace_name>{ws_name}</workspace_name>")
+
     dep_ids = sorted(step["depends_on"])
 
     # Build step lookup
@@ -2272,6 +2278,78 @@ def cleanup_step_artifacts(
     # Remove empty directories left behind
     _remove_empty_dirs(workspace)
     return removed
+
+
+# ---------------------------------------------------------------------------
+# Section 11: Detect and prevent nested project duplication
+# ---------------------------------------------------------------------------
+
+_NESTED_PROJECT_MARKERS = {"src", "scripts", "tests", "data"}
+
+
+def detect_nested_duplication(workspace: str) -> str | None:
+    """Detect a nested directory that mirrors the workspace structure.
+
+    A generated script may create ``project_name/src/...`` inside a workspace
+    that IS already the project root.  This function detects the pattern by
+    looking for a top-level subdirectory that shares at least two "project
+    marker" directories (src, scripts, tests, data) with the workspace root.
+
+    Returns the subdirectory name if duplication is found, ``None`` otherwise.
+    """
+    try:
+        root_entries = os.listdir(workspace)
+    except OSError:
+        return None
+    root_dirs = {
+        d for d in root_entries
+        if os.path.isdir(os.path.join(workspace, d))
+        and d not in _SNAPSHOT_SKIP_DIRS
+    }
+    root_markers = root_dirs & _NESTED_PROJECT_MARKERS
+    if len(root_markers) < 2:
+        return None
+    for d in sorted(root_dirs - _NESTED_PROJECT_MARKERS):
+        nested = os.path.join(workspace, d)
+        try:
+            nested_children = {
+                c for c in os.listdir(nested)
+                if os.path.isdir(os.path.join(nested, c))
+                and c not in _SNAPSHOT_SKIP_DIRS
+            }
+        except OSError:
+            continue
+        if len(nested_children & _NESTED_PROJECT_MARKERS) >= 2:
+            return d
+    return None
+
+
+def resolve_nested_duplication(workspace: str, nested_name: str) -> list[str]:
+    """Promote a nested project copy to the workspace root.
+
+    When duplication is detected (e.g. ``workspace/rehab/src/`` alongside
+    ``workspace/src/``), this function merges the nested copy into the root.
+    On conflicts the nested version wins (it is typically more recent and
+    complete).  The nested directory is removed after promotion.
+
+    Returns a sorted list of top-level items that were promoted.
+    """
+    nested = os.path.join(workspace, nested_name)
+    if not os.path.isdir(nested):
+        return []
+    promoted: list[str] = []
+    for item in sorted(os.listdir(nested)):
+        src = os.path.join(nested, item)
+        dst = os.path.join(workspace, item)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+            shutil.rmtree(src)
+        else:
+            shutil.copy2(src, dst)
+            os.remove(src)
+        promoted.append(item)
+    shutil.rmtree(nested, ignore_errors=True)
+    return promoted
 
 
 import re as _re
@@ -3552,6 +3630,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         "step_title": step["title"],
         "dependencies": step["depends_on"],
         "prior_steps": completed_steps_info,
+        "workspace_name": os.path.basename(PROJECT_DIR),
     }
 
     event_log = get_event_log()
@@ -3780,6 +3859,30 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                         len(_verify_removed),
                     )
                 cleanup_workspace_artifacts(PROJECT_DIR)
+
+            # Section 11: Detect and resolve nested project duplication.
+            # A generated script may create project_name/src/ inside the
+            # workspace that IS the project root, producing a nested copy.
+            if failure_reason is None:
+                _nested = detect_nested_duplication(PROJECT_DIR)
+                if _nested:
+                    logger.warning(
+                        "  Nested duplication detected: %s/", _nested,
+                    )
+                    _promoted = resolve_nested_duplication(
+                        PROJECT_DIR, _nested,
+                    )
+                    if _promoted:
+                        logger.info(
+                            "  Promoted %d item(s) from %s/ to root",
+                            len(_promoted), _nested,
+                        )
+                        # Update files_written to strip the nested prefix
+                        _prefix = _nested + "/"
+                        step["files_written"] = [
+                            f[len(_prefix):] if f.startswith(_prefix) else f
+                            for f in step.get("files_written", [])
+                        ]
 
             # Guardrail scan on workspace Python files
             if failure_reason is None:

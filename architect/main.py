@@ -2197,6 +2197,83 @@ def cleanup_workspace_artifacts(
     return removed
 
 
+# ---------------------------------------------------------------------------
+# Section 10: Workspace snapshot and recursive diff cleanup
+# ---------------------------------------------------------------------------
+
+_SNAPSHOT_SKIP_DIRS = {".git", ".uas_state", ".uas_auth", "__pycache__", "node_modules"}
+
+
+def snapshot_workspace(workspace: str) -> set[str]:
+    """Return the set of all relative file paths under *workspace*.
+
+    Skips internal directories (.git, .uas_state, .uas_auth, __pycache__,
+    node_modules) so only user-visible project files are tracked.
+    """
+    paths: set[str] = set()
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in _SNAPSHOT_SKIP_DIRS]
+        for f in files:
+            rel = os.path.relpath(os.path.join(root, f), workspace)
+            paths.add(rel)
+    return paths
+
+
+def _remove_empty_dirs(workspace: str) -> None:
+    """Remove empty directories under *workspace* (bottom-up).
+
+    Skips the same internal directories as ``snapshot_workspace``.
+    """
+    for root, dirs, files in os.walk(workspace, topdown=False):
+        dirs[:] = [d for d in dirs if d not in _SNAPSHOT_SKIP_DIRS]
+        rel = os.path.relpath(root, workspace)
+        if rel == ".":
+            continue
+        # Don't remove skip-listed directories themselves
+        if os.path.basename(root) in _SNAPSHOT_SKIP_DIRS:
+            continue
+        try:
+            if not os.listdir(root):
+                os.rmdir(root)
+        except OSError:
+            pass
+
+
+def cleanup_step_artifacts(
+    workspace: str,
+    pre_snapshot: set[str],
+    step_output_files: set[str],
+) -> list[str]:
+    """Remove files created during a step that are not claimed outputs.
+
+    Args:
+        workspace: Path to the workspace directory.
+        pre_snapshot: Set of relative paths that existed before the step
+            (as returned by :func:`snapshot_workspace`).
+        step_output_files: Set of relative paths the step claims to have
+            written (from ``files_written``).
+
+    Returns:
+        Sorted list of relative paths that were removed.
+    """
+    post_snapshot = snapshot_workspace(workspace)
+    new_files = post_snapshot - pre_snapshot
+    claimed = {os.path.normpath(f) for f in step_output_files}
+    artifacts = new_files - claimed
+    removed: list[str] = []
+    for rel in sorted(artifacts):
+        fpath = os.path.join(workspace, rel)
+        try:
+            os.remove(fpath)
+            removed.append(rel)
+            logger.info("  Removed step artifact: %s", rel)
+        except OSError:
+            pass
+    # Remove empty directories left behind
+    _remove_empty_dirs(workspace)
+    return removed
+
+
 import re as _re
 
 # Patterns that indicate best-practice violations in generated code.
@@ -3542,14 +3619,15 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         # so build_prompt() can include explicit pip install instructions.
         if step.get("environment"):
             extra_env["UAS_STEP_ENVIRONMENT"] = json.dumps(step["environment"])
-        # Section 7: Capture pre-step workspace root files for artifact cleanup
-        try:
-            pre_step_files = {
-                f for f in os.listdir(PROJECT_DIR)
-                if os.path.isfile(os.path.join(PROJECT_DIR, f))
-            }
-        except OSError:
-            pre_step_files = set()
+        # Section 10: Take a full recursive workspace snapshot before step
+        # execution.  After the step completes, any new file not claimed by
+        # the step's ``files_written`` is treated as an artifact and removed.
+        pre_snapshot = snapshot_workspace(PROJECT_DIR)
+        # Keep a flat root-level set for the legacy cleanup_workspace_artifacts
+        # path (used as a fallback for UAS_RESULT script artifact removal).
+        pre_step_files = {
+            f for f in pre_snapshot if os.sep not in f and "/" not in f
+        }
         # Scan workspace files for orchestrator prompt context (Section 1a)
         ws_files = scan_workspace_files(PROJECT_DIR)
         if ws_files:
@@ -3663,18 +3741,19 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                         "Fix the output and try again."
                     )
 
-            # Section 16: Cleanup build artifacts
-            # Section 7: Pass pre-step file set to remove script artifacts.
-            # Protect files claimed as step outputs so intentional .py files
-            # (e.g. run_pipeline.py) are not mistaken for sandbox artifacts.
-            _output_basenames = {
-                os.path.basename(f) for f in step.get("files_written", [])
-            }
-            cleanup_workspace_artifacts(
+            # Section 10: Recursive diff cleanup — remove any new file that
+            # the step did not claim as output.  This replaces the old
+            # root-level-only cleanup_workspace_artifacts for artifact removal.
+            _step_output_set = set(step.get("files_written", []))
+            _artifact_removed = cleanup_step_artifacts(
                 PROJECT_DIR,
-                pre_step_files=pre_step_files,
-                step_output_files=_output_basenames,
+                pre_snapshot=pre_snapshot,
+                step_output_files=_step_output_set,
             )
+            if _artifact_removed:
+                logger.info("  Removed %d step artifact(s)", len(_artifact_removed))
+            # Legacy: still clean __pycache__ / .pyc via the old function.
+            cleanup_workspace_artifacts(PROJECT_DIR)
 
             if failure_reason is None and step.get("verify"):
                 logger.info("  Verifying step output...")
@@ -3688,13 +3767,19 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     step_id=step["id"],
                     data={"passed": failure_reason is None},
                 )
-                # Section 7: Cleanup again after verification orchestrator
+                # Section 10: Cleanup again after verification orchestrator
                 # which may have created new script artifacts.
-                cleanup_workspace_artifacts(
+                _verify_removed = cleanup_step_artifacts(
                     PROJECT_DIR,
-                    pre_step_files=pre_step_files,
-                    step_output_files=_output_basenames,
+                    pre_snapshot=pre_snapshot,
+                    step_output_files=_step_output_set,
                 )
+                if _verify_removed:
+                    logger.info(
+                        "  Removed %d verification artifact(s)",
+                        len(_verify_removed),
+                    )
+                cleanup_workspace_artifacts(PROJECT_DIR)
 
             # Guardrail scan on workspace Python files
             if failure_reason is None:

@@ -487,7 +487,7 @@ generated Python script) is returned to the orchestrator.
 
 ---
 
-### Section 10 — Workspace snapshot and recursive diff cleanup
+### Section 10 — Workspace snapshot and recursive diff cleanup [x] Done
 
 **Problem:** `cleanup_workspace_artifacts()` only checks root-level `.py` files
 containing `UAS_RESULT`. It misses: files in subdirectories, files without the

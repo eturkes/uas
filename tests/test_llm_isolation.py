@@ -68,6 +68,34 @@ class TestGenerateIsolation:
 
     @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_credentials_copied_to_isolation_dir(
+        self, _mock_which, mock_stream, tmp_path, monkeypatch
+    ):
+        """Credential files from the original config dir should be copied."""
+        # Create a fake config dir with credentials
+        fake_config = tmp_path / "fake_claude"
+        fake_config.mkdir()
+        cred_file = fake_config / ".credentials.json"
+        cred_file.write_text('{"token": "test"}')
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(fake_config))
+
+        captured = {}
+
+        def capture(*args, **kwargs):
+            captured["env"] = args[1]
+            iso_cred = os.path.join(
+                captured["env"]["CLAUDE_CONFIG_DIR"], ".credentials.json"
+            )
+            captured["cred_exists"] = os.path.isfile(iso_cred)
+            return ("response", "", 0)
+
+        mock_stream.side_effect = capture
+        ClaudeCodeClient().generate("hello")
+
+        assert captured["cred_exists"] is True
+
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
     def test_isolation_dir_cleaned_up_on_success(self, _mock_which, mock_stream):
         """Temp dir must be removed after a successful generation."""
         captured = {}

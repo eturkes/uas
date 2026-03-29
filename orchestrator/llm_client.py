@@ -222,7 +222,22 @@ class ClaudeCodeClient:
         env.pop("WORKSPACE", None)
         env.pop("UAS_WORKSPACE", None)
         isolation_dir = tempfile.mkdtemp(prefix="uas_llm_")
-        env["CLAUDE_CONFIG_DIR"] = os.path.join(isolation_dir, ".claude")
+        iso_config = os.path.join(isolation_dir, ".claude")
+        os.makedirs(iso_config, exist_ok=True)
+
+        # Copy credentials from the real config dir so the CLI can
+        # authenticate.  The original CLAUDE_CONFIG_DIR (or ~/.claude)
+        # is set by run_local.sh / the container entrypoint; we must
+        # not lose it when redirecting to the isolation dir.
+        _orig_config = env.get("CLAUDE_CONFIG_DIR") or os.path.join(
+            os.path.expanduser("~"), ".claude",
+        )
+        for _cred_name in (".credentials.json", "credentials.json"):
+            _src = os.path.join(_orig_config, _cred_name)
+            if os.path.isfile(_src):
+                shutil.copy2(_src, os.path.join(iso_config, _cred_name))
+
+        env["CLAUDE_CONFIG_DIR"] = iso_config
 
         try:
             last_error: RuntimeError | None = None

@@ -16,6 +16,21 @@ OVERLOADED_BACKOFF = 30
 
 logger = logging.getLogger(__name__)
 
+# Authentication / login error indicators.  When the CLI is not
+# authenticated it prints a short message to stdout (e.g.
+# "Not logged in · Please run /login") and may exit with code 0.
+# These must never be returned as valid LLM content.
+AUTH_ERROR_PATTERNS = [
+    "not logged in",
+    "please run /login",
+    "authentication required",
+    "unauthorized",
+    "invalid api key",
+    "invalid credentials",
+    "expired token",
+    "session expired",
+]
+
 # Transient error indicators (case-insensitive substring match on stderr).
 TRANSIENT_PATTERNS = [
     "timed out",
@@ -89,6 +104,12 @@ def heartbeat_log(label, interval=HEARTBEAT_INTERVAL, log=None):
     finally:
         stop.set()
         t.join(timeout=2)
+
+
+def _is_auth_error(message: str) -> bool:
+    """Return True if the message indicates an authentication/login error."""
+    lower = message.lower()
+    return any(pat in lower for pat in AUTH_ERROR_PATTERNS)
 
 
 def _is_transient(error_message: str) -> bool:
@@ -236,6 +257,15 @@ class ClaudeCodeClient:
                     # to salvage partial output — a rate-limit message in
                     # stdout must not be returned as valid LLM content.
                     combined = f"{stderr_s} {stdout_s}"
+
+                    # Auth errors are fatal — never retry or return as content.
+                    if _is_auth_error(combined):
+                        raise RuntimeError(
+                            "Claude Code CLI is not authenticated. "
+                            "Please run 'claude /login' or check .uas_auth/ "
+                            f"credentials. CLI output: {combined[:200]}"
+                        )
+
                     error = RuntimeError(
                         f"Claude Code CLI exited with code {returncode}: {stderr_s}"
                     )
@@ -272,7 +302,15 @@ class ClaudeCodeClient:
                         return stdout_s
                     raise error
 
-                return stdout.strip()
+                # Auth errors can arrive on stdout with exit code 0.
+                result = stdout.strip()
+                if result and _is_auth_error(result):
+                    raise RuntimeError(
+                        "Claude Code CLI is not authenticated. "
+                        "Please run 'claude /login' or check .uas_auth/ "
+                        f"credentials. CLI output: {result[:200]}"
+                    )
+                return result
 
             # Should not be reached, but satisfy type checker.
             raise last_error  # type: ignore[misc]

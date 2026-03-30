@@ -259,7 +259,7 @@ class TestSignaturesAndCheckpoints:
         csv_file = tmp_path / "features.csv"
         with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["patient_id", "age", "motor_score", "recovery"])
+            writer.writerow(["record_id", "age", "score", "outcome"])
             writer.writerow([1, 45, 32, 0.7])
 
         # Extract signatures
@@ -270,8 +270,8 @@ class TestSignaturesAndCheckpoints:
         # Signatures include function names and column names
         assert "train_model" in sigs
         assert "predict" in sigs
-        assert "patient_id" in sigs
-        assert "motor_score" in sigs
+        assert "record_id" in sigs
+        assert "score" in sigs
 
         # These would be injected into a checkpoint step's context
         # Verify the format is XML-compatible
@@ -319,15 +319,15 @@ class TestCorrectionAndCoverage:
              "description": "Populate overview tab with cohort statistics",
              "depends_on": [3], "verify": "tab renders data",
              "environment": []},
-            {"title": "Fix: motor column mapping",
-             "description": "Correct JA->EN mapping in translations.py",
+            {"title": "Fix: column name mapping",
+             "description": "Correct locale mapping in translations.py",
              "depends_on": [1], "verify": "mapping test passes",
              "environment": []},
         ])
         mock_get_client.return_value = client
 
         state = {
-            "goal": "Build rehab dashboard",
+            "goal": "Build analytics dashboard",
             "steps": [
                 {"id": 1, "title": "Translations", "description": "JA/EN",
                  "status": "completed", "depends_on": [],
@@ -347,7 +347,7 @@ class TestCorrectionAndCoverage:
 
         corrective = generate_corrective_steps(
             state["goal"],
-            ["Overview tab is empty", "Motor column mapping wrong"],
+            ["Overview tab is empty", "Column name mapping wrong"],
             state,
         )
 

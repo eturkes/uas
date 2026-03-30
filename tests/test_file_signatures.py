@@ -394,7 +394,7 @@ class TestSignaturesInDistilledOutput:
         csv_file = tmp_path / "output.csv"
         with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["patient_id", "motor_score", "recovery_days"])
+            writer.writerow(["record_id", "score", "duration_days"])
             writer.writerow([1, 42, 180])
 
         dep_step = {
@@ -405,9 +405,9 @@ class TestSignaturesInDistilledOutput:
         }
         result = _distill_dependency_output(1, dep_step, "")
         assert "<file_signatures>" in result
-        assert "patient_id" in result
-        assert "motor_score" in result
-        assert "recovery_days" in result
+        assert "record_id" in result
+        assert "score" in result
+        assert "duration_days" in result
 
     def test_no_signatures_when_no_files(self):
         from architect.main import _distill_dependency_output

@@ -1,12 +1,12 @@
-"""Post-run quality checks for the SCI Rehabilitation Analytics Suite.
+"""Post-run quality checks for a completed UAS project.
 
-Validates that a completed rehab run produces usable, correct output.
-Run against the rehab/workspace/ directory after a full UAS run, or
-use as a template for project-specific quality gates.
+Validates that a completed run produces usable, correct output.
+Point PROJECT_WORKSPACE at a workspace directory after a full UAS run,
+or use as a template for project-specific quality gates.
 
 Usage:
-    python -m pytest integration/test_rehab_quality.py -x --tb=short
-    REHAB_WORKSPACE=/path/to/workspace python -m pytest integration/test_rehab_quality.py
+    python -m pytest integration/test_project_quality.py -x --tb=short
+    PROJECT_WORKSPACE=/path/to/workspace python -m pytest integration/test_project_quality.py
 """
 
 import csv
@@ -25,18 +25,17 @@ import pytest
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(_SCRIPT_DIR)
-_DEFAULT_WORKSPACE = os.path.join(_REPO_ROOT, "rehab", "workspace")
 
-WORKSPACE = os.environ.get("REHAB_WORKSPACE", _DEFAULT_WORKSPACE)
+WORKSPACE = os.environ.get("PROJECT_WORKSPACE", "")
 
 
 @pytest.fixture(autouse=True)
 def _require_workspace():
     """Skip the entire module if the workspace does not exist."""
-    if not os.path.isdir(WORKSPACE):
+    if not WORKSPACE or not os.path.isdir(WORKSPACE):
         pytest.skip(
-            f"Rehab workspace not found at {WORKSPACE}. "
-            "Set REHAB_WORKSPACE or run a rehab goal first."
+            f"Project workspace not found at {WORKSPACE!r}. "
+            "Set PROJECT_WORKSPACE to the workspace directory."
         )
 
 
@@ -103,9 +102,9 @@ class TestModelQuality:
 
 
 class TestNoDataLeakage:
-    """No discharge-time features should predict discharge outcomes."""
+    """No future-time features should predict future-time outcomes."""
 
-    def test_no_discharge_features_predicting_discharge(self):
+    def test_no_target_prefix_in_features(self):
         path = _find_file("model_metrics.json")
         if path is None:
             pytest.skip("model_metrics.json not found")
@@ -114,41 +113,45 @@ class TestNoDataLeakage:
         if not feature_names:
             pytest.skip("model_metrics.json has no 'feature_names' field")
 
-        # Detect target temporal prefix from common target names.
         target = data.get("target", "")
-        leaky = []
-        for feat in feature_names:
-            feat_lower = feat.lower()
-            # If the target contains "discharge", no feature should also
-            # contain "discharge" (unless it's the target itself).
-            if "discharge" in target.lower() and "discharge" in feat_lower:
-                leaky.append(feat)
+        if not target or "_" not in target:
+            pytest.skip("target variable not set or has no prefix")
+
+        target_prefix = target.split("_")[0].lower()
+        if len(target_prefix) < 3:
+            pytest.skip("target prefix too short for leakage check")
+
+        leaky = [
+            feat for feat in feature_names
+            if feat.lower().startswith(target_prefix + "_")
+            and feat.lower() != target.lower()
+        ]
         assert not leaky, (
-            f"Potential data leakage: features {leaky} share temporal prefix "
-            f"'discharge' with target '{target}'"
+            f"Potential data leakage: features {leaky} share prefix "
+            f"'{target_prefix}' with target '{target}'"
         )
 
 
 class TestFeatureDataQuality:
-    """Admission features used for modeling must have reasonable completeness."""
+    """Features used for modeling must have reasonable completeness."""
 
-    def test_admission_features_nan_rate(self):
-        path = _find_file("admission_features.csv")
+    def test_feature_nan_rate(self):
+        # Try common feature file names
+        path = _find_file("features.csv", "admission_features.csv",
+                          "training_features.csv")
         if path is None:
-            pytest.skip("admission_features.csv not found")
+            pytest.skip("Feature CSV not found")
 
-        # Also need to know which columns are actually used as model features.
         metrics_path = _find_file("model_metrics.json")
         if metrics_path is not None:
             metrics = _load_json(metrics_path)
             model_features = set(metrics.get("feature_names", []))
         else:
-            model_features = None  # Check all columns
+            model_features = None
 
         fracs = _csv_nan_fractions(path)
         bad_cols = {}
         for col, frac in fracs.items():
-            # If we know the model features, only check those.
             if model_features is not None and col not in model_features:
                 continue
             if frac >= 0.50:
@@ -161,15 +164,15 @@ class TestFeatureDataQuality:
 
 
 class TestSubgroupAnalysis:
-    """Subgroup results must contain actual statistical tests, not just counts."""
+    """Subgroup/segmentation results must contain statistical tests."""
 
-    def test_subgroup_results_have_stats(self):
-        path = _find_file("subgroup_results.json")
+    def test_results_have_stats(self):
+        path = _find_file("subgroup_results.json", "segment_results.json",
+                          "cluster_results.json")
         if path is None:
-            pytest.skip("subgroup_results.json not found")
+            pytest.skip("Subgroup/segment results JSON not found")
         data = _load_json(path)
 
-        # The file should contain more than just patient counts and mean ages.
         content = json.dumps(data).lower()
         has_stats = any(
             kw in content
@@ -178,8 +181,8 @@ class TestSubgroupAnalysis:
                         "mann_whitney", "mann-whitney", "bootstrap"]
         )
         assert has_stats, (
-            "subgroup_results.json appears to be a stub -- no statistical test "
-            "results found (expected p-values, test statistics, or CIs)"
+            f"{os.path.basename(path)} appears to be a stub -- no statistical "
+            "test results found (expected p-values, test statistics, or CIs)"
         )
 
 
@@ -195,9 +198,7 @@ class TestNoHardcodedPaths:
         for py_file in py_files:
             with open(py_file, "r", encoding="utf-8", errors="replace") as f:
                 for lineno, line in enumerate(f, 1):
-                    # Match string literals containing /workspace as a default.
                     if re.search(r'["\']\/workspace(?:\/|["\'])', line):
-                        # Exclude comments.
                         stripped = line.lstrip()
                         if stripped.startswith("#"):
                             continue
@@ -217,11 +218,8 @@ class TestDashboardImport:
         if app_file is None:
             pytest.skip("dashboard app.py not found in workspace")
 
-        # Find the dashboard directory (parent of app.py or the directory
-        # containing a dashboard/ package).
         app_dir = os.path.dirname(app_file)
 
-        # Try importing in a subprocess so we don't pollute this process.
         result = subprocess.run(
             [sys.executable, "-c", "from dashboard.app import app"],
             cwd=WORKSPACE,
@@ -231,7 +229,6 @@ class TestDashboardImport:
             timeout=30,
         )
         if result.returncode != 0:
-            # If dashboard is structured differently, try direct import.
             result2 = subprocess.run(
                 [sys.executable, "-c", "import app"],
                 cwd=app_dir,

@@ -2375,7 +2375,7 @@ def detect_nested_duplication(workspace: str) -> str | None:
 def resolve_nested_duplication(workspace: str, nested_name: str) -> list[str]:
     """Promote a nested project copy to the workspace root.
 
-    When duplication is detected (e.g. ``workspace/rehab/src/`` alongside
+    When duplication is detected (e.g. ``workspace/myapp/src/`` alongside
     ``workspace/src/``), this function merges the nested copy into the root.
     On conflicts the nested version wins (it is typically more recent and
     complete).  The nested directory is removed after promotion.
@@ -2447,8 +2447,8 @@ class ProjectManifest:
 
         A file is considered superseded when a new file has the **same
         basename** but lives at a **different relative path**.  For example,
-        ``src/rehab/cleaner.py`` is superseded by
-        ``src/rehab/data/cleaner.py``.
+        ``src/app/cleaner.py`` is superseded by
+        ``src/app/data/cleaner.py``.
         """
         superseded: list[str] = []
         new_normed = {os.path.normpath(f) for f in new_files}
@@ -2470,8 +2470,8 @@ class ProjectManifest:
 
         Returns a list of ``(old_dir, new_dir)`` pairs where *old_dir* and
         *new_dir* share overlapping module names but live at different paths.
-        For example ``src/rehab/tabs/`` superseded by
-        ``src/rehab/dashboard/``.
+        For example ``src/app/tabs/`` superseded by
+        ``src/app/dashboard/``.
         """
         new_normed = [os.path.normpath(f) for f in new_files]
         # Collect module names per directory for new files

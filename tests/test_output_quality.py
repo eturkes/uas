@@ -142,10 +142,10 @@ class TestDataLeakageDetection:
         assert any("leakage" in i.lower() for i in issues)
 
     def test_baseline_suffix_not_flagged(self, tmp_path):
-        """SCIMTotal_Admission predicting SCIMTotal_Outcome is valid."""
+        """Metric_Admission predicting Metric_Outcome is valid."""
         step = self._make_model_and_metrics(tmp_path, {
-            "target": "SCIMTotal_Outcome",
-            "feature_names": ["SCIMTotal_Admission", "Age", "AIS_Grade"],
+            "target": "Metric_Outcome",
+            "feature_names": ["Metric_Admission", "Age", "Category"],
         })
         issues = check_output_quality(step, str(tmp_path))
         assert not any("leakage" in i.lower() for i in issues)
@@ -161,8 +161,8 @@ class TestDataLeakageDetection:
     def test_same_side_temporal_still_flagged(self, tmp_path):
         """Both 'latest' and 'outcome' are late-time tokens → same side."""
         step = self._make_model_and_metrics(tmp_path, {
-            "target": "SCIMTotal_Outcome",
-            "feature_names": ["SCIMTotal_Latest", "Age"],
+            "target": "Metric_Outcome",
+            "feature_names": ["Metric_Latest", "Age"],
         })
         issues = check_output_quality(step, str(tmp_path))
         assert any("leakage" in i.lower() for i in issues)

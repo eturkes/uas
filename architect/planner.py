@@ -247,36 +247,36 @@ Failure modes: blocked by site, empty results, no matching products.
 ]
 
 Example 4 — Complex multi-phase project:
-Goal: "Build a clinical trial dashboard with data simulation, predictive modeling, \
-explainability, subgroup discovery, and a multi-tab interactive dashboard with \
+Goal: "Build an e-commerce analytics platform with data ingestion, predictive modeling, \
+explainability, customer segmentation, and a multi-tab interactive dashboard with \
 bilingual support"
 <analysis>
 Complexity: complex (12+ steps). Three major phases: data preparation, modeling/analysis, \
 and dashboard/visualization. Each phase has multiple distinct deliverables. Creation and \
 integration must be separated. Integration checkpoints needed between phases.
 Sub-problems: realistic data simulation, feature engineering, model training, SHAP \
-explainability, subgroup clustering, 4 dashboard tabs, bilingual i18n.
+explainability, customer clustering, 4 dashboard tabs, bilingual i18n.
 Risk areas: data leakage in modeling, SHAP compatibility, dashboard tab wiring, \
 translation coverage.
 Parallelization: within each phase, independent modules can be built in parallel \
-(e.g., model training and subgroup discovery can be independent; dashboard tabs can \
+(e.g., model training and segmentation can be independent; dashboard tabs can \
 be built in parallel after data is ready).
 Failure modes: model training references wrong columns, SHAP fails on model type, \
 dashboard tabs render empty, translation keys missing.
 </analysis>
 <complexity_assessment>complex — 12 steps across 3 phases with integration checkpoints</complexity_assessment>
 [
-  {{"title": "Data simulator", "description": "Create a data simulation module that generates realistic clinical trial data matching the specification. Save simulated data as data/patients.csv with columns: patient_id, age, sex, injury_level, treatment_group, admission_score, motor_score_week4, motor_score_week12, discharge_status. Print row count and column summary.", "depends_on": [], "verify": "data/patients.csv has >100 rows, all specified columns present, no nulls in required fields, value ranges are clinically plausible", "environment": ["pandas", "numpy"]}},
-  {{"title": "Data cleaning pipeline", "description": "Create a cleaning module that reads data/patients.csv, validates data types, handles missing values, creates derived features (improvement_rate, time_to_discharge), and saves cleaned_data.csv. Print cleaning report with before/after row counts.", "depends_on": [1], "verify": "cleaned_data.csv exists, derived columns present, no unexpected nulls, row count logged", "environment": ["pandas"]}},
+  {{"title": "Data simulator", "description": "Create a data simulation module that generates realistic e-commerce transaction data matching the specification. Save simulated data as data/transactions.csv with columns: customer_id, age, region, product_category, channel, first_purchase_value, purchase_count_month3, purchase_count_month6, churned. Print row count and column summary.", "depends_on": [], "verify": "data/transactions.csv has >100 rows, all specified columns present, no nulls in required fields, value ranges are plausible", "environment": ["pandas", "numpy"]}},
+  {{"title": "Data cleaning pipeline", "description": "Create a cleaning module that reads data/transactions.csv, validates data types, handles missing values, creates derived features (growth_rate, lifetime_value), and saves cleaned_data.csv. Print cleaning report with before/after row counts.", "depends_on": [1], "verify": "cleaned_data.csv exists, derived columns present, no unexpected nulls, row count logged", "environment": ["pandas"]}},
   {{"title": "Bilingual translation strings", "description": "Create a translations module with all UI strings in English and Japanese. Export as translations.json with structure {{\"en\": {{...}}, \"ja\": {{...}}}}. Include labels for all dashboard elements, column display names, and status descriptions.", "depends_on": [], "verify": "translations.json has en and ja keys with identical key sets, no empty values", "environment": []}},
   {{"title": "Phase 1 integration checkpoint", "description": "Validate that the data simulator, cleaning pipeline, and translations module work together. Import each module, run the pipeline end-to-end, verify cleaned_data.csv columns match translation keys, print interface summary.", "depends_on": [1, 2, 3], "verify": "all imports succeed, pipeline runs without errors, column-translation alignment verified", "environment": ["pandas"]}},
-  {{"title": "Predictive model training", "description": "Train an XGBoost model to predict discharge_status from admission-time features ONLY (age, sex, injury_level, treatment_group, admission_score). Save trained model to models/xgb_model.joblib and metrics to models/metrics.json. Print accuracy, F1, and confusion matrix.", "depends_on": [4], "verify": "model file exists, metrics.json shows accuracy > majority-class baseline, confusion matrix is not degenerate", "environment": ["xgboost", "scikit-learn", "joblib"]}},
+  {{"title": "Predictive model training", "description": "Train an XGBoost model to predict churned from first-interaction features ONLY (age, region, product_category, channel, first_purchase_value). Save trained model to models/xgb_model.joblib and metrics to models/metrics.json. Print accuracy, F1, and confusion matrix.", "depends_on": [4], "verify": "model file exists, metrics.json shows accuracy > majority-class baseline, confusion matrix is not degenerate", "environment": ["xgboost", "scikit-learn", "joblib"]}},
   {{"title": "SHAP explainability", "description": "Load models/xgb_model.joblib and compute SHAP values for the test set. Save SHAP summary plot as outputs/shap_summary.png and feature importance as outputs/shap_importance.json. Print top 5 features.", "depends_on": [5], "verify": "shap_summary.png exists and is >1KB, shap_importance.json has entries for all features", "environment": ["shap", "matplotlib"]}},
-  {{"title": "Subgroup discovery", "description": "Perform clustering on cleaned_data.csv to discover patient subgroups with distinct recovery patterns. Save subgroup assignments to outputs/subgroups.csv and profiles to outputs/subgroup_profiles.json. Print subgroup sizes and key characteristics.", "depends_on": [4], "verify": "subgroups.csv has a subgroup column with 2-5 distinct values, profiles describe each subgroup", "environment": ["scikit-learn", "pandas"]}},
-  {{"title": "Phase 2 integration checkpoint", "description": "Validate that model, SHAP, and subgroup outputs are compatible. Load all artifacts, verify SHAP features match model features, verify subgroup IDs align with patient IDs in cleaned data. Print summary.", "depends_on": [5, 6, 7], "verify": "all artifacts load, feature alignment verified, no orphaned patient IDs", "environment": ["joblib", "pandas"]}},
-  {{"title": "Dashboard tab: cohort overview", "description": "Create the cohort overview tab showing patient demographics, treatment group distribution, and outcome summary charts. Read from cleaned_data.csv and translations.json. Save as src/tab_overview.py.", "depends_on": [8], "verify": "tab_overview.py imports successfully, renders without errors when called with test data", "environment": ["plotly", "dash"]}},
-  {{"title": "Dashboard tab: patient simulator", "description": "Create the patient simulator tab allowing users to input patient features and see predicted outcomes using the trained model. Read model from models/xgb_model.joblib. Save as src/tab_simulator.py.", "depends_on": [8], "verify": "tab_simulator.py imports and renders, prediction returns valid probability", "environment": ["plotly", "dash", "joblib"]}},
-  {{"title": "Dashboard tab: insight engine", "description": "Create the insight engine tab displaying SHAP explanations and subgroup profiles. Read from outputs/shap_importance.json and outputs/subgroup_profiles.json. Save as src/tab_insights.py.", "depends_on": [8], "verify": "tab_insights.py imports and renders, shows SHAP and subgroup data", "environment": ["plotly", "dash"]}},
+  {{"title": "Customer segmentation", "description": "Perform clustering on cleaned_data.csv to discover customer segments with distinct behaviour patterns. Save segment assignments to outputs/segments.csv and profiles to outputs/segment_profiles.json. Print segment sizes and key characteristics.", "depends_on": [4], "verify": "segments.csv has a segment column with 2-5 distinct values, profiles describe each segment", "environment": ["scikit-learn", "pandas"]}},
+  {{"title": "Phase 2 integration checkpoint", "description": "Validate that model, SHAP, and segmentation outputs are compatible. Load all artifacts, verify SHAP features match model features, verify segment IDs align with customer IDs in cleaned data. Print summary.", "depends_on": [5, 6, 7], "verify": "all artifacts load, feature alignment verified, no orphaned customer IDs", "environment": ["joblib", "pandas"]}},
+  {{"title": "Dashboard tab: cohort overview", "description": "Create the cohort overview tab showing customer demographics, channel distribution, and outcome summary charts. Read from cleaned_data.csv and translations.json. Save as src/tab_overview.py.", "depends_on": [8], "verify": "tab_overview.py imports successfully, renders without errors when called with test data", "environment": ["plotly", "dash"]}},
+  {{"title": "Dashboard tab: customer simulator", "description": "Create the customer simulator tab allowing users to input customer features and see predicted outcomes using the trained model. Read model from models/xgb_model.joblib. Save as src/tab_simulator.py.", "depends_on": [8], "verify": "tab_simulator.py imports and renders, prediction returns valid probability", "environment": ["plotly", "dash", "joblib"]}},
+  {{"title": "Dashboard tab: insight engine", "description": "Create the insight engine tab displaying SHAP explanations and segment profiles. Read from outputs/shap_importance.json and outputs/segment_profiles.json. Save as src/tab_insights.py.", "depends_on": [8], "verify": "tab_insights.py imports and renders, shows SHAP and segment data", "environment": ["plotly", "dash"]}},
   {{"title": "Dashboard assembly and bilingual toggle", "description": "Assemble all tabs into a unified Dash application with bilingual language toggle. Import tab_overview, tab_simulator, tab_insights, and translations. Save as app.py. Print startup confirmation.", "depends_on": [9, 10, 11, 3], "verify": "app.py starts without import errors, all 3 tabs render, language toggle switches strings", "environment": ["dash"]}}
 ]
 </examples>
@@ -318,9 +318,9 @@ interfaces, or data formats are current — they may have changed. \
 BAD: "Use the Twitter API v2 endpoint /tweets/search/recent" (may be outdated) \
 GOOD: "Query the Twitter/X API documentation to find the current search endpoint, then implement"
 - Data leakage in predictive modeling: when a step trains a model to predict \
-an outcome (e.g., discharge status), it must ONLY use features available at \
-prediction time (e.g., admission features). Using discharge-time measurements \
-to predict discharge outcomes is data leakage. The step description must \
+an outcome (e.g., churn, final score), it must ONLY use features available at \
+prediction time (e.g., baseline features). Using outcome-time measurements \
+to predict outcome-time targets is data leakage. The step description must \
 explicitly state which features are allowed and why. The verify criteria must \
 check that no future-time features are included.
 </anti_patterns>

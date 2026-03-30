@@ -296,9 +296,9 @@ class TestEnsureCoverage:
         assert reqs == []
 
     @patch("architect.planner.get_llm_client")
-    def test_rehab_scenario_detects_gaps(self, mock_get_client):
-        """Simulate the rehab run: 5-step plan missing modeling, SHAP,
-        subgroups, and dashboard tabs."""
+    def test_complex_scenario_detects_gaps(self, mock_get_client):
+        """Simulate a complex run: 5-step plan missing modeling, SHAP,
+        segmentation, and dashboard tabs."""
         client = MagicMock()
         client.generate.side_effect = [
             # extract_requirements — comprehensive list
@@ -352,7 +352,7 @@ class TestEnsureCoverage:
             {"title": "Dashboard", "description": "Main dashboard", "depends_on": [4]},
         ]
         result_steps, reqs = ensure_coverage(
-            "Build SCI rehab dashboard with modeling, SHAP, subgroups, 3 tabs",
+            "Build analytics dashboard with modeling, SHAP, segmentation, 3 tabs",
             steps,
         )
         # Original 5 + 5 gap-fill steps

@@ -359,18 +359,18 @@ class TestResearchGoal:
     def test_returns_research_summary(self, mock_get_client):
         client = MagicMock()
         client.generate.return_value = (
-            "1. Key findings: Use ISNCSCI standards.\n"
+            "1. Key findings: Use OpenAPI 3.1 specification.\n"
             "2. Recommended: pandas 2.1.0\n"
-            "3. Pitfalls: Avoid manual scoring.\n"
+            "3. Pitfalls: Avoid manual schema validation.\n"
         )
         mock_get_client.return_value = client
 
-        result = research_goal("Build a clinical analytics tool")
-        assert "ISNCSCI" in result
+        result = research_goal("Build a data analytics tool")
+        assert "OpenAPI" in result
         assert "pandas" in result
         client.generate.assert_called_once()
         prompt = client.generate.call_args[0][0]
-        assert "clinical analytics" in prompt
+        assert "data analytics" in prompt
 
     @patch("architect.planner.get_llm_client")
     def test_returns_empty_on_exception(self, mock_get_client):
@@ -413,11 +413,11 @@ class TestSpecInDecomposition:
         client.generate.return_value = steps_json
         mock_get_client.return_value = client
 
-        spec = "## 1. Overview\nBuild an analytics tool using ISNCSCI standards."
+        spec = "## 1. Overview\nBuild an analytics tool using OpenAPI 3.1 standards."
         decompose_goal("Build analytics tool", spec=spec)
         prompt = client.generate.call_args[0][0]
         assert "<project_spec>" in prompt
-        assert "ISNCSCI standards" in prompt
+        assert "OpenAPI 3.1 standards" in prompt
         assert "</project_spec>" in prompt
 
     @patch("architect.planner.get_llm_client")

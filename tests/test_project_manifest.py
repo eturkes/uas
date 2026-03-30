@@ -19,10 +19,10 @@ class TestProjectManifest:
     def test_add_step_output(self):
         """Files are recorded with their originating step ID."""
         m = ProjectManifest()
-        m.add_step_output(1, ["src/rehab/cleaner.py", "src/rehab/loader.py"])
+        m.add_step_output(1, ["src/app/cleaner.py", "src/app/loader.py"])
         assert m.files == {
-            "src/rehab/cleaner.py": 1,
-            "src/rehab/loader.py": 1,
+            "src/app/cleaner.py": 1,
+            "src/app/loader.py": 1,
         }
 
     def test_add_multiple_steps(self):
@@ -68,43 +68,43 @@ class TestDetectSuperseded:
     def test_same_basename_different_path(self):
         """cleaner.py at root is flagged when data/cleaner.py is created."""
         m = ProjectManifest()
-        m.add_step_output(1, ["src/rehab/cleaner.py"])
-        superseded = m.detect_superseded(["src/rehab/data/cleaner.py"])
-        assert "src/rehab/cleaner.py" in superseded
+        m.add_step_output(1, ["src/app/cleaner.py"])
+        superseded = m.detect_superseded(["src/app/data/cleaner.py"])
+        assert "src/app/cleaner.py" in superseded
 
     def test_no_supersession_for_same_path(self):
         """Updating the same file is not supersession."""
         m = ProjectManifest()
-        m.add_step_output(1, ["src/rehab/cleaner.py"])
-        superseded = m.detect_superseded(["src/rehab/cleaner.py"])
+        m.add_step_output(1, ["src/app/cleaner.py"])
+        superseded = m.detect_superseded(["src/app/cleaner.py"])
         assert superseded == []
 
     def test_no_supersession_for_different_names(self):
         """Files with different basenames are not flagged."""
         m = ProjectManifest()
-        m.add_step_output(1, ["src/rehab/cleaner.py"])
-        superseded = m.detect_superseded(["src/rehab/data/loader.py"])
+        m.add_step_output(1, ["src/app/cleaner.py"])
+        superseded = m.detect_superseded(["src/app/data/loader.py"])
         assert superseded == []
 
     def test_ignores_init_files(self):
         """__init__.py files are never considered superseded."""
         m = ProjectManifest()
-        m.add_step_output(1, ["src/rehab/__init__.py"])
-        superseded = m.detect_superseded(["src/rehab/data/__init__.py"])
+        m.add_step_output(1, ["src/app/__init__.py"])
+        superseded = m.detect_superseded(["src/app/data/__init__.py"])
         assert superseded == []
 
     def test_multiple_supersessions(self):
         """Multiple files can be superseded at once."""
         m = ProjectManifest()
-        m.add_step_output(1, ["src/rehab/tabs/overview.py",
-                               "src/rehab/tabs/detail.py"])
+        m.add_step_output(1, ["src/app/tabs/overview.py",
+                               "src/app/tabs/detail.py"])
         superseded = m.detect_superseded([
-            "src/rehab/dashboard/overview.py",
-            "src/rehab/dashboard/detail.py",
+            "src/app/dashboard/overview.py",
+            "src/app/dashboard/detail.py",
         ])
         assert sorted(superseded) == [
-            "src/rehab/tabs/detail.py",
-            "src/rehab/tabs/overview.py",
+            "src/app/tabs/detail.py",
+            "src/app/tabs/overview.py",
         ]
 
     def test_returns_sorted(self):
@@ -124,17 +124,17 @@ class TestDetectSupersededDirs:
         """tabs/ directory is flagged when dashboard/ has overlapping modules."""
         m = ProjectManifest()
         m.add_step_output(1, [
-            "src/rehab/tabs/overview.py",
-            "src/rehab/tabs/detail.py",
-            "src/rehab/tabs/simulator.py",
+            "src/app/tabs/overview.py",
+            "src/app/tabs/detail.py",
+            "src/app/tabs/simulator.py",
         ])
         pairs = m.detect_superseded_dirs([
-            "src/rehab/dashboard/overview.py",
-            "src/rehab/dashboard/detail.py",
-            "src/rehab/dashboard/simulator.py",
+            "src/app/dashboard/overview.py",
+            "src/app/dashboard/detail.py",
+            "src/app/dashboard/simulator.py",
         ])
         assert len(pairs) == 1
-        assert pairs[0] == ("src/rehab/tabs", "src/rehab/dashboard")
+        assert pairs[0] == ("src/app/tabs", "src/app/dashboard")
 
     def test_no_overlap_no_flag(self):
         """Directories with no overlapping module names are not flagged."""
@@ -186,26 +186,26 @@ class TestRemoveSupersededFiles:
 
     def test_removes_superseded_file_no_llm(self, tmp_path):
         """Superseded file is removed from disk and manifest when LLM is off."""
-        old = tmp_path / "src" / "rehab"
+        old = tmp_path / "src" / "app"
         old.mkdir(parents=True)
         (old / "cleaner.py").write_text("# old cleaner\n")
 
-        new_dir = tmp_path / "src" / "rehab" / "data"
+        new_dir = tmp_path / "src" / "app" / "data"
         new_dir.mkdir(parents=True)
         (new_dir / "cleaner.py").write_text("# new cleaner\n")
 
         m = ProjectManifest()
-        m.add_step_output(1, ["src/rehab/cleaner.py"])
+        m.add_step_output(1, ["src/app/cleaner.py"])
 
         removed = remove_superseded_files(
             str(tmp_path), m, 2,
-            ["src/rehab/data/cleaner.py"],
+            ["src/app/data/cleaner.py"],
             use_llm=False,
         )
 
-        assert "src/rehab/cleaner.py" in removed
+        assert "src/app/cleaner.py" in removed
         assert not (old / "cleaner.py").exists()
-        assert "src/rehab/cleaner.py" not in m.files
+        assert "src/app/cleaner.py" not in m.files
 
     def test_preserves_when_not_superseded(self, tmp_path):
         """Files with different basenames are not removed."""
@@ -265,13 +265,13 @@ class TestRemoveSupersededFiles:
 
     def test_directory_supersession_no_llm(self, tmp_path):
         """Entire directory is removed when superseded (LLM off)."""
-        tabs = tmp_path / "src" / "rehab" / "tabs"
+        tabs = tmp_path / "src" / "app" / "tabs"
         tabs.mkdir(parents=True)
         (tabs / "overview.py").write_text("# old\n")
         (tabs / "detail.py").write_text("# old\n")
         (tabs / "simulator.py").write_text("# old\n")
 
-        dash = tmp_path / "src" / "rehab" / "dashboard"
+        dash = tmp_path / "src" / "app" / "dashboard"
         dash.mkdir(parents=True)
         (dash / "overview.py").write_text("# new\n")
         (dash / "detail.py").write_text("# new\n")
@@ -279,24 +279,24 @@ class TestRemoveSupersededFiles:
 
         m = ProjectManifest()
         m.add_step_output(3, [
-            "src/rehab/tabs/overview.py",
-            "src/rehab/tabs/detail.py",
-            "src/rehab/tabs/simulator.py",
+            "src/app/tabs/overview.py",
+            "src/app/tabs/detail.py",
+            "src/app/tabs/simulator.py",
         ])
 
         removed = remove_superseded_files(
             str(tmp_path), m, 9, [
-                "src/rehab/dashboard/overview.py",
-                "src/rehab/dashboard/detail.py",
-                "src/rehab/dashboard/simulator.py",
+                "src/app/dashboard/overview.py",
+                "src/app/dashboard/detail.py",
+                "src/app/dashboard/simulator.py",
             ],
             use_llm=False,
         )
 
         # All three old files should be removed
-        assert "src/rehab/tabs/overview.py" in removed
-        assert "src/rehab/tabs/detail.py" in removed
-        assert "src/rehab/tabs/simulator.py" in removed
+        assert "src/app/tabs/overview.py" in removed
+        assert "src/app/tabs/detail.py" in removed
+        assert "src/app/tabs/simulator.py" in removed
         assert not tabs.exists()  # empty dir cleaned up
 
     def test_manifest_tracks_step_after_removal(self, tmp_path):

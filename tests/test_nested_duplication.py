@@ -71,19 +71,19 @@ class TestDetectNestedDuplication:
 
         assert detect_nested_duplication(str(tmp_path)) is None
 
-    def test_rehab_scenario(self, tmp_path):
-        """The exact rehab-run nesting scenario is detected."""
-        (tmp_path / "src" / "rehab").mkdir(parents=True)
+    def test_project_nesting_scenario(self, tmp_path):
+        """A typical project-inside-workspace nesting scenario is detected."""
+        (tmp_path / "src" / "myapp").mkdir(parents=True)
         (tmp_path / "tests").mkdir()
         (tmp_path / "scripts").mkdir()
 
-        rehab = tmp_path / "rehab"
-        (rehab / "src" / "rehab").mkdir(parents=True)
-        (rehab / "tests").mkdir()
-        (rehab / "scripts").mkdir()
+        nested = tmp_path / "myapp"
+        (nested / "src" / "myapp").mkdir(parents=True)
+        (nested / "tests").mkdir()
+        (nested / "scripts").mkdir()
 
         result = detect_nested_duplication(str(tmp_path))
-        assert result == "rehab"
+        assert result == "myapp"
 
     def test_returns_first_alphabetically(self, tmp_path):
         """When multiple nested dirs match, returns first alphabetically."""
@@ -150,40 +150,40 @@ class TestResolveNestedDuplication:
 
     def test_removes_nested_directory_after_promotion(self, tmp_path):
         """The nested directory is completely removed."""
-        nested = tmp_path / "rehab"
-        (nested / "src" / "rehab").mkdir(parents=True)
-        (nested / "src" / "rehab" / "main.py").write_text("pass\n")
+        nested = tmp_path / "myapp"
+        (nested / "src" / "myapp").mkdir(parents=True)
+        (nested / "src" / "myapp" / "main.py").write_text("pass\n")
         (nested / "scripts").mkdir()
         (nested / "scripts" / "run.py").write_text("pass\n")
 
-        resolve_nested_duplication(str(tmp_path), "rehab")
+        resolve_nested_duplication(str(tmp_path), "myapp")
 
         assert not nested.exists()
-        assert (tmp_path / "src" / "rehab" / "main.py").exists()
+        assert (tmp_path / "src" / "myapp" / "main.py").exists()
         assert (tmp_path / "scripts" / "run.py").exists()
 
-    def test_full_rehab_scenario(self, tmp_path):
+    def test_full_nesting_scenario(self, tmp_path):
         """After resolution, workspace has single flat project structure."""
-        (tmp_path / "src" / "rehab").mkdir(parents=True)
+        (tmp_path / "src" / "myapp").mkdir(parents=True)
         (tmp_path / "tests").mkdir()
-        (tmp_path / "src" / "rehab" / "stale.py").write_text("# stale\n")
+        (tmp_path / "src" / "myapp" / "stale.py").write_text("# stale\n")
 
-        nested = tmp_path / "rehab"
-        (nested / "src" / "rehab").mkdir(parents=True)
+        nested = tmp_path / "myapp"
+        (nested / "src" / "myapp").mkdir(parents=True)
         (nested / "tests").mkdir()
         (nested / "scripts").mkdir()
-        (nested / "src" / "rehab" / "main.py").write_text("# real main\n")
-        (nested / "src" / "rehab" / "stale.py").write_text("# updated\n")
+        (nested / "src" / "myapp" / "main.py").write_text("# real main\n")
+        (nested / "src" / "myapp" / "stale.py").write_text("# updated\n")
         (nested / "tests" / "test_main.py").write_text("pass\n")
-        (nested / "scripts" / "run_dashboard.py").write_text("pass\n")
+        (nested / "scripts" / "run.py").write_text("pass\n")
 
-        resolve_nested_duplication(str(tmp_path), "rehab")
+        resolve_nested_duplication(str(tmp_path), "myapp")
 
         assert not nested.exists()
-        assert (tmp_path / "src" / "rehab" / "main.py").read_text() == "# real main\n"
-        assert (tmp_path / "src" / "rehab" / "stale.py").read_text() == "# updated\n"
+        assert (tmp_path / "src" / "myapp" / "main.py").read_text() == "# real main\n"
+        assert (tmp_path / "src" / "myapp" / "stale.py").read_text() == "# updated\n"
         assert (tmp_path / "tests" / "test_main.py").exists()
-        assert (tmp_path / "scripts" / "run_dashboard.py").exists()
+        assert (tmp_path / "scripts" / "run.py").exists()
 
     def test_returns_sorted_items(self, tmp_path):
         """Promoted items are returned in sorted order."""

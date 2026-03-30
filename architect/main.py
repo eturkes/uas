@@ -627,9 +627,9 @@ def _text_similarity(a: str, b: str) -> float:
 def _should_continue_retrying_heuristic(step, spec_attempt, error_type, reflections):
     """Heuristic fallback for retry decisions using error budgets and text similarity."""
     _ERROR_RETRY_BUDGETS = {
-        "dependency_error": 1,
+        "dependency_error": MAX_SPEC_REWRITES,
         "logic_error": MAX_SPEC_REWRITES,
-        "environment_error": 1,
+        "environment_error": 2,
         "network_error": 2,
         "timeout": 0,
         "format_error": 2,
@@ -1771,8 +1771,9 @@ def create_blocker(state: dict, step: dict):
         f.write(f"**Goal:** {state['goal']}\n\n")
         f.write(f"**Blocked at step {step['id']}:** {step['title']}\n\n")
         f.write("## Failure Details\n\n")
+        actual_rewrites = step.get("rewrites", 0)
         f.write(f"The Orchestrator failed this step after all retries, and the "
-                f"Architect exhausted {MAX_SPEC_REWRITES} spec rewrites.\n\n")
+                f"Architect used {actual_rewrites} of {MAX_SPEC_REWRITES} spec rewrites.\n\n")
         f.write(f"**Last task description:**\n```\n{step['description']}\n```\n\n")
         f.write(f"**Last error:**\n```\n{step['error'][:MAX_ERROR_LENGTH or None]}\n```\n\n")
         f.write("## Required Action\n\n")

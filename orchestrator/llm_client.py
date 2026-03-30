@@ -285,8 +285,14 @@ class ClaudeCodeClient:
                             f"credentials. CLI output: {combined[:200]}"
                         )
 
+                    if stderr_s:
+                        detail = stderr_s
+                    elif stdout_s:
+                        detail = f"(stderr empty; stdout: {stdout_s[:500]})"
+                    else:
+                        detail = "(no output captured)"
                     error = RuntimeError(
-                        f"Claude Code CLI exited with code {returncode}: {stderr_s}"
+                        f"Claude Code CLI exited with code {returncode}: {detail}"
                     )
                     is_transient = _is_transient(combined)
                     if is_transient and attempt < MAX_RETRIES:

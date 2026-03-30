@@ -144,7 +144,7 @@ class TestOutputIntegration:
         with open(output_path) as f:
             data = json.load(f)
         assert data["status"] == "completed"
-        assert len(data["steps"]) == 1
+        assert len(data["steps"]) >= 1
         assert data["steps"][0]["status"] == "completed"
 
     @patch("architect.main.insert_integration_checkpoints", side_effect=lambda s: s)

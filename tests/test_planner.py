@@ -153,7 +153,7 @@ class TestReflectAndRewrite:
     @patch("architect.planner.get_llm_client")
     def test_llm_driven_strategy_menu_in_prompt(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "Use a completely different approach"
+        client.generate.return_value = "Create the module using a completely different approach"
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
@@ -168,13 +168,13 @@ class TestReflectAndRewrite:
         assert "fixable bug" in prompt
         assert "completely new approach" in prompt
         assert "defensive fallbacks" in prompt
-        assert result == "Use a completely different approach"
+        assert result == "Create the module using a completely different approach"
 
     @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_multiple_attempts_count(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "Final defensive approach"
+        client.generate.return_value = "Build a final defensive implementation of the parser"
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
@@ -188,20 +188,20 @@ class TestReflectAndRewrite:
         )
         prompt = client.generate.call_args[0][0]
         assert "failed 3 time(s)" in prompt
-        assert result == "Final defensive approach"
+        assert result == "Build a final defensive implementation of the parser"
 
     @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
     def test_red_flag_excessive_length_resamples(self, mock_get_client):
         client = MagicMock()
         long_response = "x" * 10000
-        client.generate.side_effect = [long_response, "fixed task description"]
+        client.generate.side_effect = [long_response, "Create a fixed implementation of the task"]
         mock_get_client.return_value = client
 
         step = {"description": "short task"}
         result = reflect_and_rewrite(step, "", "error")
         assert client.generate.call_count == 2
-        assert result == "fixed task description"
+        assert result == "Create a fixed implementation of the task"
 
     @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")
@@ -211,14 +211,14 @@ class TestReflectAndRewrite:
         # First response contains the error verbatim
         client.generate.side_effect = [
             f"some prefix {error_text} some suffix",
-            "clean rewrite",
+            "Create a clean implementation of the parser",
         ]
         mock_get_client.return_value = client
 
         step = {"description": "a task"}
         result = reflect_and_rewrite(step, "", error_text)
         assert client.generate.call_count == 2
-        assert result == "clean rewrite"
+        assert result == "Create a clean implementation of the parser"
 
     @patch("architect.planner.get_llm_client")
     def test_empty_result_returns_original(self, mock_get_client):
@@ -255,7 +255,7 @@ class TestReflectAndRewrite:
     @patch("architect.planner.get_llm_client")
     def test_previous_attempts_included(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "improved task"
+        client.generate.return_value = "Create an improved implementation of the data loader"
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
@@ -269,7 +269,7 @@ class TestReflectAndRewrite:
         assert "ModuleNotFoundError" in prompt
         assert "initial attempt" in prompt
         assert "alternative strategy" in prompt
-        assert result == "improved task"
+        assert result == "Create an improved implementation of the data loader"
 
     @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")

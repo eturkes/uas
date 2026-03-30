@@ -34,7 +34,7 @@ class TestCheckRewriteQualityLLM:
         )
         mock_get_client.return_value = client
 
-        result = _check_rewrite_quality("good rewrite", "original task", "some error")
+        result = _check_rewrite_quality("Create the output file with proper error handling", "original task", "some error")
         assert result is False
 
     @patch("architect.planner.MINIMAL_MODE", False)
@@ -97,7 +97,7 @@ class TestRewriteQualityInReflectAndRewrite:
     def test_good_quality_no_resampling(self, mock_get_client):
         client = MagicMock()
         client.generate.side_effect = [
-            "good rewrite",
+            "Create the output file with proper error handling",
             json.dumps({"quality": "good", "reason": "addresses root cause"}),
         ]
         mock_get_client.return_value = client
@@ -105,16 +105,16 @@ class TestRewriteQualityInReflectAndRewrite:
         step = {"description": "do something"}
         result = reflect_and_rewrite(step, "stdout", "stderr")
         assert client.generate.call_count == 2
-        assert result == "good rewrite"
+        assert result == "Create the output file with proper error handling"
 
     @patch("architect.planner.MINIMAL_MODE", False)
     @patch("architect.planner.get_llm_client")
     def test_low_confidence_still_triggers_resampling(self, mock_get_client):
         client = MagicMock()
         client.generate.side_effect = [
-            "first attempt",
+            "Create the initial implementation of the parser",
             json.dumps({"quality": "good", "reason": "looks fine"}),
-            "resampled attempt",
+            "Build the parser using a corrected approach",
         ]
         mock_get_client.return_value = client
 
@@ -131,7 +131,7 @@ class TestRewriteQualityInReflectAndRewrite:
             step, "out", "err", reflections=reflections,
         )
         assert client.generate.call_count == 3
-        assert result == "resampled attempt"
+        assert result == "Build the parser using a corrected approach"
 
     @patch("architect.planner.MINIMAL_MODE", False)
     @patch("architect.planner.get_llm_client")

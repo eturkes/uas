@@ -2285,10 +2285,21 @@ def _is_confused_output(result: str, original_desc: str, error: str) -> bool:
 
 
 def _check_rewrite_quality(result: str, original_desc: str, error: str) -> bool:
-    """Check rewrite quality using LLM assessment with heuristic fallback.
+    """Check rewrite quality using structural heuristic (hard gate) + LLM assessment.
 
     Returns True if the output is confused/poor quality.
+
+    The heuristic always runs first: it catches structural patterns
+    (summary signals, missing action verbs) that reliably indicate a
+    corrupted rewrite.  The LLM check runs second to catch subtler
+    quality issues that the heuristic cannot detect.
     """
+    # Hard gate: structural heuristic always applies.  This prevents the
+    # LLM quality check from overriding clear structural confusion (e.g.,
+    # "all checks pass" summaries accepted as "good" by the LLM).
+    if _is_confused_output(result, original_desc, error):
+        return True
+
     if not MINIMAL_MODE:
         try:
             client = get_llm_client(role="planner")
@@ -2320,9 +2331,9 @@ def _check_rewrite_quality(result: str, original_desc: str, error: str) -> bool:
             quality = data.get("quality", "good")
             return quality == "poor"
         except Exception:
-            logger.debug("LLM rewrite quality check failed, using heuristic fallback", exc_info=True)
+            logger.debug("LLM rewrite quality check failed", exc_info=True)
 
-    return _is_confused_output(result, original_desc, error)
+    return False
 
 
 def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
@@ -2424,6 +2435,12 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
         result = re.sub(r"<counterfactual>.*?</counterfactual>", "", result, flags=re.DOTALL)
         result = re.sub(r"<strategies>.*?</strategies>", "", result, flags=re.DOTALL)
         result = result.strip()
+
+        # If the resample is still structurally confused, fall back to the
+        # original description to prevent description corruption.
+        if _is_confused_output(result, step["description"], stderr_trimmed):
+            logger.warning("  Resample still confused, keeping original description.")
+            return step["description"]
 
     return result if result else step["description"]
 

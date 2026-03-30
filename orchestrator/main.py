@@ -1456,6 +1456,11 @@ def main():
                 previous_error = "Failed to extract code block from LLM response."
                 previous_code = None
                 logger.error("%s", previous_error)
+                attempt_history.append({
+                    "attempt": attempt,
+                    "error": previous_error,
+                    "code_snippet": "",
+                })
                 continue
         else:
             # Standard single-sample path.
@@ -1500,6 +1505,11 @@ def main():
                 logger.error("%s", previous_error)
                 logger.debug("Raw LLM response (%d chars):\n%s",
                              len(response), response[:2000])
+                attempt_history.append({
+                    "attempt": attempt,
+                    "error": previous_error,
+                    "code_snippet": "",
+                })
                 continue
 
             logger.debug("Generated code (%d chars):\n---\n%s\n---",

@@ -104,7 +104,7 @@ class TestReflectionHistoryInRewrite:
     @patch("architect.planner.get_llm_client")
     def test_reflections_included_in_prompt(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "improved task"
+        client.generate.return_value = "Install dependencies first then create the data loader"
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
@@ -134,7 +134,7 @@ class TestReflectionHistoryInRewrite:
         assert "missing pandas" in prompt
         assert "wrong column" in prompt
         assert "install deps first" in prompt
-        assert result == "improved task"
+        assert result == "Install dependencies first then create the data loader"
 
     @patch("architect.planner.MINIMAL_MODE", True)
     @patch("architect.planner.get_llm_client")

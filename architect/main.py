@@ -1901,6 +1901,31 @@ def validate_uas_result(step: dict, workspace: str) -> str | None:
     return None
 
 
+# General-purpose temporal tokens for data-leakage detection.
+# When a feature's suffix is from one set and the target's suffix is
+# from the other, they represent different timepoints of the same
+# measure (e.g. baseline → outcome prediction), not data leakage.
+_EARLY_TIME_TOKENS = frozenset({
+    "admission", "baseline", "initial", "first", "pre", "t0",
+    "start", "begin", "before", "early", "prior", "entry",
+    "intake", "enrollment", "onset",
+})
+_LATE_TIME_TOKENS = frozenset({
+    "outcome", "final", "last", "post", "end", "after",
+    "late", "result", "endpoint", "discharge", "exit",
+    "followup", "latest",
+})
+
+
+def _is_opposite_temporal(suffix_a: str, suffix_b: str) -> bool:
+    """Return True if the two suffixes are recognised temporal tokens
+    from opposite sides (early vs late), indicating different timepoints."""
+    return (
+        (suffix_a in _EARLY_TIME_TOKENS and suffix_b in _LATE_TIME_TOKENS)
+        or (suffix_a in _LATE_TIME_TOKENS and suffix_b in _EARLY_TIME_TOKENS)
+    )
+
+
 def check_output_quality(step: dict, workspace: str) -> list[str]:
     """Validate quality of output files after successful execution.
 
@@ -2051,10 +2076,18 @@ def check_output_quality(step: dict, workspace: str) -> list[str]:
                 target_prefix = target_name.split("_")[0].lower()
                 if len(target_prefix) < 3:
                     continue  # Too short to be a meaningful temporal indicator
+                target_suffix = (
+                    target_name.rsplit("_", 1)[-1].lower()
+                    if "_" in target_name else ""
+                )
                 leaked = [
                     fn for fn in feature_names
                     if fn.lower().startswith(target_prefix + "_")
                     and fn.lower() != target_name.lower()
+                    and not _is_opposite_temporal(
+                        fn.rsplit("_", 1)[-1].lower() if "_" in fn else "",
+                        target_suffix,
+                    )
                 ]
                 if leaked:
                     issues.append(

@@ -120,3 +120,85 @@ class TestCheckOutputQuality:
         issues = check_output_quality(step, str(tmp_path))
         assert len(issues) == 1
         assert "empty" in issues[0].lower()
+
+
+class TestDataLeakageDetection:
+    """Data leakage detection in check_output_quality."""
+
+    def _make_model_and_metrics(self, tmp_path, metrics_data):
+        """Helper to create a model file and metrics JSON."""
+        (tmp_path / "model.joblib").write_bytes(b"\x00")
+        (tmp_path / "metrics.json").write_text(
+            json.dumps(metrics_data), encoding="utf-8",
+        )
+        return {"files_written": ["model.joblib", "metrics.json"]}
+
+    def test_same_timepoint_features_flagged(self, tmp_path):
+        step = self._make_model_and_metrics(tmp_path, {
+            "target": "Discharge_Score",
+            "feature_names": ["Discharge_Grade", "Age"],
+        })
+        issues = check_output_quality(step, str(tmp_path))
+        assert any("leakage" in i.lower() for i in issues)
+
+    def test_baseline_suffix_not_flagged(self, tmp_path):
+        """SCIMTotal_Admission predicting SCIMTotal_Outcome is valid."""
+        step = self._make_model_and_metrics(tmp_path, {
+            "target": "SCIMTotal_Outcome",
+            "feature_names": ["SCIMTotal_Admission", "Age", "AIS_Grade"],
+        })
+        issues = check_output_quality(step, str(tmp_path))
+        assert not any("leakage" in i.lower() for i in issues)
+
+    def test_baseline_suffix_case_insensitive(self, tmp_path):
+        step = self._make_model_and_metrics(tmp_path, {
+            "target": "Motor_Outcome",
+            "feature_names": ["Motor_BASELINE", "Motor_Initial"],
+        })
+        issues = check_output_quality(step, str(tmp_path))
+        assert not any("leakage" in i.lower() for i in issues)
+
+    def test_same_side_temporal_still_flagged(self, tmp_path):
+        """Both 'latest' and 'outcome' are late-time tokens → same side."""
+        step = self._make_model_and_metrics(tmp_path, {
+            "target": "SCIMTotal_Outcome",
+            "feature_names": ["SCIMTotal_Latest", "Age"],
+        })
+        issues = check_output_quality(step, str(tmp_path))
+        assert any("leakage" in i.lower() for i in issues)
+
+    def test_non_temporal_suffix_still_flagged(self, tmp_path):
+        """'Grade' is not a temporal token → no exemption."""
+        step = self._make_model_and_metrics(tmp_path, {
+            "target": "Discharge_Score",
+            "feature_names": ["Discharge_Grade", "Age"],
+        })
+        issues = check_output_quality(step, str(tmp_path))
+        assert any("leakage" in i.lower() for i in issues)
+
+    def test_early_predicting_late_not_flagged(self, tmp_path):
+        """General early→late pattern across domains."""
+        step = self._make_model_and_metrics(tmp_path, {
+            "target": "Score_Final",
+            "feature_names": ["Score_Baseline", "Score_Initial", "Score_Pre"],
+        })
+        issues = check_output_quality(step, str(tmp_path))
+        assert not any("leakage" in i.lower() for i in issues)
+
+    def test_late_predicting_early_not_flagged(self, tmp_path):
+        """Reverse direction also recognised as different timepoints."""
+        step = self._make_model_and_metrics(tmp_path, {
+            "target": "Metric_Baseline",
+            "feature_names": ["Metric_Outcome"],
+        })
+        issues = check_output_quality(step, str(tmp_path))
+        assert not any("leakage" in i.lower() for i in issues)
+
+    def test_no_model_file_no_check(self, tmp_path):
+        (tmp_path / "metrics.json").write_text(
+            json.dumps({"target": "X_Y", "feature_names": ["X_Z"]}),
+            encoding="utf-8",
+        )
+        step = {"files_written": ["metrics.json"]}
+        issues = check_output_quality(step, str(tmp_path))
+        assert not any("leakage" in i.lower() for i in issues)

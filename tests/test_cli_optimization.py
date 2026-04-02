@@ -37,17 +37,19 @@ class TestStreamingGenerate:
         client = ClaudeCodeClient()
         result = client.generate("hello", stream=False)
         assert mock_stream.called
-        assert result == "response text"
+        assert result.text == "response text"
 
     @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_no_json_output_format(self, _mock_which, mock_stream):
-        """generate() never adds --output-format json."""
+    def test_json_output_format_used(self, _mock_which, mock_stream):
+        """generate() uses --output-format json for token tracking."""
         mock_stream.return_value = ("response text", "", 0)
         client = ClaudeCodeClient()
         client.generate("hello")
         cmd = mock_stream.call_args[0][0]
-        assert "--output-format" not in cmd
+        assert "--output-format" in cmd
+        idx = cmd.index("--output-format")
+        assert cmd[idx + 1] == "json"
 
 
 class TestExtractCodeFromJson:

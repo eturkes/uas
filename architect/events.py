@@ -42,6 +42,7 @@ class EventType(Enum):
     RESEARCH_START = "research_start"
     RESEARCH_COMPLETE = "research_complete"
     RUN_COMPLETE = "run_complete"
+    LLM_ERROR = "llm_error"
 
 
 @dataclass

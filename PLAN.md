@@ -50,7 +50,7 @@ COST_PER_1K = {
 
 ---
 
-## Section 2: Structured Error Classification [ ]
+## Section 2: Structured Error Classification [x]
 
 **Problem:** `llm_client.py` uses flat substring lists (`TRANSIENT_PATTERNS`,
 `_OVERLOADED_PATTERNS`) and a single retry loop. Claude Code (`src/services/api/errors.ts`)

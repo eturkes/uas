@@ -15,9 +15,9 @@ import pytest
 from architect.main import (
     should_continue_retrying,
     _should_continue_retrying_heuristic,
-    _is_rate_limited,
     MAX_SPEC_REWRITES,
 )
+from orchestrator.llm_client import classify_error
 
 
 class TestLLMRetryDecision:
@@ -146,24 +146,34 @@ class TestLLMRetryDecision:
         assert event_log.emit.call_count == 2
 
 
-class TestIsRateLimited:
-    """Tests for architect-level rate limit detection."""
+class TestRateLimitClassification:
+    """Tests that rate-limit/capacity errors are classified as retryable."""
 
     def test_hit_your_limit_detected(self):
-        assert _is_rate_limited("You've hit your limit · resets 6pm (UTC)") is True
+        err = classify_error(1, "", "You've hit your limit · resets 6pm (UTC)")
+        assert err.retryable is True
+        assert err.category == "rate_limit"
 
     def test_rate_limit_detected(self):
-        assert _is_rate_limited("Error: rate limit exceeded") is True
+        err = classify_error(1, "", "Error: rate limit exceeded")
+        assert err.retryable is True
+        assert err.category == "rate_limit"
 
     def test_429_detected(self):
-        assert _is_rate_limited("HTTP 429 Too Many Requests") is True
+        err = classify_error(1, "", "HTTP 429 Too Many Requests")
+        assert err.retryable is True
+        assert err.category == "rate_limit"
 
     def test_overloaded_detected(self):
-        assert _is_rate_limited("API is overloaded, try again later") is True
+        err = classify_error(1, "", "API is overloaded, try again later")
+        assert err.retryable is True
+        assert err.category == "capacity"
 
-    def test_normal_error_not_detected(self):
-        assert _is_rate_limited("ModuleNotFoundError: No module named 'foo'") is False
+    def test_normal_error_not_retryable(self):
+        err = classify_error(1, "", "ModuleNotFoundError: No module named 'foo'")
+        assert err.retryable is False
 
-    def test_empty_not_detected(self):
-        assert _is_rate_limited("") is False
+    def test_empty_not_retryable(self):
+        err = classify_error(1, "", "")
+        assert err.retryable is False
 

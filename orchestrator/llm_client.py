@@ -1,6 +1,7 @@
 """LLM client via the Claude Code CLI subprocess wrapper."""
 
 import contextlib
+import dataclasses
 import json as _json
 import logging
 import os
@@ -18,11 +19,22 @@ OVERLOADED_BACKOFF = 30
 
 logger = logging.getLogger(__name__)
 
-# Authentication / login error indicators.  When the CLI is not
-# authenticated it prints a short message to stdout (e.g.
-# "Not logged in · Please run /login") and may exit with code 0.
-# These must never be returned as valid LLM content.
-AUTH_ERROR_PATTERNS = [
+# ---------------------------------------------------------------------------
+# Structured error classification (Section 2 of PLAN.md)
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class LLMError:
+    """Structured classification of an LLM CLI error."""
+    category: str          # "rate_limit" | "capacity" | "auth" | "connection" | "timeout" | "prompt_too_long" | "output_truncated" | "unknown"
+    message: str
+    retryable: bool
+    recommended_backoff: float  # seconds, 0 if not retryable
+    raw_output: str
+
+
+# Pattern lists used by classify_error — kept module-level for testability.
+_AUTH_PATTERNS = [
     "not logged in",
     "please run /login",
     "authentication required",
@@ -33,49 +45,131 @@ AUTH_ERROR_PATTERNS = [
     "session expired",
 ]
 
-# Transient error indicators (case-insensitive substring match on stderr).
-TRANSIENT_PATTERNS = [
-    "timed out",
-    "timeout",
+_RATE_LIMIT_PATTERNS = [
+    "rate limit",
+    "rate_limit",
+    "hit your limit",
+    "too many requests",
+    "out of extra usage",
+    "out of usage",
+    "429",
+]
+
+_CAPACITY_PATTERNS = [
+    "529",
+    "overloaded",
+    "overloaded_error",
+    "capacity",
+    "503",
+]
+
+_CONNECTION_PATTERNS = [
     "connection error",
     "connection refused",
     "connection reset",
     "network is unreachable",
     "temporary failure",
-    "rate limit",
-    "rate_limit",
-    "hit your limit",
-    "too many requests",
-    "out of extra usage",
-    "out of usage",
-    "429",
-    "529",
-    "overloaded",
-    "overloaded_error",
-    "503",
-    "capacity",
 ]
 
-# Patterns that indicate API overload / rate-limiting (need longer backoff).
-_OVERLOADED_PATTERNS = [
-    "529",
-    "overloaded",
-    "overloaded_error",
-    "capacity",
-    "rate limit",
-    "rate_limit",
-    "hit your limit",
-    "too many requests",
-    "out of extra usage",
-    "out of usage",
-    "429",
+_TIMEOUT_PATTERNS = [
+    "timed out",
+    "timeout",
+]
+
+_PROMPT_TOO_LONG_PATTERNS = [
+    "prompt too long",
+    "prompt is too long",
+    "context length exceeded",
+    "max.*token.*exceeded",
+    "input too long",
 ]
 
 
-def _is_overloaded(error_message: str) -> bool:
-    """Return True if the error indicates API overload or rate limiting."""
-    lower = error_message.lower()
-    return any(pat in lower for pat in _OVERLOADED_PATTERNS)
+def classify_error(returncode: int, stdout: str, stderr: str) -> LLMError:
+    """Classify a CLI error into a structured ``LLMError``.
+
+    Pure function — no I/O.  Examines *returncode*, *stdout*, and *stderr*
+    to determine the error category and recommended recovery action.
+    """
+    combined = f"{stderr} {stdout}".lower()
+    raw = f"{stderr} {stdout}".strip()
+
+    def _matches(patterns: list[str]) -> bool:
+        return any(pat in combined for pat in patterns)
+
+    if _matches(_AUTH_PATTERNS):
+        return LLMError(
+            category="auth",
+            message="Claude Code CLI is not authenticated. "
+                    "Please run 'claude /login' or check .uas_auth/ credentials.",
+            retryable=False,
+            recommended_backoff=0,
+            raw_output=raw,
+        )
+
+    if _matches(_PROMPT_TOO_LONG_PATTERNS):
+        return LLMError(
+            category="prompt_too_long",
+            message="Prompt exceeds maximum context length.",
+            retryable=False,
+            recommended_backoff=0,
+            raw_output=raw,
+        )
+
+    if _matches(_RATE_LIMIT_PATTERNS):
+        return LLMError(
+            category="rate_limit",
+            message="API rate limit hit.",
+            retryable=True,
+            recommended_backoff=OVERLOADED_BACKOFF,
+            raw_output=raw,
+        )
+
+    if _matches(_CAPACITY_PATTERNS):
+        return LLMError(
+            category="capacity",
+            message="API at capacity.",
+            retryable=True,
+            recommended_backoff=OVERLOADED_BACKOFF,
+            raw_output=raw,
+        )
+
+    if _matches(_CONNECTION_PATTERNS):
+        return LLMError(
+            category="connection",
+            message="Network/connection error.",
+            retryable=True,
+            recommended_backoff=INITIAL_BACKOFF,
+            raw_output=raw,
+        )
+
+    if _matches(_TIMEOUT_PATTERNS):
+        return LLMError(
+            category="timeout",
+            message="Request timed out.",
+            retryable=True,
+            recommended_backoff=INITIAL_BACKOFF,
+            raw_output=raw,
+        )
+
+    # Check for output truncation: non-empty stdout with non-zero exit code
+    # suggests the LLM produced partial output before the process was killed.
+    if returncode != 0 and stdout.strip():
+        return LLMError(
+            category="output_truncated",
+            message=f"CLI exited with code {returncode} but produced partial output.",
+            retryable=False,
+            recommended_backoff=0,
+            raw_output=raw,
+        )
+
+    return LLMError(
+        category="unknown",
+        message=f"CLI exited with code {returncode}.",
+        retryable=False,
+        recommended_backoff=0,
+        raw_output=raw,
+    )
 
 
 HEARTBEAT_INTERVAL = 15
@@ -142,16 +236,6 @@ def heartbeat_log(label, interval=HEARTBEAT_INTERVAL, log=None):
         t.join(timeout=2)
 
 
-def _is_auth_error(message: str) -> bool:
-    """Return True if the message indicates an authentication/login error."""
-    lower = message.lower()
-    return any(pat in lower for pat in AUTH_ERROR_PATTERNS)
-
-
-def _is_transient(error_message: str) -> bool:
-    """Return True if the error looks transient and worth retrying."""
-    lower = error_message.lower()
-    return any(pat in lower for pat in TRANSIENT_PATTERNS)
 
 
 class ClaudeCodeClient:
@@ -296,6 +380,9 @@ class ClaudeCodeClient:
         env["CLAUDE_CONFIG_DIR"] = iso_config
 
         try:
+            capacity_retries = 0
+            MAX_CAPACITY_RETRIES = 3  # Matches Claude Code's MAX_529_RETRIES
+
             last_error: RuntimeError | None = None
             for attempt in range(1 + MAX_RETRIES):
                 try:
@@ -303,14 +390,16 @@ class ClaudeCodeClient:
                         cmd, env, input_text=prompt, cwd=isolation_dir,
                     )
                 except subprocess.TimeoutExpired:
-                    last_error = RuntimeError(
-                        f"Claude Code CLI timed out after {self.timeout} seconds."
+                    err = classify_error(
+                        -1, "", f"timed out after {self.timeout}s",
                     )
+                    last_error = RuntimeError(err.message)
                     if attempt < MAX_RETRIES:
-                        wait = INITIAL_BACKOFF * (2 ** attempt)
+                        wait = err.recommended_backoff * (2 ** attempt)
                         logger.warning(
-                            "Transient error (attempt %d/%d), retrying in %ds: %s",
-                            attempt + 1, 1 + MAX_RETRIES, wait, last_error,
+                            "[%s] error (attempt %d/%d), retrying in %ds: %s",
+                            err.category, attempt + 1, 1 + MAX_RETRIES,
+                            int(wait), err.message,
                         )
                         time.sleep(wait)
                         continue
@@ -321,72 +410,63 @@ class ClaudeCodeClient:
                     )
 
                 if returncode != 0:
-                    stderr_s = stderr.strip()
-                    stdout_s = stdout.strip()
-                    # Check both stdout and stderr for transient errors
-                    # (rate limits, network issues, etc.) BEFORE attempting
-                    # to salvage partial output — a rate-limit message in
-                    # stdout must not be returned as valid LLM content.
-                    combined = f"{stderr_s} {stdout_s}"
+                    err = classify_error(returncode, stdout, stderr)
 
-                    # Auth errors are fatal — never retry or return as content.
-                    if _is_auth_error(combined):
+                    # Non-retryable errors: raise immediately.
+                    if not err.retryable:
+                        if err.category == "auth":
+                            raise RuntimeError(
+                                f"{err.message} CLI output: {err.raw_output[:200]}"
+                            )
+                        if err.category == "prompt_too_long":
+                            raise RuntimeError(err.message)
+                        if err.category == "output_truncated":
+                            logger.warning(
+                                "Claude Code CLI exited with code %d but "
+                                "produced output (%d chars); returning "
+                                "partial output for truncation recovery.",
+                                returncode, len(stdout.strip()),
+                            )
+                            return self._parse_json_output(stdout.strip(), model)
+                        # unknown — raise
                         raise RuntimeError(
-                            "Claude Code CLI is not authenticated. "
-                            "Please run 'claude /login' or check .uas_auth/ "
-                            f"credentials. CLI output: {combined[:200]}"
+                            f"Claude Code CLI exited with code {returncode}: "
+                            f"{err.raw_output[:500]}"
                         )
 
-                    if stderr_s:
-                        detail = stderr_s
-                    elif stdout_s:
-                        detail = f"(stderr empty; stdout: {stdout_s[:500]})"
-                    else:
-                        detail = "(no output captured)"
-                    error = RuntimeError(
-                        f"Claude Code CLI exited with code {returncode}: {detail}"
-                    )
-                    is_transient = _is_transient(combined)
-                    if is_transient and attempt < MAX_RETRIES:
-                        # Use longer backoff for API overload/rate-limit errors
-                        # (529, 429, "overloaded", etc.) since hammering the API
-                        # only makes things worse.
-                        if _is_overloaded(combined):
-                            wait = OVERLOADED_BACKOFF * (2 ** attempt)
-                        else:
-                            wait = INITIAL_BACKOFF * (2 ** attempt)
+                    # Capacity errors have a limited retry budget (3).
+                    if err.category == "capacity":
+                        capacity_retries += 1
+                        if capacity_retries > MAX_CAPACITY_RETRIES:
+                            raise RuntimeError(
+                                f"Exceeded max capacity retries "
+                                f"({MAX_CAPACITY_RETRIES}): {err.message}"
+                            )
+
+                    if attempt < MAX_RETRIES:
+                        wait = err.recommended_backoff * (2 ** attempt)
                         logger.warning(
-                            "Transient error (attempt %d/%d), retrying in %ds: %s",
-                            attempt + 1, 1 + MAX_RETRIES, wait, error,
+                            "[%s] error (attempt %d/%d), retrying in %ds: %s",
+                            err.category, attempt + 1, 1 + MAX_RETRIES,
+                            int(wait), err.message,
                         )
                         time.sleep(wait)
-                        last_error = error
+                        last_error = RuntimeError(err.message)
                         continue
-                    # If the CLI produced substantial output before failing
-                    # (e.g. truncated due to output token limit), return what
-                    # we have so downstream truncation handling can attempt
-                    # a continuation rather than wasting the partial output.
-                    # Only do this for non-transient failures — a rate-limit
-                    # or network error message must never be returned as
-                    # valid LLM content.
-                    if stdout_s and not is_transient:
-                        logger.warning(
-                            "Claude Code CLI exited with code %d but produced "
-                            "output (%d chars); returning partial output for "
-                            "truncation recovery.",
-                            returncode, len(stdout_s),
-                        )
-                        return self._parse_json_output(stdout_s, model)
-                    raise error
+
+                    raise RuntimeError(
+                        f"Claude Code CLI exited with code {returncode}: "
+                        f"{err.raw_output[:500]}"
+                    )
 
                 # Auth errors can arrive on stdout with exit code 0.
                 parsed = self._parse_json_output(stdout, model)
-                if parsed.text and _is_auth_error(parsed.text):
-                    raise RuntimeError(
-                        "Claude Code CLI is not authenticated. "
-                        "Please run 'claude /login' or check .uas_auth/ "
-                        f"credentials. CLI output: {parsed.text[:200]}"
-                    )
+                if parsed.text:
+                    auth_err = classify_error(0, parsed.text, "")
+                    if auth_err.category == "auth":
+                        raise RuntimeError(
+                            f"{auth_err.message} CLI output: {parsed.text[:200]}"
+                        )
                 return parsed
 
             # Should not be reached, but satisfy type checker.

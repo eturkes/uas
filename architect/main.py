@@ -71,7 +71,7 @@ from .report import generate_report
 from .trace_export import TraceExporter
 from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 
-from orchestrator.llm_client import estimate_cost
+from orchestrator.llm_client import estimate_cost, classify_error
 
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
@@ -81,12 +81,7 @@ MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
 
-# Rate limit detection patterns and backoff configuration.
-_RATE_LIMIT_PATTERNS = [
-    "rate limit", "rate_limit", "hit your limit", "too many requests",
-    "429", "529", "overloaded", "overloaded_error", "capacity",
-    "out of extra usage", "out of usage",
-]
+# Rate limit detection and backoff configuration.
 _RATE_LIMIT_RESET_RE = re.compile(r"resets?\s+(\d{1,2})(?::(\d{2}))?\s*(?:am|pm)?\s*\(?utc\)?", re.IGNORECASE)
 RATE_LIMIT_BASE_WAIT = int(os.environ.get("UAS_RATE_LIMIT_WAIT", "120"))
 RATE_LIMIT_MAX_WAIT = int(os.environ.get("UAS_RATE_LIMIT_MAX_WAIT", "600"))
@@ -105,12 +100,6 @@ def _is_usage_limited(error_text: str) -> bool:
     """Return True if the error indicates account-level usage exhaustion."""
     lower = error_text.lower()
     return any(pat in lower for pat in _USAGE_LIMIT_PATTERNS)
-
-
-def _is_rate_limited(error_text: str) -> bool:
-    """Return True if the error text indicates an API rate limit."""
-    lower = error_text.lower()
-    return any(pat in lower for pat in _RATE_LIMIT_PATTERNS)
 
 
 # Section 8: Regex to extract package versions from pip/uv install output.
@@ -4436,33 +4425,46 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 f"(exit {result['exit_code']}, {orch_elapsed:.1f}s)"
             )
 
-        # Rate-limit / usage-limit detection: if the orchestrator failed
-        # due to rate or usage limiting, wait and retry without burning a
-        # spec rewrite attempt.  Usage limits (account-level quota
-        # exhaustion) use longer waits (default 1h × 5 retries) since the
-        # quota typically resets on the hour.
+        # Rate-limit / usage-limit / capacity detection: if the
+        # orchestrator failed due to a retryable error, classify it and
+        # wait before retrying — without burning a spec rewrite attempt.
         rate_limit_retries = 0
         while result["exit_code"] != 0:
             combined_output = (
                 (result.get("stderr") or "") + " " + (result.get("stdout") or "")
             )
-            is_usage = _is_usage_limited(combined_output)
-            is_rate = _is_rate_limited(combined_output)
-            if not is_rate and not is_usage:
+            err = classify_error(
+                result["exit_code"], result.get("stdout") or "",
+                result.get("stderr") or "",
+            )
+            # Only retry retryable error categories.
+            if not err.retryable:
                 break
+
+            # Map category to wait/limit config.
+            is_usage = _is_usage_limited(combined_output)
             max_retries = MAX_USAGE_LIMIT_RETRIES if is_usage else MAX_RATE_LIMIT_RETRIES
             if rate_limit_retries >= max_retries:
                 break
             rate_limit_retries += 1
+
+            # Emit structured error event.
+            event_log.emit(
+                EventType.LLM_ERROR,
+                step_id=step["id"],
+                data={"category": err.category, "message": err.message,
+                      "retry": rate_limit_retries, "max_retries": max_retries},
+            )
+
             if is_usage:
                 wait = USAGE_LIMIT_WAIT
-                label = "Usage limit"
+                label = f"Usage limit ({err.category})"
             else:
                 wait = min(
                     RATE_LIMIT_BASE_WAIT * (2 ** (rate_limit_retries - 1)),
                     RATE_LIMIT_MAX_WAIT,
                 )
-                label = "Rate limit"
+                label = err.category.replace("_", " ").title()
             logger.warning(
                 "  %s detected for step %s. "
                 "Waiting %ds before retry %d/%d...",
@@ -4477,7 +4479,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             _save_state_threadsafe(state)
             time.sleep(wait)
             # Re-run the orchestrator with the same spec
-            logger.info("  Retrying orchestrator after rate limit wait...")
+            logger.info("  Retrying orchestrator after %s wait...", err.category)
             if dashboard:
                 dashboard.set_step_activity(step["id"], "Running orchestrator...")
             step["status"] = "executing"

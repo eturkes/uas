@@ -9,10 +9,10 @@ from orchestrator.llm_client import (
     ClaudeCodeClient,
     DEFAULT_TIMEOUT,
     INITIAL_BACKOFF,
+    LLMError,
     MAX_RETRIES,
     OVERLOADED_BACKOFF,
-    _is_overloaded,
-    _is_transient,
+    classify_error,
     get_llm_client,
 )
 
@@ -72,7 +72,7 @@ class TestRetryBehaviour:
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
-        assert result == "ok"
+        assert result.text == "ok"
         assert mock_stream.call_count == 2
         assert mock_sleep.call_count == 1
 
@@ -86,7 +86,7 @@ class TestRetryBehaviour:
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
-        assert result == "ok"
+        assert result.text == "ok"
         assert mock_stream.call_count == 2
 
     @patch("orchestrator.llm_client.time.sleep")
@@ -105,7 +105,7 @@ class TestRetryBehaviour:
     def test_no_retry_on_non_transient_error(self, _mock_which, mock_stream, mock_sleep):
         mock_stream.return_value = ("", "Invalid API key", 1)
         client = ClaudeCodeClient()
-        with pytest.raises(RuntimeError, match="Invalid API key"):
+        with pytest.raises(RuntimeError):
             client.generate("test")
         assert mock_stream.call_count == 1
         mock_sleep.assert_not_called()
@@ -146,7 +146,7 @@ class TestRetryBehaviour:
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
-        assert result == "ok"
+        assert result.text == "ok"
         assert mock_stream.call_count == 2
         # Overloaded backoff: OVERLOADED_BACKOFF * 2^0
         mock_sleep.assert_called_with(OVERLOADED_BACKOFF)
@@ -164,61 +164,103 @@ class TestRetryBehaviour:
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
-        assert result == "ok"
+        assert result.text == "ok"
         assert mock_stream.call_count == 4
 
 
-class TestIsTransient:
-    def test_timeout_is_transient(self):
-        assert _is_transient("request timed out") is True
+class TestClassifyError:
+    """Unit tests for classify_error — a pure function with no I/O."""
 
-    def test_connection_error_is_transient(self):
-        assert _is_transient("Connection refused by server") is True
+    def test_timeout(self):
+        err = classify_error(1, "", "request timed out")
+        assert err.category == "timeout"
+        assert err.retryable is True
 
-    def test_invalid_key_not_transient(self):
-        assert _is_transient("Invalid API key") is False
+    def test_connection_error(self):
+        err = classify_error(1, "", "Connection refused by server")
+        assert err.category == "connection"
+        assert err.retryable is True
 
-    def test_empty_string_not_transient(self):
-        assert _is_transient("") is False
+    def test_auth_error(self):
+        err = classify_error(1, "", "Invalid API key")
+        assert err.category == "auth"
+        assert err.retryable is False
 
-    def test_rate_limit_is_transient(self):
-        assert _is_transient("You've hit your limit · resets 1pm (UTC)") is True
+    def test_empty_string_unknown(self):
+        err = classify_error(1, "", "")
+        assert err.category == "unknown"
+        assert err.retryable is False
 
-    def test_too_many_requests_is_transient(self):
-        assert _is_transient("Too many requests, please slow down") is True
+    def test_rate_limit(self):
+        err = classify_error(1, "", "You've hit your limit · resets 1pm (UTC)")
+        assert err.category == "rate_limit"
+        assert err.retryable is True
 
-    def test_overloaded_is_transient(self):
-        assert _is_transient("API is overloaded") is True
+    def test_too_many_requests(self):
+        err = classify_error(1, "", "Too many requests, please slow down")
+        assert err.category == "rate_limit"
+        assert err.retryable is True
 
-    def test_529_is_transient(self):
-        assert _is_transient(
-            'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
-        ) is True
+    def test_overloaded_is_capacity(self):
+        err = classify_error(1, "", "API is overloaded")
+        assert err.category == "capacity"
+        assert err.retryable is True
 
-    def test_overloaded_error_type_is_transient(self):
-        assert _is_transient("overloaded_error") is True
+    def test_529_is_capacity(self):
+        err = classify_error(
+            1, "",
+            'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+        )
+        assert err.category == "capacity"
+        assert err.retryable is True
 
+    def test_overloaded_error_type_is_capacity(self):
+        err = classify_error(1, "", "overloaded_error")
+        assert err.category == "capacity"
+        assert err.retryable is True
 
-class TestIsOverloaded:
-    def test_529_is_overloaded(self):
-        assert _is_overloaded(
-            'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
-        ) is True
+    def test_rate_limit_has_longer_backoff(self):
+        err = classify_error(1, "", "rate limit exceeded")
+        assert err.category == "rate_limit"
+        assert err.recommended_backoff == OVERLOADED_BACKOFF
 
-    def test_overloaded_is_overloaded(self):
-        assert _is_overloaded("API is overloaded") is True
+    def test_capacity_has_longer_backoff(self):
+        err = classify_error(1, "", "529 overloaded")
+        assert err.category == "capacity"
+        assert err.recommended_backoff == OVERLOADED_BACKOFF
 
-    def test_rate_limit_is_overloaded(self):
-        assert _is_overloaded("rate limit exceeded") is True
+    def test_429_is_rate_limit(self):
+        err = classify_error(1, "", "HTTP 429 Too Many Requests")
+        assert err.category == "rate_limit"
+        assert err.retryable is True
 
-    def test_429_is_overloaded(self):
-        assert _is_overloaded("HTTP 429 Too Many Requests") is True
+    def test_connection_has_short_backoff(self):
+        err = classify_error(1, "", "Connection refused")
+        assert err.recommended_backoff == INITIAL_BACKOFF
 
-    def test_timeout_is_not_overloaded(self):
-        assert _is_overloaded("request timed out") is False
+    def test_timeout_has_short_backoff(self):
+        err = classify_error(1, "", "request timed out")
+        assert err.recommended_backoff == INITIAL_BACKOFF
 
-    def test_connection_error_is_not_overloaded(self):
-        assert _is_overloaded("Connection refused") is False
+    def test_prompt_too_long(self):
+        err = classify_error(1, "", "prompt too long")
+        assert err.category == "prompt_too_long"
+        assert err.retryable is False
+
+    def test_output_truncated(self):
+        err = classify_error(1, "partial output here", "some error")
+        assert err.category == "output_truncated"
+        assert err.retryable is False
+
+    def test_auth_in_stdout(self):
+        err = classify_error(0, "not logged in", "")
+        assert err.category == "auth"
+        assert err.retryable is False
+
+    def test_raw_output_preserved(self):
+        err = classify_error(1, "out", "err")
+        assert "err" in err.raw_output
+        assert "out" in err.raw_output
 
 
 class TestRateLimitInStdout:
@@ -235,7 +277,7 @@ class TestRateLimitInStdout:
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
-        assert result == "valid response"
+        assert result.text == "valid response"
         assert mock_stream.call_count == 2
 
     @patch("orchestrator.llm_client.time.sleep")
@@ -249,7 +291,7 @@ class TestRateLimitInStdout:
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
-        assert result == "valid response"
+        assert result.text == "valid response"
         assert mock_stream.call_count == 2
 
     @patch("orchestrator.llm_client.time.sleep")
@@ -273,4 +315,4 @@ class TestRateLimitInStdout:
         mock_stream.return_value = ("partial valid code output", "some non-transient error", 1)
         client = ClaudeCodeClient()
         result = client.generate("test")
-        assert result == "partial valid code output"
+        assert result.text == "partial valid code output"

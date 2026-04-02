@@ -1,6 +1,7 @@
 """LLM client via the Claude Code CLI subprocess wrapper."""
 
 import contextlib
+import json as _json
 import logging
 import os
 import shutil
@@ -8,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import typing
 
 DEFAULT_TIMEOUT = None
 MAX_RETRIES = 4
@@ -77,6 +79,36 @@ def _is_overloaded(error_message: str) -> bool:
 
 
 HEARTBEAT_INTERVAL = 15
+
+# ---------------------------------------------------------------------------
+# Token & cost tracking (Section 1 of PLAN.md)
+# ---------------------------------------------------------------------------
+
+COST_PER_1K = {
+    "claude-opus-4-6":   {"input": 0.015, "output": 0.075},
+    "claude-sonnet-4-6": {"input": 0.003, "output": 0.015},
+    "claude-haiku-4-5":  {"input": 0.0008, "output": 0.004},
+}
+
+
+class LLMResult(typing.NamedTuple):
+    """Return value of ``ClaudeCodeClient.generate()``.
+
+    Supports tuple unpacking (``text, usage = client.generate(...)``)
+    and attribute access (``result.text``, ``result.usage``).
+    """
+    text: str
+    usage: dict  # {"input": int, "output": int}
+
+
+def estimate_cost(model: str, usage: dict) -> float:
+    """Estimate cost in USD from token counts and model name."""
+    rates = COST_PER_1K.get(model)
+    if not rates or not usage:
+        return 0.0
+    inp = usage.get("input", 0)
+    out = usage.get("output", 0)
+    return (inp / 1000) * rates["input"] + (out / 1000) * rates["output"]
 
 
 @contextlib.contextmanager
@@ -182,12 +214,30 @@ class ClaudeCodeClient:
         stderr = stderr_chunks[0] if stderr_chunks else ""
         return stdout, stderr, proc.returncode
 
-    def generate(self, prompt: str, stream: bool = False) -> str:
-        """Send a prompt to Claude Code CLI and return the text response.
+    @staticmethod
+    def _parse_json_output(stdout: str, model: str) -> LLMResult:
+        """Try to parse CLI JSON output and extract text + usage.
 
-        Output is always streamed line-by-line to the logger, providing
-        real-time visibility into LLM generation.  All calls use
-        ultrathink for maximum reasoning depth.
+        Falls back to treating *stdout* as plain text when parsing fails.
+        """
+        try:
+            data = _json.loads(stdout)
+            text = data.get("result", "")
+            raw_usage = data.get("usage") or {}
+            usage = {
+                "input": raw_usage.get("input_tokens", 0),
+                "output": raw_usage.get("output_tokens", 0),
+            }
+            return LLMResult(text=text, usage=usage)
+        except (_json.JSONDecodeError, TypeError, AttributeError):
+            return LLMResult(text=stdout.strip(), usage={"input": 0, "output": 0})
+
+    def generate(self, prompt: str, stream: bool = False) -> LLMResult:
+        """Send a prompt to Claude Code CLI and return text + token usage.
+
+        Returns an ``LLMResult(text, usage)`` named tuple.  Callers can
+        unpack (``text, usage = client.generate(...)``) or use attribute
+        access.  All calls use ultrathink for maximum reasoning depth.
         """
         # Always use maximum thinking for all agents.
         prompt = f"ultrathink\n\n{prompt}"
@@ -209,8 +259,10 @@ class ClaudeCodeClient:
         # install packages, modify their environment, and use any
         # available tools and skills.
 
-        cmd.extend(["--model", self.model or "claude-opus-4-6"])
+        model = self.model or "claude-opus-4-6"
+        cmd.extend(["--model", model])
         cmd.extend(["--effort", "max"])
+        cmd.extend(["--output-format", "json"])
 
         # Copy the full current environment to preserve PATH and other vars.
         # Only strip session-specific vars that cause nested-session detection.
@@ -324,18 +376,18 @@ class ClaudeCodeClient:
                             "truncation recovery.",
                             returncode, len(stdout_s),
                         )
-                        return stdout_s
+                        return self._parse_json_output(stdout_s, model)
                     raise error
 
                 # Auth errors can arrive on stdout with exit code 0.
-                result = stdout.strip()
-                if result and _is_auth_error(result):
+                parsed = self._parse_json_output(stdout, model)
+                if parsed.text and _is_auth_error(parsed.text):
                     raise RuntimeError(
                         "Claude Code CLI is not authenticated. "
                         "Please run 'claude /login' or check .uas_auth/ "
-                        f"credentials. CLI output: {result[:200]}"
+                        f"credentials. CLI output: {parsed.text[:200]}"
                     )
-                return result
+                return parsed
 
             # Should not be reached, but satisfy type checker.
             raise last_error  # type: ignore[misc]

@@ -112,6 +112,7 @@ pre { background: #11111b; padding: 12px; border-radius: 6px; overflow-x: auto; 
     <div class="metric"><div class="value">{{ metrics.total_llm_time }}s</div><div class="label">LLM Time</div></div>
     <div class="metric"><div class="value">{{ metrics.total_sandbox_time }}s</div><div class="label">Sandbox Time</div></div>
     <div class="metric"><div class="value">{{ metrics.total_rewrites }}</div><div class="label">Rewrites</div></div>
+    <div class="metric"><div class="value">${{ metrics.total_cost_usd }}</div><div class="label">Est. Cost</div></div>
   </div>
   <div class="mermaid-container">
     <h3 style="margin-bottom: 12px; color: var(--accent);">Execution DAG</h3>
@@ -141,6 +142,7 @@ pre { background: #11111b; padding: 12px; border-radius: 6px; overflow-x: auto; 
       <span class="meta">
         <span class="badge {{ 'ok' if step.status == 'completed' else ('error' if step.status == 'failed' else 'pending') }}">{{ step.status }}</span>
         {{ step.elapsed }}s
+        {% if step.cost_usd %} | ${{ step.cost_usd }}{% endif %}
         {% if step.rewrites > 0 %} | {{ step.rewrites }} rewrites{% endif %}
       </span>
     </div>

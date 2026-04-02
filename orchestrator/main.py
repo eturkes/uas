@@ -26,6 +26,18 @@ STDERR_END = "===STDERR_END==="
 MAX_RETRIES = 3
 MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
+# Section 1: Module-level token usage accumulator for the orchestrator process.
+_orch_usage = {"input": 0, "output": 0, "cost_usd": 0.0}
+
+def _track_usage(usage: dict, model: str | None = None):
+    """Accumulate token usage from an LLM call."""
+    from .llm_client import estimate_cost
+    inp = usage.get("input", 0)
+    out = usage.get("output", 0)
+    _orch_usage["input"] += inp
+    _orch_usage["output"] += out
+    _orch_usage["cost_usd"] += estimate_cost(model or "claude-opus-4-6", usage)
+
 PRE_FLIGHT_PROMPT = """\
 You are reviewing generated Python code before it runs in a sandbox.
 
@@ -206,7 +218,8 @@ def pre_execution_check_llm(code: str, task: str) -> tuple[list[str], list[str]]
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START, data={"purpose": "pre_flight_review"})
         client = get_llm_client(role="planner")
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
+        _track_usage(_usage, model=client.model)
         event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "pre_flight_review"})
 
         text = response.strip()
@@ -352,7 +365,8 @@ def _request_continuation(client, truncated_code: str) -> str | None:
         logger.info("Requesting continuation for truncated code "
                      "(attempt %d/%d)...", _attempt + 1, MAX_CONTINUATIONS)
         try:
-            response = client.generate(prompt)
+            response, _usage = client.generate(prompt)
+            _track_usage(_usage, model=client.model)
         except Exception as exc:
             logger.warning("Continuation request failed: %s", exc)
             return None
@@ -615,7 +629,8 @@ def _llm_retry_guidance(task: str, attempt: int, code_section: str,
         )
 
         client = get_llm_client(role="planner")
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
+        _track_usage(_usage, model=client.model)
 
         guidance = response.strip()
         if not guidance or len(guidance) < 10:
@@ -1011,7 +1026,8 @@ def _get_best_of_n_llm(attempt: int, task: str, previous_error: str) -> int:
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START, data={"purpose": "best_of_n_budget"})
         client = get_llm_client(role="planner")
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
+        _track_usage(_usage, model=client.model)
         event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "best_of_n_budget"})
 
         text = response.strip()
@@ -1067,7 +1083,8 @@ def _get_score_priorities(task: str) -> list[str] | None:
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START, data={"purpose": "score_guidance"})
         client = get_llm_client(role="planner")
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
+        _track_usage(_usage, model=client.model)
         event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "score_guidance"})
 
         text = response.strip()
@@ -1200,7 +1217,8 @@ def evaluate_candidates(
     )
 
     try:
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
+        _track_usage(_usage, model=client.model)
 
         # Parse JSON from response (may be wrapped in code fences)
         text = response.strip()
@@ -1249,7 +1267,8 @@ def _generate_one(client, prompt: str, hint: str):
     Returns (code, sandbox_result) or (None, None) on extraction failure.
     """
     full_prompt = prompt + hint if hint else prompt
-    response = client.generate(full_prompt)
+    response, _usage = client.generate(full_prompt)
+    _track_usage(_usage, model=client.model)
     code = extract_code(response)
     if not code:
         # Attempt truncation recovery before giving up.
@@ -1466,7 +1485,8 @@ def main():
             # Standard single-sample path.
             logger.info("Querying LLM...")
             try:
-                response = client.generate(prompt)
+                response, _usage = client.generate(prompt)
+                _track_usage(_usage, model=client.model)
             except RuntimeError as exc:
                 previous_error = str(exc)
                 previous_code = None
@@ -1560,6 +1580,8 @@ def main():
             if uas_result:
                 logger.info("UAS_RESULT: %s", json.dumps(uas_result))
             logger.info("\nSUCCESS on attempt %d.", attempt)
+            import json as _json
+            logger.info("__UAS_ORCH_USAGE__:%s", _json.dumps(_orch_usage))
             sys.exit(0)
 
         previous_code = code
@@ -1575,6 +1597,8 @@ def main():
         logger.error("FAILED on attempt %d.", attempt)
 
     logger.error("FAILED after %d attempts.", MAX_RETRIES)
+    import json as _json
+    logger.info("__UAS_ORCH_USAGE__:%s", _json.dumps(_orch_usage))
     sys.exit(1)
 
 

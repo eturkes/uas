@@ -91,6 +91,8 @@ def init_state(goal: str, run_id: str | None = None) -> dict:
         "run_id": run_id,
         "status": "planning",
         "steps": [],
+        "total_tokens": {"input": 0, "output": 0},
+        "total_cost_usd": 0.0,
     }
     save_state(state)
     _write_latest_run(run_id)
@@ -391,6 +393,8 @@ def add_steps(state: dict, steps: list[dict]) -> dict:
                 "sandbox_time": 0.0,
                 "total_time": 0.0,
             },
+            "token_usage": {"input": 0, "output": 0},
+            "cost_usd": 0.0,
         })
     state["status"] = "executing"
     save_state(state)

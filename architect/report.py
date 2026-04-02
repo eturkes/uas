@@ -103,6 +103,9 @@ def _summary_metrics(state: dict) -> dict:
     total_llm = sum(s.get("timing", {}).get("llm_time", 0.0) for s in steps)
     total_sandbox = sum(s.get("timing", {}).get("sandbox_time", 0.0) for s in steps)
     total_rewrites = sum(s.get("rewrites", 0) for s in steps)
+    total_cost = sum(s.get("cost_usd", 0.0) for s in steps)
+    total_input = sum(s.get("token_usage", {}).get("input", 0) for s in steps)
+    total_output = sum(s.get("token_usage", {}).get("output", 0) for s in steps)
     return {
         "total_steps": len(steps),
         "completed": completed,
@@ -111,6 +114,9 @@ def _summary_metrics(state: dict) -> dict:
         "total_llm_time": round(total_llm, 1),
         "total_sandbox_time": round(total_sandbox, 1),
         "total_rewrites": total_rewrites,
+        "total_cost_usd": round(state.get("total_cost_usd", total_cost), 4),
+        "total_input_tokens": total_input,
+        "total_output_tokens": total_output,
     }
 
 
@@ -132,6 +138,8 @@ def _step_details(state: dict) -> list[dict]:
             "files_written": s.get("files_written", []),
             "uas_result": s.get("uas_result"),
             "verify": s.get("verify", ""),
+            "token_usage": s.get("token_usage", {}),
+            "cost_usd": round(s.get("cost_usd", 0.0), 4),
         })
     return details
 

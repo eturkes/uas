@@ -71,6 +71,8 @@ from .report import generate_report
 from .trace_export import TraceExporter
 from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 
+from orchestrator.llm_client import estimate_cost
+
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
 WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
@@ -457,7 +459,8 @@ def _build_commit_message(goal: str) -> str:
         from orchestrator.llm_client import get_llm_client
         client = get_llm_client(role="planner")
         prompt = _COMMIT_MSG_PROMPT.format(goal=goal)
-        raw = client.generate(prompt).strip()
+        raw, _usage = client.generate(prompt)
+        raw = raw.strip()
         # Strip markdown fences if the LLM wrapped it
         if raw.startswith("```"):
             lines = raw.split("\n")
@@ -708,7 +711,7 @@ def should_continue_retrying(step, spec_attempt, error_type, reflections):
             event_log = get_event_log()
             event_log.emit(EventType.LLM_CALL_START, data={"purpose": "retry_decision"})
             client = get_llm_client(role="planner")
-            response = client.generate(prompt)
+            response, _usage = client.generate(prompt)
             event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "retry_decision"})
 
             text = response.strip()
@@ -754,6 +757,31 @@ def _save_state_threadsafe(state: dict):
     """Thread-safe wrapper around save_state for parallel execution."""
     with _state_lock:
         save_state(state)
+
+
+def _accumulate_usage(state: dict, usage: dict, model: str | None = None,
+                      step: dict | None = None):
+    """Accumulate token usage and cost into run totals and optionally a step.
+
+    Thread-safe: acquires ``_state_lock`` to update shared dicts.
+    """
+    if not usage:
+        return
+    inp = usage.get("input", 0)
+    out = usage.get("output", 0)
+    if inp == 0 and out == 0:
+        return
+    cost = estimate_cost(model or "claude-opus-4-6", usage)
+    with _state_lock:
+        totals = state.setdefault("total_tokens", {"input": 0, "output": 0})
+        totals["input"] += inp
+        totals["output"] += out
+        state["total_cost_usd"] = state.get("total_cost_usd", 0.0) + cost
+        if step is not None:
+            su = step.setdefault("token_usage", {"input": 0, "output": 0})
+            su["input"] += inp
+            su["output"] += out
+            step["cost_usd"] = step.get("cost_usd", 0.0) + cost
 
 
 def configure_logging(verbose: bool = False):
@@ -909,7 +937,7 @@ def summarize_context(context: str, goal: str, max_length: int,
             f"{step_guidance}\n"
             f"Context to compress:\n{context}"
         )
-        summary = client.generate(prompt)
+        summary, _usage = client.generate(prompt)
         if len(summary) <= max_length:
             return summary
     except Exception:
@@ -994,7 +1022,7 @@ def compress_context(context: str, max_length: int,
                 f"{step_guidance}\n"
                 f"Context to compress:\n{context}"
             )
-            summary = client.generate(prompt)
+            summary, _usage = client.generate(prompt)
             if len(summary) <= max_length:
                 return summary
         except Exception:
@@ -1305,7 +1333,7 @@ def _distill_dependency_output_llm(dep_id: int, dep_step: dict,
             file_signatures_block=file_signatures_block,
         )
 
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
 
         event_log.emit(EventType.LLM_CALL_COMPLETE,
                        data={"purpose": "targeted_distill"})
@@ -1497,7 +1525,8 @@ def should_replan_llm(step: dict, remaining_steps: list[dict],
             dependent_steps_block=dependent_steps_block,
         )
 
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
+        _accumulate_usage(state, _usage, model=client.model)
 
         # Parse JSON from response (handle possible markdown fences)
         text = response.strip()
@@ -2558,7 +2587,7 @@ def confirm_supersession_llm(
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START,
                        data={"purpose": "supersession_confirm"})
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
         event_log.emit(EventType.LLM_CALL_COMPLETE,
                        data={"purpose": "supersession_confirm"})
         text = response.strip()
@@ -2602,7 +2631,7 @@ def confirm_dir_supersession_llm(
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START,
                        data={"purpose": "dir_supersession_confirm"})
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
         event_log.emit(EventType.LLM_CALL_COMPLETE,
                        data={"purpose": "dir_supersession_confirm"})
         text = response.strip()
@@ -2805,7 +2834,7 @@ def check_guardrails_llm(code: str) -> list[dict]:
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START,
                        data={"purpose": "guardrail_review"})
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
         event_log.emit(EventType.LLM_CALL_COMPLETE,
                        data={"purpose": "guardrail_review"})
 
@@ -3210,7 +3239,7 @@ def check_project_guardrails_llm(workspace: str, goal: str,
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START,
                        data={"purpose": "project_structure_review"})
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
         event_log.emit(EventType.LLM_CALL_COMPLETE,
                        data={"purpose": "project_structure_review"})
 
@@ -3329,7 +3358,8 @@ def validate_workspace_llm(state: dict, workspace: str) -> dict | None:
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START,
                        data={"purpose": "workspace_validation"})
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
+        _accumulate_usage(state, _usage, model=client.model)
         event_log.emit(EventType.LLM_CALL_COMPLETE,
                        data={"purpose": "workspace_validation"})
 
@@ -4140,7 +4170,8 @@ def post_run_meta_learning(state: dict) -> dict | None:
         event_log = get_event_log()
         event_log.emit(EventType.LLM_CALL_START,
                        data={"purpose": "meta_learning"})
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
+        _accumulate_usage(state, _usage, model=client.model)
         event_log.emit(EventType.LLM_CALL_COMPLETE,
                        data={"purpose": "meta_learning"})
 
@@ -4381,6 +4412,21 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         sandbox_t = result.get("sandbox_time", 0.0)
         timing["sandbox_time"] += sandbox_t
         timing["llm_time"] += max(orch_elapsed - sandbox_t, 0.0)
+
+        # Section 1: Parse orchestrator token usage from its stderr log.
+        _orch_usage_marker = "__UAS_ORCH_USAGE__:"
+        for _line in (result.get("stderr") or "").splitlines():
+            if _orch_usage_marker in _line:
+                try:
+                    _payload = _line.split(_orch_usage_marker, 1)[1]
+                    _ou = json.loads(_payload)
+                    _accumulate_usage(state, {
+                        "input": _ou.get("input", 0),
+                        "output": _ou.get("output", 0),
+                    }, step=step)
+                except (json.JSONDecodeError, IndexError):
+                    pass
+                break
 
         logger.info("  Orchestrator exit code: %s (%.1fs)", result["exit_code"], orch_elapsed)
         if dashboard:
@@ -4660,6 +4706,17 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     else:
                         dashboard.log(f"Step {step['id']} completed successfully")
                 logger.info("  Step %s SUCCEEDED.", step["id"])
+                # Section 1: Log per-step token/cost summary.
+                _su = step.get("token_usage", {})
+                _sc = step.get("cost_usd", 0.0)
+                if _su.get("input") or _su.get("output"):
+                    logger.info(
+                        "  Step %s used %dk input + %dk output tokens ≈ $%.4f",
+                        step["id"],
+                        _su.get("input", 0) / 1000,
+                        _su.get("output", 0) / 1000,
+                        _sc,
+                    )
 
                 # Section 12: Update project manifest and remove stale files.
                 _manifest = state.get("_manifest_obj")

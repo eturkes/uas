@@ -418,12 +418,14 @@ class Dashboard:
         table.add_column("Elapsed", justify="right", width=9)
         table.add_column("LLM", justify="right", width=9)
         table.add_column("Sandbox", justify="right", width=9)
+        table.add_column("Cost", justify="right", width=9)
 
         for s in state.get("steps", []):
             elapsed = s.get("elapsed", 0.0)
             timing = s.get("timing", {})
             llm_t = timing.get("llm_time", 0.0)
             sandbox_t = timing.get("sandbox_time", 0.0)
+            cost = s.get("cost_usd", 0.0)
             title = s["title"][:40]
 
             status_style = STATUS_ICONS.get(s["status"], ("?", ""))[1]
@@ -434,11 +436,14 @@ class Dashboard:
                 f"{elapsed:.1f}s",
                 f"{llm_t:.1f}s",
                 f"{sandbox_t:.1f}s",
+                f"${cost:.4f}" if cost else "",
             )
 
         total_elapsed = state.get("total_elapsed", 0.0)
+        total_cost = state.get("total_cost_usd", 0.0)
         table.add_section()
-        table.add_row("", "TOTAL", "", f"{total_elapsed:.1f}s", "", "")
+        table.add_row("", "TOTAL", "", f"{total_elapsed:.1f}s", "", "",
+                       f"${total_cost:.4f}" if total_cost else "")
 
         self._console.print(table)
 
@@ -446,11 +451,11 @@ class Dashboard:
         steps = state.get("steps", [])
         print(file=self._file)
         print(
-            f"{'Step':>4}  {'Title':<40}  {'Status':<12}  {'Elapsed':>8}  {'LLM':>8}  {'Sandbox':>8}",
+            f"{'Step':>4}  {'Title':<40}  {'Status':<12}  {'Elapsed':>8}  {'LLM':>8}  {'Sandbox':>8}  {'Cost':>9}",
             file=self._file,
         )
         print(
-            f"{'─' * 4}  {'─' * 40}  {'─' * 12}  {'─' * 8}  {'─' * 8}  {'─' * 8}",
+            f"{'─' * 4}  {'─' * 40}  {'─' * 12}  {'─' * 8}  {'─' * 8}  {'─' * 8}  {'─' * 9}",
             file=self._file,
         )
         for s in steps:
@@ -458,19 +463,23 @@ class Dashboard:
             timing = s.get("timing", {})
             llm_t = timing.get("llm_time", 0.0)
             sandbox_t = timing.get("sandbox_time", 0.0)
+            cost = s.get("cost_usd", 0.0)
             title = s["title"][:40]
+            cost_str = f"${cost:.4f}" if cost else ""
             print(
                 f"{s['id']:>4}  {title:<40}  {s['status']:<12}  "
-                f"{elapsed:>7.1f}s  {llm_t:>7.1f}s  {sandbox_t:>7.1f}s",
+                f"{elapsed:>7.1f}s  {llm_t:>7.1f}s  {sandbox_t:>7.1f}s  {cost_str:>9}",
                 file=self._file,
             )
         total_elapsed = state.get("total_elapsed", 0.0)
+        total_cost = state.get("total_cost_usd", 0.0)
         print(
-            f"{'─' * 4}  {'─' * 40}  {'─' * 12}  {'─' * 8}  {'─' * 8}  {'─' * 8}",
+            f"{'─' * 4}  {'─' * 40}  {'─' * 12}  {'─' * 8}  {'─' * 8}  {'─' * 8}  {'─' * 9}",
             file=self._file,
         )
+        total_cost_str = f"${total_cost:.4f}" if total_cost else ""
         print(
-            f"{'':>4}  {'TOTAL':<40}  {'':12}  {total_elapsed:>7.1f}s",
+            f"{'':>4}  {'TOTAL':<40}  {'':12}  {total_elapsed:>7.1f}s  {'':>8}  {'':>8}  {total_cost_str:>9}",
             file=self._file,
         )
 
@@ -528,6 +537,8 @@ class Dashboard:
         if failed:
             progress += f", {failed} failed"
 
+        cost = self._state.get("total_cost_usd", 0.0)
+
         parts = [
             ("Goal: ", "bold"),
             (goal, ""),
@@ -540,6 +551,8 @@ class Dashboard:
             ("  |  ", "dim"),
             (f"Elapsed: {elapsed:.0f}s", ""),
         ]
+        if cost > 0:
+            parts.extend([("  |  ", "dim"), (f"Cost: ${cost:.4f}", "yellow")])
 
         if paused:
             parts.extend([("  |  ", "dim"), ("[PAUSED]", "bold red")])

@@ -43,6 +43,7 @@ class EventType(Enum):
     RESEARCH_COMPLETE = "research_complete"
     RUN_COMPLETE = "run_complete"
     LLM_ERROR = "llm_error"
+    PERSISTENT_RETRY_WAIT = "persistent_retry_wait"
 
 
 @dataclass

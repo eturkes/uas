@@ -10,8 +10,11 @@ from orchestrator.llm_client import (
     DEFAULT_TIMEOUT,
     INITIAL_BACKOFF,
     LLMError,
+    MAX_BACKOFF,
     MAX_RETRIES,
     OVERLOADED_BACKOFF,
+    PERSISTENT_HEARTBEAT_INTERVAL,
+    _sleep_with_heartbeat,
     classify_error,
     get_llm_client,
 )
@@ -316,3 +319,97 @@ class TestRateLimitInStdout:
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "partial valid code output"
+
+
+class TestPersistentRetry:
+    """Tests for Section 3: UAS_PERSISTENT_RETRY mode."""
+
+    @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
+    @patch("orchestrator.llm_client._sleep_with_heartbeat")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_retries_beyond_max_on_429(self, _mock_which, mock_stream, mock_hb_sleep):
+        """With PERSISTENT_RETRY, retryable errors retry beyond MAX_RETRIES."""
+        errors = [("", "429 Too Many Requests", 1)] * (MAX_RETRIES + 2)
+        mock_stream.side_effect = errors + [("ok", "", 0)]
+        client = ClaudeCodeClient()
+        result = client.generate("test")
+        assert result.text == "ok"
+        assert mock_stream.call_count == MAX_RETRIES + 3
+
+    @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
+    @patch("orchestrator.llm_client._sleep_with_heartbeat")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_backoff_caps_at_max_backoff(self, _mock_which, mock_stream, mock_hb_sleep):
+        """Backoff is capped at MAX_BACKOFF (300s) in persistent mode."""
+        errors = [("", "overloaded", 1)] * 6
+        mock_stream.side_effect = errors + [("ok", "", 0)]
+        client = ClaudeCodeClient()
+        client.generate("test")
+        for call in mock_hb_sleep.call_args_list:
+            assert call[0][0] <= MAX_BACKOFF
+
+    @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
+    @patch("orchestrator.llm_client._sleep_with_heartbeat")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_non_retryable_raises_in_persistent_mode(self, _mock_which, mock_stream, mock_hb_sleep):
+        """Non-retryable errors still raise immediately in persistent mode."""
+        mock_stream.return_value = ("", "Invalid API key", 1)
+        client = ClaudeCodeClient()
+        with pytest.raises(RuntimeError):
+            client.generate("test")
+        assert mock_stream.call_count == 1
+        mock_hb_sleep.assert_not_called()
+
+    @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
+    @patch("orchestrator.llm_client._sleep_with_heartbeat")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_capacity_unlimited_in_persistent_mode(self, _mock_which, mock_stream, mock_hb_sleep):
+        """In persistent mode, capacity errors retry beyond MAX_CAPACITY_RETRIES (3)."""
+        errors = [("", "529 overloaded_error", 1)] * 5
+        mock_stream.side_effect = errors + [("ok", "", 0)]
+        client = ClaudeCodeClient()
+        result = client.generate("test")
+        assert result.text == "ok"
+        assert mock_stream.call_count == 6
+
+    @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
+    @patch("orchestrator.llm_client._sleep_with_heartbeat")
+    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_uses_heartbeat_sleep(self, _mock_which, mock_stream, mock_hb_sleep):
+        """Persistent mode uses _sleep_with_heartbeat instead of time.sleep."""
+        mock_stream.side_effect = [
+            ("", "Connection refused", 1),
+            ("ok", "", 0),
+        ]
+        client = ClaudeCodeClient()
+        client.generate("test")
+        mock_hb_sleep.assert_called_once()
+        label = mock_hb_sleep.call_args[0][1]
+        assert "Persistent retry" in label
+
+
+class TestSleepWithHeartbeat:
+    """Tests for the _sleep_with_heartbeat helper."""
+
+    @patch("orchestrator.llm_client.time.sleep")
+    def test_heartbeat_logged(self, mock_sleep, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="orchestrator.llm_client"):
+            _sleep_with_heartbeat(65, "Test wait", interval=30)
+        assert mock_sleep.call_count == 3  # 30 + 30 + 5
+        heartbeats = [r for r in caplog.records if "still waiting" in r.message]
+        assert len(heartbeats) == 2
+
+    @patch("orchestrator.llm_client.time.sleep")
+    def test_short_sleep_no_heartbeat(self, mock_sleep, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger="orchestrator.llm_client"):
+            _sleep_with_heartbeat(10, "Short wait", interval=30)
+        assert mock_sleep.call_count == 1
+        heartbeats = [r for r in caplog.records if "still waiting" in r.message]
+        assert len(heartbeats) == 0

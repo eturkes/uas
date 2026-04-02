@@ -71,7 +71,11 @@ from .report import generate_report
 from .trace_export import TraceExporter
 from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 
-from orchestrator.llm_client import estimate_cost, classify_error
+from orchestrator.llm_client import (
+    estimate_cost, classify_error,
+    PERSISTENT_RETRY, MAX_BACKOFF, PERSISTENT_RETRY_RESET,
+    _sleep_with_heartbeat,
+)
 
 MAX_SPEC_REWRITES = 4
 MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
@@ -4429,6 +4433,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         # orchestrator failed due to a retryable error, classify it and
         # wait before retrying — without burning a spec rewrite attempt.
         rate_limit_retries = 0
+        retry_start_time = time.monotonic()
         while result["exit_code"] != 0:
             combined_output = (
                 (result.get("stderr") or "") + " " + (result.get("stdout") or "")
@@ -4444,9 +4449,15 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             # Map category to wait/limit config.
             is_usage = _is_usage_limited(combined_output)
             max_retries = MAX_USAGE_LIMIT_RETRIES if is_usage else MAX_RATE_LIMIT_RETRIES
-            if rate_limit_retries >= max_retries:
+            if not PERSISTENT_RETRY and rate_limit_retries >= max_retries:
                 break
             rate_limit_retries += 1
+
+            # Persistent retry: reset backoff multiplier after 6 hours.
+            if PERSISTENT_RETRY and time.monotonic() - retry_start_time > PERSISTENT_RETRY_RESET:
+                rate_limit_retries = 1
+                retry_start_time = time.monotonic()
+                logger.info("  Persistent retry: resetting backoff multiplier after 6h")
 
             # Emit structured error event.
             event_log.emit(
@@ -4465,11 +4476,22 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                     RATE_LIMIT_MAX_WAIT,
                 )
                 label = err.category.replace("_", " ").title()
+            # Cap backoff in persistent retry mode.
+            if PERSISTENT_RETRY:
+                wait = min(wait, MAX_BACKOFF)
             logger.warning(
                 "  %s detected for step %s. "
-                "Waiting %ds before retry %d/%d...",
-                label, step["id"], wait, rate_limit_retries, max_retries,
+                "Waiting %ds before retry %d/%s...",
+                label, step["id"], wait, rate_limit_retries,
+                "∞" if PERSISTENT_RETRY else str(max_retries),
             )
+            if PERSISTENT_RETRY:
+                event_log.emit(
+                    EventType.PERSISTENT_RETRY_WAIT,
+                    step_id=step["id"],
+                    data={"category": err.category, "wait_seconds": wait,
+                          "retry": rate_limit_retries},
+                )
             if dashboard:
                 dashboard.set_step_activity(
                     step["id"],
@@ -4477,7 +4499,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 )
             step["status"] = "pending"
             _save_state_threadsafe(state)
-            time.sleep(wait)
+            if PERSISTENT_RETRY:
+                _sleep_with_heartbeat(
+                    wait, f"Persistent retry step {step['id']} ({err.category})")
+            else:
+                time.sleep(wait)
             # Re-run the orchestrator with the same spec
             logger.info("  Retrying orchestrator after %s wait...", err.category)
             if dashboard:

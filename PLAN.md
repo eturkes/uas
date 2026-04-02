@@ -95,7 +95,7 @@ different failures.
 
 ---
 
-## Section 3: Persistent Retry for Unattended Runs [ ]
+## Section 3: Persistent Retry for Unattended Runs [x]
 
 **Problem:** UAS has fixed retry counts (`MAX_RETRIES = 4` in llm_client, `MAX_RATE_LIMIT_RETRIES = 3`
 in architect). For long-running unattended runs, a transient outage that exceeds the retry

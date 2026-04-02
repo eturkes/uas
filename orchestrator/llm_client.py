@@ -17,6 +17,12 @@ MAX_RETRIES = 4
 INITIAL_BACKOFF = 2
 OVERLOADED_BACKOFF = 30
 
+# Persistent retry mode (Section 3 of PLAN.md)
+PERSISTENT_RETRY = os.environ.get("UAS_PERSISTENT_RETRY", "").lower() in ("1", "true", "yes")
+MAX_BACKOFF = 300  # 5 minutes, cap for exponential backoff
+PERSISTENT_RETRY_RESET = 6 * 3600  # Reset backoff multiplier after 6 hours
+PERSISTENT_HEARTBEAT_INTERVAL = 30  # Log heartbeat every 30s during waits
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -236,6 +242,19 @@ def heartbeat_log(label, interval=HEARTBEAT_INTERVAL, log=None):
         t.join(timeout=2)
 
 
+def _sleep_with_heartbeat(duration: float, label: str,
+                          interval: float = PERSISTENT_HEARTBEAT_INTERVAL) -> None:
+    """Sleep for *duration* seconds, logging a heartbeat every *interval* seconds.
+
+    Used by persistent retry mode to indicate the process is still alive.
+    """
+    remaining = duration
+    while remaining > 0:
+        chunk = min(interval, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+        if remaining > 0:
+            logger.info("  %s — still waiting (%.0fs remaining)", label, remaining)
 
 
 class ClaudeCodeClient:
@@ -384,7 +403,9 @@ class ClaudeCodeClient:
             MAX_CAPACITY_RETRIES = 3  # Matches Claude Code's MAX_529_RETRIES
 
             last_error: RuntimeError | None = None
-            for attempt in range(1 + MAX_RETRIES):
+            attempt = 0
+            retry_start_time = time.monotonic()
+            while True:
                 try:
                     stdout, stderr, returncode = self._run_streaming(
                         cmd, env, input_text=prompt, cwd=isolation_dir,
@@ -394,14 +415,26 @@ class ClaudeCodeClient:
                         -1, "", f"timed out after {self.timeout}s",
                     )
                     last_error = RuntimeError(err.message)
-                    if attempt < MAX_RETRIES:
+                    can_retry = PERSISTENT_RETRY or attempt < MAX_RETRIES
+                    if can_retry:
+                        if PERSISTENT_RETRY and time.monotonic() - retry_start_time > PERSISTENT_RETRY_RESET:
+                            attempt = 0
+                            retry_start_time = time.monotonic()
+                            logger.info("Persistent retry: resetting backoff after 6h")
                         wait = err.recommended_backoff * (2 ** attempt)
+                        if PERSISTENT_RETRY:
+                            wait = min(wait, MAX_BACKOFF)
+                        retry_label = f"attempt {attempt + 1}, persistent" if PERSISTENT_RETRY else f"attempt {attempt + 1}/{1 + MAX_RETRIES}"
                         logger.warning(
-                            "[%s] error (attempt %d/%d), retrying in %ds: %s",
-                            err.category, attempt + 1, 1 + MAX_RETRIES,
+                            "[%s] error (%s), retrying in %ds: %s",
+                            err.category, retry_label,
                             int(wait), err.message,
                         )
-                        time.sleep(wait)
+                        if PERSISTENT_RETRY:
+                            _sleep_with_heartbeat(wait, f"Persistent retry ({err.category})")
+                        else:
+                            time.sleep(wait)
+                        attempt += 1
                         continue
                     raise last_error
                 except FileNotFoundError as e:
@@ -434,24 +467,37 @@ class ClaudeCodeClient:
                             f"{err.raw_output[:500]}"
                         )
 
-                    # Capacity errors have a limited retry budget (3).
+                    # Capacity errors have a limited retry budget (3),
+                    # unless persistent retry is enabled.
                     if err.category == "capacity":
                         capacity_retries += 1
-                        if capacity_retries > MAX_CAPACITY_RETRIES:
+                        if not PERSISTENT_RETRY and capacity_retries > MAX_CAPACITY_RETRIES:
                             raise RuntimeError(
                                 f"Exceeded max capacity retries "
                                 f"({MAX_CAPACITY_RETRIES}): {err.message}"
                             )
 
-                    if attempt < MAX_RETRIES:
+                    can_retry = PERSISTENT_RETRY or attempt < MAX_RETRIES
+                    if can_retry:
+                        if PERSISTENT_RETRY and time.monotonic() - retry_start_time > PERSISTENT_RETRY_RESET:
+                            attempt = 0
+                            retry_start_time = time.monotonic()
+                            logger.info("Persistent retry: resetting backoff after 6h")
                         wait = err.recommended_backoff * (2 ** attempt)
+                        if PERSISTENT_RETRY:
+                            wait = min(wait, MAX_BACKOFF)
+                        retry_label = f"attempt {attempt + 1}, persistent" if PERSISTENT_RETRY else f"attempt {attempt + 1}/{1 + MAX_RETRIES}"
                         logger.warning(
-                            "[%s] error (attempt %d/%d), retrying in %ds: %s",
-                            err.category, attempt + 1, 1 + MAX_RETRIES,
+                            "[%s] error (%s), retrying in %ds: %s",
+                            err.category, retry_label,
                             int(wait), err.message,
                         )
-                        time.sleep(wait)
+                        if PERSISTENT_RETRY:
+                            _sleep_with_heartbeat(wait, f"Persistent retry ({err.category})")
+                        else:
+                            time.sleep(wait)
                         last_error = RuntimeError(err.message)
+                        attempt += 1
                         continue
 
                     raise RuntimeError(

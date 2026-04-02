@@ -25,6 +25,10 @@ integration/.uas_state/
 # Past run workspaces (contain large generated artifacts)
 rehab/
 
+# Run state (token usage, step outputs, event logs)
+.state/
+.uas_state/
+
 # Project-level auth (contains secrets; created by setup_auth.sh)
 .uas_auth
 

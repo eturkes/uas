@@ -19,7 +19,7 @@ is over-engineered for a system that only needs the final JSON result.
 
 - [x] **1.1** In `orchestrator/llm_client.py`, remove `_run_streaming()` method
       (lines 271-347) and its background stderr thread / pipe coordination logic.
-- [ ] **1.2** Replace `generate()` body (lines 453-580+) with a single
+- [x] **1.2** Replace `generate()` body (lines 453-580+) with a single
       `subprocess.run(["claude", "-p", "--dangerously-skip-permissions",
       "--model", model, "--output-format", "json"], input=prompt,
       capture_output=True, text=True, timeout=self.timeout)` call.

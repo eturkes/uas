@@ -379,12 +379,6 @@ class ClaudeCodeClient:
         Returns an ``LLMResult(text, usage)`` named tuple.  Callers can
         unpack (``text, usage = client.generate(...)``) or use attribute
         access.  All calls use ultrathink for maximum reasoning depth.
-
-        When *progress_callback* is provided, uses ``--output-format
-        stream-json`` to emit structured events during generation.  The
-        callback receives dicts with ``type`` (``"start"``, ``"delta"``,
-        ``"stop"``).  Falls back to regular JSON output if the CLI does
-        not support stream-json.
         """
         # Always use maximum thinking for all agents.
         prompt = f"ultrathink\n\n{prompt}"
@@ -409,8 +403,7 @@ class ClaudeCodeClient:
         model = self.model or "claude-opus-4-6"
         cmd.extend(["--model", model])
         cmd.extend(["--effort", "max"])
-        _use_stream_json = progress_callback is not None
-        cmd.extend(["--output-format", "stream-json" if _use_stream_json else "json"])
+        cmd.extend(["--output-format", "json"])
 
         # Copy the full current environment to preserve PATH and other vars.
         # Only strip session-specific vars that cause nested-session detection.
@@ -509,10 +502,6 @@ class ClaudeCodeClient:
                                 "partial output for truncation recovery.",
                                 returncode, len(stdout.strip()),
                             )
-                            if _use_stream_json:
-                                _trunc = self._parse_stream_json_output(stdout.strip(), model)
-                                if _trunc.text:
-                                    return _trunc
                             return self._parse_json_output(stdout.strip(), model)
                         # unknown — raise
                         raise RuntimeError(
@@ -559,12 +548,7 @@ class ClaudeCodeClient:
                     )
 
                 # Auth errors can arrive on stdout with exit code 0.
-                if _use_stream_json:
-                    parsed = self._parse_stream_json_output(stdout, model)
-                    if not parsed.text:
-                        parsed = self._parse_json_output(stdout, model)
-                else:
-                    parsed = self._parse_json_output(stdout, model)
+                parsed = self._parse_json_output(stdout, model)
                 if parsed.text:
                     auth_err = classify_error(0, parsed.text, "")
                     if auth_err.category == "auth":

@@ -8,6 +8,7 @@ import re
 
 from orchestrator.llm_client import get_llm_client
 from .events import EventType, get_event_log
+from hooks import HookEvent, load_hooks, run_hook
 
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
 _DEFAULT_REWRITE_TRIM = 3000
@@ -603,7 +604,21 @@ def _format_spec(spec: str) -> str:
     )
 
 
-def decompose_goal(goal: str, spec: str = "") -> list[dict]:
+def decompose_goal(goal: str, spec: str = "",
+                    hooks: list | None = None) -> list[dict]:
+    _hooks = hooks or []
+
+    # Section 8: PRE_PLAN hook
+    if _hooks:
+        hook_result = run_hook(HookEvent.PRE_PLAN, {
+            "goal": goal,
+            "spec": spec[:500] if spec else "",
+        }, _hooks)
+        if hook_result and hook_result.get("abort"):
+            raise ValueError(
+                f"PRE_PLAN hook aborted: {hook_result.get('reason', 'no reason')}"
+            )
+
     client = get_llm_client(role="planner")
     prompt = DECOMPOSITION_PROMPT.format(
         goal=goal,
@@ -634,6 +649,17 @@ def decompose_goal(goal: str, spec: str = "") -> list[dict]:
             step["depends_on"] = [d + 1 for d in step["depends_on"]]
 
     validate_depends_on(steps)
+
+    # Section 8: POST_PLAN hook — may modify the step list
+    if _hooks:
+        hook_result = run_hook(HookEvent.POST_PLAN, {
+            "goal": goal,
+            "steps": steps,
+        }, _hooks)
+        if hook_result and "steps" in hook_result:
+            logger.info("  POST_PLAN hook overrode step list.")
+            steps = hook_result["steps"]
+
     return steps
 
 
@@ -1019,6 +1045,7 @@ def decompose_goal_with_voting(
     n_samples: int = 3,
     spec: str = "",
     complexity: str | None = None,
+    hooks: list | None = None,
 ) -> list[dict]:
     """Generate multiple decomposition plans and select the best one.
 
@@ -1031,10 +1058,12 @@ def decompose_goal_with_voting(
             Empty string means no spec (trivial goals).
         complexity: Pre-computed complexity estimate. If None, will be
             estimated via LLM call.
+        hooks: Hook configurations loaded from .uas/hooks.toml.
 
     Returns (steps, complexity) tuple-style via the steps list, with the
     estimated complexity stored in the module-level for the caller to read.
     """
+    _hooks = hooks or []
     event_log = get_event_log()
 
     # 2c: Complexity estimation gate
@@ -1048,7 +1077,19 @@ def decompose_goal_with_voting(
 
     if complexity in ("trivial", "simple"):
         logger.info("  Skipping voting for %s goal, using single decomposition.", complexity)
-        return decompose_goal(goal, spec=spec)
+        return decompose_goal(goal, spec=spec, hooks=_hooks)
+
+    # Section 8: PRE_PLAN hook (for voting path)
+    if _hooks:
+        hook_result = run_hook(HookEvent.PRE_PLAN, {
+            "goal": goal,
+            "spec": spec[:500] if spec else "",
+            "complexity": complexity,
+        }, _hooks)
+        if hook_result and hook_result.get("abort"):
+            raise ValueError(
+                f"PRE_PLAN hook aborted: {hook_result.get('reason', 'no reason')}"
+            )
 
     # 2a: Generate N plans in parallel
     logger.info("  Generating %d plans for voting...", n_samples)
@@ -1097,7 +1138,7 @@ def decompose_goal_with_voting(
 
     if not plans:
         logger.warning("  All voting plans failed, falling back to single decomposition.")
-        return decompose_goal(goal, spec=spec)
+        return decompose_goal(goal, spec=spec, hooks=_hooks)
 
     if len(plans) == 1:
         logger.info("  Only 1 valid plan generated, using it directly.")
@@ -1121,6 +1162,16 @@ def decompose_goal_with_voting(
         "winning_plan": best_idx,
         "winning_score": score_plan(best_plan),
     })
+
+    # Section 8: POST_PLAN hook — may modify the step list
+    if _hooks:
+        hook_result = run_hook(HookEvent.POST_PLAN, {
+            "goal": goal,
+            "steps": best_plan,
+        }, _hooks)
+        if hook_result and "steps" in hook_result:
+            logger.info("  POST_PLAN hook overrode step list.")
+            best_plan = hook_result["steps"]
 
     return best_plan
 

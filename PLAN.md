@@ -279,7 +279,7 @@ overlapping output files are serialized even if they have no explicit `depends_o
 
 ---
 
-## Section 8: Hook System for Extensibility [ ]
+## Section 8: Hook System for Extensibility [x]
 
 **Problem:** UAS has a structured event system (`events.py`) but no way for users to attach
 custom behavior to lifecycle events. Claude Code (`src/types/hooks.ts`, `src/utils/hooks.ts`)

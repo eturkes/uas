@@ -267,6 +267,7 @@ execution.
 ├── Containerfile             # Image (Podman + Python + Claude Code CLI)
 ├── requirements.txt          # Python dependencies
 ├── config.py                 # Layered config (TOML + env vars)
+├── hooks.py                  # Lifecycle hook system
 ├── uas.example.toml          # Sample config file with all keys
 ├── architect/                # Architect Agent (installed to /uas)
 │   ├── main.py               # Controller loop
@@ -647,6 +648,34 @@ sandbox_mode = "local"
 max_parallel = 4
 persistent_retry = true
 ```
+
+## Lifecycle Hooks
+
+Register shell scripts that run at key lifecycle points by
+creating `.uas/hooks.toml` in your workspace:
+
+```toml
+[[hooks]]
+event = "POST_STEP"
+command = "python3 .uas/notify_slack.py"
+timeout = 10
+
+[[hooks]]
+event = "PRE_PLAN"
+command = ".uas/validate_plan.sh"
+```
+
+Hook scripts receive event data as JSON on stdin. A script can
+return `{"abort": true, "reason": "..."}` on stdout to halt the
+current operation (for `PRE_*` events). A `POST_PLAN` hook can
+return `{"steps": [...]}` to override the decomposition plan.
+
+Available events: `RUN_START`, `RUN_COMPLETE`, `PRE_PLAN`,
+`POST_PLAN`, `PRE_STEP`, `POST_STEP`, `STEP_FAILED`,
+`PRE_REWRITE`, `POST_REWRITE`.
+
+Missing or failing hook scripts log a warning but never crash
+the run. With no hooks configured there is zero overhead.
 
 ## Environment Variables
 

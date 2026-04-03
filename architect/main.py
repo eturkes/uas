@@ -72,6 +72,7 @@ from .trace_export import TraceExporter
 from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 
 import config
+from hooks import HookEvent, load_hooks, run_hook
 
 from orchestrator.llm_client import (
     estimate_cost, classify_error,
@@ -4333,7 +4334,8 @@ def _finalize_code_tracking(run_id: str = ""):
 def execute_step(step: dict, state: dict, completed_outputs: dict,
                  progress_counts: dict | None = None,
                  dashboard: Dashboard | None = None,
-                 backtracked_steps: set | None = None) -> bool:
+                 backtracked_steps: set | None = None,
+                 hooks: list | None = None) -> bool:
     """Execute a single step, with spec rewrite retries.
 
     Returns True on success, False on unrecoverable failure.
@@ -4341,9 +4343,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
     Args:
         backtracked_steps: Set of step IDs already backtracked to (Section 3d).
             Used to limit backtracking depth to 1 and avoid re-backtracking.
+        hooks: Hook configurations loaded from .uas/hooks.toml.
     """
     total = len(state["steps"])
     run_id = state.get("run_id", "")
+    _hooks = hooks or []
     _probe_environment(run_id=run_id)
     context = build_context(step, completed_outputs, state=state,
                             workspace_path=PROJECT_DIR)
@@ -4391,6 +4395,24 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
 
     event_log = get_event_log()
     prov = get_provenance_graph()
+
+    # Section 8: PRE_STEP hook — may abort the step
+    if _hooks:
+        hook_result = run_hook(HookEvent.PRE_STEP, {
+            "step_id": step["id"],
+            "title": step["title"],
+            "description": step.get("description", ""),
+        }, _hooks)
+        if hook_result and hook_result.get("abort"):
+            reason = hook_result.get("reason", "aborted by PRE_STEP hook")
+            logger.warning("  Step %d aborted by hook: %s", step["id"], reason)
+            step["status"] = "failed"
+            step["error"] = reason
+            step["elapsed"] = 0.0
+            event_log.emit(EventType.STEP_FAILED, step_id=step["id"],
+                           data={"error": reason, "hook_abort": True})
+            return False
+
     event_log.emit(EventType.STEP_START, step_id=step["id"],
                    data={"title": step["title"]})
     prev_error_entity = None
@@ -4923,6 +4945,16 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 if not MINIMAL_MODE:
                     git_checkpoint(WORKSPACE, step["id"], step["title"])
 
+                # Section 8: POST_STEP hook
+                if _hooks:
+                    run_hook(HookEvent.POST_STEP, {
+                        "step_id": step["id"],
+                        "title": step["title"],
+                        "status": "completed",
+                        "elapsed": step.get("elapsed", 0.0),
+                        "files_written": step.get("files_written", []),
+                    }, _hooks)
+
                 return True
 
             # Validation failed — treat as step failure
@@ -5068,7 +5100,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                             dep_success = execute_step(
                                 missing_step, state, completed_outputs,
                                 progress_counts, dashboard,
-                                backtracked_steps,
+                                backtracked_steps, hooks=_hooks,
                             )
                             if dep_success:
                                 completed_outputs[dep_id] = {
@@ -5206,7 +5238,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                         dep_success = execute_step(
                             dep_step, state, completed_outputs,
                             progress_counts, dashboard,
-                            backtracked_steps,
+                            backtracked_steps, hooks=_hooks,
                         )
 
                         # Restore original description
@@ -5337,6 +5369,16 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
     event_log.emit(EventType.STEP_FAILED, step_id=step["id"],
                    data={"error": step.get("error", "")[:200]})
     step["elapsed"] = time.monotonic() - step_start
+
+    # Section 8: STEP_FAILED hook
+    if _hooks:
+        run_hook(HookEvent.STEP_FAILED, {
+            "step_id": step["id"],
+            "title": step["title"],
+            "error": step.get("error", "")[:500],
+            "elapsed": step["elapsed"],
+        }, _hooks)
+
     return False
 
 
@@ -5381,6 +5423,9 @@ def main():
     events_flag = args.events or config.get("events") or None
 
     resume = (args.resume or config.get("resume")) and not args.fresh
+
+    # Load hooks (Section 8 of PLAN.md)
+    _hooks = load_hooks()
 
     # Determine run context: resume existing run or start fresh.
     # We need the run_id early so that event log, provenance, and
@@ -5526,6 +5571,7 @@ def main():
                 goal,
                 spec=spec,
                 complexity=complexity,
+                hooks=_hooks,
             )
         except Exception as e:
             logger.error("Failed to decompose goal: %s", e)
@@ -5604,6 +5650,14 @@ def main():
     # Section 18: Skip in minimal mode.
     if not MINIMAL_MODE:
         ensure_git_repo(WORKSPACE)
+
+    # Fire RUN_START hook
+    if _hooks:
+        run_hook(HookEvent.RUN_START, {
+            "run_id": state.get("run_id", ""),
+            "goal": state.get("goal", ""),
+            "num_steps": len(state.get("steps", [])),
+        }, _hooks)
 
     # Phase 2: Execute (resume-aware, parallel where possible)
     logger.info("\nPhase 2: Executing steps via Orchestrator...")
@@ -5863,7 +5917,8 @@ def main():
             # Single step — no threading overhead needed
             step = pending[0]
             success = execute_step(step, state, completed_outputs,
-                                   progress_counts, dashboard=dashboard)
+                                   progress_counts, dashboard=dashboard,
+                                   hooks=_hooks)
             if not success:
                 progress_counts["failed"] += 1
                 state["total_elapsed"] = time.monotonic() - run_start
@@ -5930,6 +5985,7 @@ def main():
                     success = execute_step(
                         step, state, completed_outputs,
                         progress_counts, dashboard=dashboard,
+                        hooks=_hooks,
                     )
                     if success:
                         progress_counts["completed"] += 1
@@ -5969,6 +6025,7 @@ def main():
                         executor.submit(
                             execute_step, step, state, completed_outputs,
                             progress_counts, dashboard,
+                            None, _hooks,
                         ): step
                         for step in batch
                     }
@@ -6124,6 +6181,7 @@ def main():
                 success = execute_step(
                     cs, state, completed_outputs,
                     progress_counts, dashboard=dashboard,
+                    hooks=_hooks,
                 )
                 if success:
                     completed_outputs[cs["id"]] = {
@@ -6226,6 +6284,7 @@ def main():
                         success = execute_step(
                             cs, state, completed_outputs,
                             progress_counts, dashboard=dashboard,
+                            hooks=_hooks,
                         )
                         if success:
                             completed_outputs[cs["id"]] = {
@@ -6255,6 +6314,16 @@ def main():
         "status": state["status"],
         "total_elapsed": state.get("total_elapsed", 0.0),
     })
+
+    # Section 8: RUN_COMPLETE hook
+    if _hooks:
+        run_hook(HookEvent.RUN_COMPLETE, {
+            "run_id": state.get("run_id", ""),
+            "status": state["status"],
+            "total_elapsed": state.get("total_elapsed", 0.0),
+            "num_steps": len(state.get("steps", [])),
+        }, _hooks)
+
     _finalize_code_tracking(run_id=state.get("run_id", ""))
     prov.save()
 

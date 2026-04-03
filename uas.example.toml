@@ -49,7 +49,7 @@
 
 # ── Retry ────────────────────────────────────────────────────────────────────
 
-# Enable persistent retry for unattended runs (indefinite backoff)
+# Disable persistent retry (indefinite backoff, enabled by default)
 # persistent_retry = false
 
 # Rate limit retry configuration

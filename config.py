@@ -40,7 +40,7 @@ DEFAULTS: dict = {
     "llm_timeout": None,
 
     # Retry
-    "persistent_retry": False,
+    "persistent_retry": True,
     "rate_limit_wait": 120,
     "rate_limit_max_wait": 600,
     "rate_limit_retries": 3,

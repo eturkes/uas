@@ -211,7 +211,7 @@ command.
 
 ---
 
-## Section 6: Streaming Progress Callbacks [ ]
+## Section 6: Streaming Progress Callbacks [x]
 
 **Problem:** During LLM generation, UAS only shows heartbeat logs ("LLM responding... 15s
 elapsed"). Claude Code streams every token via `content_block_delta` events, giving real-time

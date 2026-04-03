@@ -73,6 +73,9 @@ class Dashboard:
         self._stop_listener = threading.Event()
         self._key_thread = None
 
+        # LLM streaming progress state (Section 6)
+        self._llm_text_buffer: dict[int, str] = {}
+
         # Scroll state
         self._focused_panel = "dag"
         self._scroll_offsets = {"dag": 0, "log": 0, "output": 0}
@@ -310,6 +313,46 @@ class Dashboard:
                 self._live.update(self._render())
             except Exception:
                 pass
+
+    def on_llm_progress(self, step_id: int, event: dict):
+        """Handle a streaming LLM progress event (Section 6).
+
+        Updates the "Claude Output" panel with streaming text and a
+        token counter.  Called by the progress_callback wired through
+        from ``generate()``.
+
+        *event* is a dict with ``type`` (``"start"``, ``"delta"``,
+        ``"stop"``) plus type-specific fields.
+        """
+        etype = event.get("type", "")
+
+        if etype == "start":
+            model = event.get("model", "unknown")
+            self.add_output_line(f"[Step {step_id}] LLM started ({model})")
+            with self._lock:
+                self._llm_text_buffer[step_id] = ""
+        elif etype == "delta":
+            text = event.get("text", "")
+            if text:
+                with self._lock:
+                    buf = self._llm_text_buffer.get(step_id, "") + text
+                    while "\n" in buf:
+                        line, buf = buf.split("\n", 1)
+                        self._output_lines.append(line)
+                    self._llm_text_buffer[step_id] = buf
+                self._refresh()
+        elif etype == "stop":
+            with self._lock:
+                buf = self._llm_text_buffer.pop(step_id, "")
+                if buf:
+                    self._output_lines.append(buf)
+            usage = event.get("usage", {})
+            inp = usage.get("input", 0)
+            out = usage.get("output", 0)
+            if inp or out:
+                self.add_output_line(
+                    f"[Step {step_id}] Done: {inp} input + {out} output tokens"
+                )
 
     def update(self, state: dict):
         with self._lock:

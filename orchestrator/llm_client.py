@@ -268,13 +268,19 @@ class ClaudeCodeClient:
         self.model = model
         self.role = role
 
-    def _run_streaming(self, cmd, env, input_text=None, cwd=None):
+    def _run_streaming(self, cmd, env, input_text=None, cwd=None,
+                        progress_callback=None):
         """Run the CLI streaming stdout to the logger line-by-line.
 
         When *input_text* is provided it is written to the process's stdin
         and the pipe is closed before stdout is consumed.  This avoids
         passing large prompts as command-line arguments which can exceed
         the OS ARG_MAX limit.
+
+        When *progress_callback* is provided and the output is stream-json
+        format (newline-delimited JSON events), each event is parsed and
+        dispatched to the callback.  Falls back to line-by-line logging
+        if the first line of output is not valid stream-json.
         """
         proc = subprocess.Popen(
             cmd,
@@ -303,9 +309,30 @@ class ClaudeCodeClient:
         stderr_thread.start()
 
         stdout_lines = []
+        _stream_json = None  # None=undetermined, True/False after first line
+
         for line in proc.stdout:
-            logger.info("  %s", line.rstrip())
             stdout_lines.append(line)
+
+            # When a progress callback is set, detect and parse stream-json
+            if progress_callback is not None and _stream_json is not False:
+                stripped = line.strip()
+                if stripped:
+                    if _stream_json is None:
+                        try:
+                            evt = _json.loads(stripped)
+                            _stream_json = isinstance(evt, dict) and "type" in evt
+                        except (_json.JSONDecodeError, ValueError):
+                            _stream_json = False
+                    if _stream_json:
+                        try:
+                            evt = _json.loads(stripped)
+                            self._dispatch_progress(evt, progress_callback)
+                        except (_json.JSONDecodeError, ValueError):
+                            pass
+                        continue
+
+            logger.info("  %s", line.rstrip())
 
         try:
             proc.wait(timeout=self.timeout)
@@ -337,12 +364,105 @@ class ClaudeCodeClient:
         except (_json.JSONDecodeError, TypeError, AttributeError):
             return LLMResult(text=stdout.strip(), usage={"input": 0, "output": 0})
 
-    def generate(self, prompt: str, stream: bool = False) -> LLMResult:
+    @staticmethod
+    def _dispatch_progress(event: dict, callback):
+        """Dispatch a stream-json event to the progress callback."""
+        etype = event.get("type", "")
+
+        if etype == "content_block_delta":
+            delta = event.get("delta", {})
+            if delta.get("type") == "text_delta":
+                callback({"type": "delta", "text": delta.get("text", "")})
+        elif etype == "message_start":
+            msg = event.get("message", {})
+            callback({
+                "type": "start",
+                "model": msg.get("model", ""),
+                "usage": msg.get("usage", {}),
+            })
+        elif etype in ("message_stop", "message_delta"):
+            raw_usage = event.get("usage") or {}
+            if raw_usage:
+                callback({
+                    "type": "stop",
+                    "usage": {
+                        "input": raw_usage.get("input_tokens", 0),
+                        "output": raw_usage.get("output_tokens", 0),
+                    },
+                })
+        elif etype == "result":
+            raw_usage = event.get("usage") or {}
+            callback({
+                "type": "stop",
+                "usage": {
+                    "input": raw_usage.get("input_tokens", 0),
+                    "output": raw_usage.get("output_tokens", 0),
+                },
+            })
+
+    @staticmethod
+    def _parse_stream_json_output(stdout: str, model: str) -> LLMResult:
+        """Parse stream-json CLI output (newline-delimited JSON events).
+
+        Falls back to empty result if no valid events found, allowing
+        the caller to retry with ``_parse_json_output``.
+        """
+        result_text = ""
+        usage = {"input": 0, "output": 0}
+        text_parts: list[str] = []
+
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = _json.loads(line)
+            except (_json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(event, dict):
+                continue
+
+            etype = event.get("type", "")
+
+            if etype == "result":
+                result_text = event.get("result", "")
+                raw_usage = event.get("usage") or {}
+                usage = {
+                    "input": raw_usage.get("input_tokens", 0),
+                    "output": raw_usage.get("output_tokens", 0),
+                }
+            elif etype == "content_block_delta":
+                delta = event.get("delta", {})
+                if delta.get("type") == "text_delta":
+                    text_parts.append(delta.get("text", ""))
+            elif etype == "message_start":
+                msg = event.get("message", {})
+                raw_usage = msg.get("usage") or {}
+                if raw_usage:
+                    usage["input"] = raw_usage.get("input_tokens", usage["input"])
+            elif etype == "message_delta":
+                raw_usage = event.get("usage") or {}
+                if raw_usage:
+                    usage["output"] = raw_usage.get("output_tokens", usage["output"])
+
+        if not result_text and text_parts:
+            result_text = "".join(text_parts)
+
+        return LLMResult(text=result_text, usage=usage)
+
+    def generate(self, prompt: str, stream: bool = False,
+                 progress_callback=None) -> LLMResult:
         """Send a prompt to Claude Code CLI and return text + token usage.
 
         Returns an ``LLMResult(text, usage)`` named tuple.  Callers can
         unpack (``text, usage = client.generate(...)``) or use attribute
         access.  All calls use ultrathink for maximum reasoning depth.
+
+        When *progress_callback* is provided, uses ``--output-format
+        stream-json`` to emit structured events during generation.  The
+        callback receives dicts with ``type`` (``"start"``, ``"delta"``,
+        ``"stop"``).  Falls back to regular JSON output if the CLI does
+        not support stream-json.
         """
         # Always use maximum thinking for all agents.
         prompt = f"ultrathink\n\n{prompt}"
@@ -367,7 +487,8 @@ class ClaudeCodeClient:
         model = self.model or "claude-opus-4-6"
         cmd.extend(["--model", model])
         cmd.extend(["--effort", "max"])
-        cmd.extend(["--output-format", "json"])
+        _use_stream_json = progress_callback is not None
+        cmd.extend(["--output-format", "stream-json" if _use_stream_json else "json"])
 
         # Copy the full current environment to preserve PATH and other vars.
         # Only strip session-specific vars that cause nested-session detection.
@@ -411,6 +532,7 @@ class ClaudeCodeClient:
                 try:
                     stdout, stderr, returncode = self._run_streaming(
                         cmd, env, input_text=prompt, cwd=isolation_dir,
+                        progress_callback=progress_callback,
                     )
                 except subprocess.TimeoutExpired:
                     err = classify_error(
@@ -462,6 +584,10 @@ class ClaudeCodeClient:
                                 "partial output for truncation recovery.",
                                 returncode, len(stdout.strip()),
                             )
+                            if _use_stream_json:
+                                _trunc = self._parse_stream_json_output(stdout.strip(), model)
+                                if _trunc.text:
+                                    return _trunc
                             return self._parse_json_output(stdout.strip(), model)
                         # unknown — raise
                         raise RuntimeError(
@@ -508,7 +634,12 @@ class ClaudeCodeClient:
                     )
 
                 # Auth errors can arrive on stdout with exit code 0.
-                parsed = self._parse_json_output(stdout, model)
+                if _use_stream_json:
+                    parsed = self._parse_stream_json_output(stdout, model)
+                    if not parsed.text:
+                        parsed = self._parse_json_output(stdout, model)
+                else:
+                    parsed = self._parse_json_output(stdout, model)
                 if parsed.text:
                     auth_err = classify_error(0, parsed.text, "")
                     if auth_err.category == "auth":

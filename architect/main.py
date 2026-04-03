@@ -23,7 +23,7 @@ from .state import (
     append_scratchpad, read_scratchpad,
     update_progress_file, read_progress_file,
     get_run_dir, get_specs_dir, _write_latest_run,
-    append_knowledge,
+    append_knowledge, prune_old_runs,
 )
 from .planner import (
     decompose_goal,
@@ -5345,6 +5345,15 @@ def main():
         logger.info("Resuming goal: %s\n", state["goal"])
         _write_latest_run(run_id)
     else:
+        # Prune old runs before starting a new one.
+        try:
+            prune_old_runs(
+                keep_last=int(config.get("keep_last_runs", 10)),
+                max_age_days=int(config.get("max_run_age_days", 30)),
+            )
+        except Exception as exc:
+            logger.warning("Run pruning failed (non-fatal): %s", exc)
+
         # Fresh start
         goal = get_goal(args)
         if not goal:

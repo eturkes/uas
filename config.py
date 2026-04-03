@@ -48,6 +48,10 @@ DEFAULTS: dict = {
     "usage_limit_retries": 5,
     "best_of_n": 1,
 
+    # Retention
+    "keep_last_runs": 10,
+    "max_run_age_days": 30,
+
     # Flags
     "minimal": False,
     "verbose": False,

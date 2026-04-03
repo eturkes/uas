@@ -178,7 +178,7 @@ persistent_retry = false
 
 ---
 
-## Section 5: Run Artifact Lifecycle Management [ ]
+## Section 5: Run Artifact Lifecycle Management [x]
 
 **Problem:** `.uas_state/runs/` accumulates artifacts forever with no cleanup. Claude Code
 manages session storage with flush-on-shutdown and has bounded history. For UAS, a long-lived

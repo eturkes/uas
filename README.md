@@ -679,6 +679,8 @@ persistent_retry = true
 | `UAS_RATE_LIMIT_RETRIES` | Max rate-limit retries per step before failing | `3` |
 | `UAS_USAGE_LIMIT_WAIT` | Wait (seconds) between usage-limit retries | `3600` |
 | `UAS_USAGE_LIMIT_RETRIES` | Max usage-limit retries per step before failing | `5` |
+| `UAS_KEEP_LAST_RUNS` | Number of recent runs to retain during pruning | `10` |
+| `UAS_MAX_RUN_AGE_DAYS` | Prune runs older than this many days | `30` |
 | `UAS_MINIMAL` | Disable all optional enhancements (`1`, `true`, or `yes`) | *(off)* |
 | `UAS_NO_LLM_GUARDRAILS` | Skip LLM-based guardrail review (`1`) | *(off)* |
 | `UAS_VERBOSE` | Enable debug logging (`1`, `true`, or `yes`) | *(off)* |

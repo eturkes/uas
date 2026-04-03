@@ -39,6 +39,14 @@
 # Best-of-N parallel code generation (1 = disabled)
 # best_of_n = 1
 
+# ── Retention ────────────────────────────────────────────────────────────────
+
+# Number of recent runs to keep (oldest beyond this are pruned)
+# keep_last_runs = 10
+
+# Runs older than this many days are pruned regardless of count
+# max_run_age_days = 30
+
 # ── Retry ────────────────────────────────────────────────────────────────────
 
 # Enable persistent retry for unattended runs (indefinite backoff)

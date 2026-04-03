@@ -7,11 +7,15 @@ per-run filtering via ``[run:{run_id}]`` tags.
 """
 
 import json
+import logging
 import os
+import shutil
 import uuid
 from datetime import datetime, timezone
 
 import config
+
+logger = logging.getLogger(__name__)
 
 WORKSPACE = config.get("workspace")
 STATE_DIR = os.path.join(WORKSPACE, ".uas_state")
@@ -401,3 +405,161 @@ def add_steps(state: dict, steps: list[dict]) -> dict:
     state["status"] = "executing"
     save_state(state)
     return state
+
+
+# ---------------------------------------------------------------------------
+# Run artifact lifecycle management
+# ---------------------------------------------------------------------------
+
+def get_run_disk_usage(run_id: str) -> int:
+    """Return total size in bytes of all files in a run directory."""
+    run_dir = get_run_dir(run_id)
+    if not os.path.isdir(run_dir):
+        return 0
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(run_dir):
+        for fname in filenames:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, fname))
+            except OSError:
+                pass
+    return total
+
+
+def list_runs_with_metadata() -> list[dict]:
+    """Return run metadata dicts sorted by creation time (oldest first).
+
+    Each dict contains: run_id, created_at, status, disk_usage_bytes.
+    """
+    runs_dir = os.path.join(STATE_DIR, "runs")
+    if not os.path.isdir(runs_dir):
+        return []
+    result = []
+    for name in os.listdir(runs_dir):
+        run_dir = os.path.join(runs_dir, name)
+        if not os.path.isdir(run_dir):
+            continue
+        state_path = os.path.join(run_dir, "state.json")
+        created_at = None
+        status = "unknown"
+        if os.path.isfile(state_path):
+            try:
+                with open(state_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                created_at = data.get("created_at")
+                status = data.get("status", "unknown")
+            except (json.JSONDecodeError, OSError):
+                pass
+        if created_at is None:
+            try:
+                mtime = os.path.getmtime(run_dir)
+                created_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+            except OSError:
+                created_at = ""
+        result.append({
+            "run_id": name,
+            "created_at": created_at,
+            "status": status,
+            "disk_usage_bytes": get_run_disk_usage(name),
+        })
+    result.sort(key=lambda r: r["created_at"])
+    return result
+
+
+def prune_old_runs(keep_last: int = 10, max_age_days: int = 30) -> None:
+    """Delete old run directories based on retention policy.
+
+    Removes runs older than *max_age_days* OR beyond *keep_last* count,
+    whichever is more aggressive. The latest run is never pruned.
+    """
+    runs = list_runs_with_metadata()
+    if not runs:
+        return
+
+    latest_run_id = get_latest_run_id()
+    now = datetime.now(timezone.utc)
+    total_freed = 0
+    deleted_count = 0
+
+    # Determine which runs to keep by count (keep the N most recent).
+    # runs is sorted oldest-first, so the tail is the newest.
+    runs_to_keep_by_count = set()
+    if keep_last > 0:
+        for r in runs[-keep_last:]:
+            runs_to_keep_by_count.add(r["run_id"])
+
+    for run in runs:
+        rid = run["run_id"]
+
+        # Never prune the latest run.
+        if rid == latest_run_id:
+            continue
+
+        prune = False
+
+        # Age-based pruning
+        if max_age_days > 0 and run["created_at"]:
+            try:
+                created = datetime.fromisoformat(run["created_at"])
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                age_days = (now - created).total_seconds() / 86400
+                if age_days > max_age_days:
+                    prune = True
+            except (ValueError, TypeError):
+                pass
+
+        # Count-based pruning
+        if rid not in runs_to_keep_by_count:
+            prune = True
+
+        if prune:
+            run_dir = get_run_dir(rid)
+            size = run["disk_usage_bytes"]
+            try:
+                shutil.rmtree(run_dir)
+                total_freed += size
+                deleted_count += 1
+                logger.info(
+                    "Pruned run %s (%.1f KB freed)", rid, size / 1024
+                )
+            except OSError as exc:
+                logger.warning("Failed to prune run %s: %s", rid, exc)
+
+    if deleted_count:
+        logger.info(
+            "Pruning complete: %d run(s) deleted, %.1f KB freed",
+            deleted_count,
+            total_freed / 1024,
+        )
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point for `python -m architect.state prune`
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import argparse as _argparse
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    parser = _argparse.ArgumentParser(description="UAS state management utilities")
+    sub = parser.add_subparsers(dest="command")
+
+    prune_p = sub.add_parser("prune", help="Prune old run artifacts")
+    prune_p.add_argument(
+        "--keep", type=int,
+        default=int(config.get("keep_last_runs", 10)),
+        help="Number of recent runs to keep (default: 10)",
+    )
+    prune_p.add_argument(
+        "--max-age", type=int,
+        default=int(config.get("max_run_age_days", 30)),
+        help="Max age in days before pruning (default: 30)",
+    )
+
+    args = parser.parse_args()
+    if args.command == "prune":
+        prune_old_runs(keep_last=args.keep, max_age_days=args.max_age)
+    else:
+        parser.print_help()

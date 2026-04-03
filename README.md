@@ -266,6 +266,8 @@ execution.
 ├── entrypoint.sh             # Two-stage entrypoint (setup then run)
 ├── Containerfile             # Image (Podman + Python + Claude Code CLI)
 ├── requirements.txt          # Python dependencies
+├── config.py                 # Layered config (TOML + env vars)
+├── uas.example.toml          # Sample config file with all keys
 ├── architect/                # Architect Agent (installed to /uas)
 │   ├── main.py               # Controller loop
 │   ├── planner.py            # LLM task decomposition + rewrite
@@ -623,6 +625,28 @@ UAS_MINIMAL=1 uas "your goal"
 
 Individual features can be opted out of (e.g., `UAS_NO_LLM_GUARDRAILS=1`),
 but `UAS_MINIMAL` is the simplest single switch to disable everything.
+
+## Configuration File
+
+Settings can be persisted in TOML files instead of environment
+variables.  UAS checks these locations (later overrides earlier):
+
+1. Built-in defaults
+2. `~/.config/uas/config.toml` (user-global)
+3. `{workspace}/.uas/config.toml` (project-level)
+4. `UAS_*` environment variables (highest priority)
+
+Config keys match the env var names without the `UAS_` prefix
+(e.g. `UAS_MODEL` becomes `model`).  See `uas.example.toml` for
+all available keys.
+
+```toml
+# .uas/config.toml
+model = "claude-sonnet-4-6"
+sandbox_mode = "local"
+max_parallel = 4
+persistent_retry = true
+```
 
 ## Environment Variables
 

@@ -11,7 +11,9 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
+import config
+
+WORKSPACE = config.get("workspace")
 STATE_DIR = os.path.join(WORKSPACE, ".uas_state")
 SCRATCHPAD_FILE = os.path.join(STATE_DIR, "scratchpad.md")
 
@@ -344,7 +346,7 @@ def read_progress_file(run_id: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 def get_knowledge_base_path() -> str:
-    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
+    workspace = config.get("workspace")
     return os.path.join(workspace, ".uas_state", "knowledge.json")
 
 

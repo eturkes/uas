@@ -12,13 +12,15 @@ import threading
 import time
 import typing
 
+import config
+
 DEFAULT_TIMEOUT = None
 MAX_RETRIES = 4
 INITIAL_BACKOFF = 2
 OVERLOADED_BACKOFF = 30
 
 # Persistent retry mode (Section 3 of PLAN.md)
-PERSISTENT_RETRY = os.environ.get("UAS_PERSISTENT_RETRY", "").lower() in ("1", "true", "yes")
+PERSISTENT_RETRY = config.get("persistent_retry")
 MAX_BACKOFF = 300  # 5 minutes, cap for exponential backoff
 PERSISTENT_RETRY_RESET = 6 * 3600  # Reset backoff multiplier after 6 hours
 PERSISTENT_HEARTBEAT_INTERVAL = 30  # Log heartbeat every 30s during waits
@@ -531,17 +533,17 @@ def get_llm_client(role: str | None = None) -> ClaudeCodeClient:
             Falls back to ``UAS_MODEL`` when the role-specific var
             is unset.
     """
-    timeout_str = os.environ.get("UAS_LLM_TIMEOUT")
-    timeout = int(timeout_str) if timeout_str else DEFAULT_TIMEOUT
+    timeout_val = config.get("llm_timeout")
+    timeout = int(timeout_val) if timeout_val else DEFAULT_TIMEOUT
 
     # Section 5c: Model tiering — role-specific model selection
     model = None
     if role == "planner":
-        model = os.environ.get("UAS_MODEL_PLANNER") or None
+        model = config.get("model_planner") or None
     elif role == "coder":
-        model = os.environ.get("UAS_MODEL_CODER") or None
+        model = config.get("model_coder") or None
     if not model:
-        model = os.environ.get("UAS_MODEL") or None
+        model = config.get("model") or None
 
     if model:
         logger.info("Using Claude Code CLI (role=%s, model=%s)", role, model)

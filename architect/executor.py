@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time as _time
 
+import config
+
 from orchestrator.claude_config import get_claude_md_content
 from orchestrator.llm_client import heartbeat_log
 from .events import EventType, get_event_log
@@ -19,10 +21,10 @@ from .provenance import get_provenance_graph
 
 SANDBOX_IMAGE_NAME = "uas-sandbox"
 SANDBOX_TARBALL = "/var/lib/containers/sandbox.tar"
-MAX_CONTEXT_LENGTH = int(os.environ.get("UAS_MAX_CONTEXT_LENGTH", "0"))
+MAX_CONTEXT_LENGTH = config.get("max_context_length")
 SANDBOX_BASE_IMAGE = "docker.io/library/python:3.12-slim"
 RUN_TIMEOUT = None
-EXECUTION_MODE = os.environ.get("UAS_SANDBOX_MODE", "container")
+EXECUTION_MODE = config.get("sandbox_mode")
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +156,7 @@ def run_orchestrator(task: str, extra_env: dict | None = None,
 
     Returns dict with exit_code, stdout, stderr.
     """
-    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
+    workspace = config.get("workspace")
     try:
         ensure_claude_md(workspace, step_context=step_context)
     except OSError as e:
@@ -243,7 +245,7 @@ def _run_local(task: str, extra_env: dict | None = None,
     framework_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")
     )
-    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
+    workspace = config.get("workspace")
     cwd = workspace
     env = os.environ.copy()
     env["PYTHONPATH"] = framework_root
@@ -301,9 +303,9 @@ def _kill_container(engine: str, name: str):
 
 def _project_id() -> str:
     """Derive a short project identifier from the host workspace path."""
-    host_ws = os.environ.get("UAS_HOST_WORKSPACE", "")
+    host_ws = config.get("host_workspace")
     if not host_ws:
-        host_ws = os.environ.get("UAS_WORKSPACE", "/workspace")
+        host_ws = config.get("workspace")
     return hashlib.sha256(host_ws.encode()).hexdigest()[:12]
 
 
@@ -325,7 +327,7 @@ def _ensure_project_container(engine: str) -> str:
     alive across steps so installed packages persist.
     """
     name = _project_container_name()
-    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
+    workspace = config.get("workspace")
 
     # Check if container already exists
     result = subprocess.run(

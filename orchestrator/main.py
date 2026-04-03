@@ -13,6 +13,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
+import config
+
 from .llm_client import get_llm_client
 from .parser import extract_code, extract_truncated_block
 from .sandbox import run_in_sandbox
@@ -24,7 +26,7 @@ STDERR_START = "===STDERR_START==="
 STDERR_END = "===STDERR_END==="
 
 MAX_RETRIES = 3
-MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
+MINIMAL_MODE = config.get("minimal")
 
 # Section 1: Module-level token usage accumulator for the orchestrator process.
 _orch_usage = {"input": 0, "output": 0, "cost_usd": 0.0}
@@ -425,7 +427,7 @@ def get_task(args) -> str:
     """Get task from CLI args, env var, or stdin."""
     if args.task:
         return " ".join(args.task)
-    task = os.environ.get("UAS_TASK")
+    task = config.get("task")
     if task:
         return task
     if not sys.stdin.isatty():
@@ -808,7 +810,7 @@ When modifying existing files:
     # Section 19: Truncation-aware code length guidance.
     # When prior attempts for this step produced code that was truncated,
     # instruct the LLM to produce more concise output.
-    if os.environ.get("UAS_TRUNCATION_DETECTED"):
+    if config.get("truncation_detected"):
         prompt += """
 
 <code_length_warning>
@@ -977,7 +979,7 @@ def _get_best_of_n(attempt: int) -> int:
     - On retries, N scales with attempt count, capped by UAS_BEST_OF_N.
     - If UAS_BEST_OF_N is unset or 1, best-of-N is disabled entirely.
     """
-    max_n = int(os.environ.get("UAS_BEST_OF_N", "1"))
+    max_n = config.get("best_of_n")
     if max_n <= 1 or attempt <= 1:
         return 1
     # attempt 2 → N=2, attempt 3 → N=3, capped by max_n
@@ -1010,7 +1012,7 @@ n must be 1, 2, or 3."""
 
 
 def _get_best_of_n_llm(attempt: int, task: str, previous_error: str) -> int:
-    max_n = int(os.environ.get("UAS_BEST_OF_N", "1"))
+    max_n = config.get("best_of_n")
     if max_n <= 1 or attempt <= 1:
         return 1
 
@@ -1344,8 +1346,8 @@ def generate_and_vote(client, prompt: str, n: int,
 def _record_code_version(step_id, spec_attempt, orch_attempt, code, prompt,
                          exit_code=-1, error_summary=""):
     """Record a code version to disk for the architect's code tracker."""
-    workspace = os.environ.get("UAS_WORKSPACE", "/workspace")
-    run_id = os.environ.get("UAS_RUN_ID", "")
+    workspace = config.get("workspace")
+    run_id = config.get("run_id")
     if run_id:
         versions_dir = os.path.join(workspace, ".uas_state", "runs", run_id,
                                     "code_versions")
@@ -1385,9 +1387,7 @@ def _record_code_version(step_id, spec_attempt, orch_attempt, code, prompt,
 
 def main():
     args = parse_args()
-    verbose = args.verbose or os.environ.get("UAS_VERBOSE", "").lower() in (
-        "1", "true", "yes",
-    )
+    verbose = args.verbose or config.get("verbose")
     configure_logging(verbose)
 
     task = get_task(args)
@@ -1396,8 +1396,8 @@ def main():
         sys.exit(1)
 
     # Read step context for code tracking
-    _step_id_str = os.environ.get("UAS_STEP_ID")
-    _spec_attempt = int(os.environ.get("UAS_SPEC_ATTEMPT", "0"))
+    _step_id_str = config.get("step_id")
+    _spec_attempt = config.get("spec_attempt")
     _step_id = int(_step_id_str) if _step_id_str else None
 
     logger.info("Task: %s", task)
@@ -1432,11 +1432,11 @@ def main():
     previous_code = None
     # Section 11: Accumulate full attempt history across retries.
     attempt_history: list[dict] = []
-    workspace_files = os.environ.get("UAS_WORKSPACE_FILES")
+    workspace_files = config.get("workspace_files")
 
     # Read step's package requirements from the architect
     environment = None
-    env_str = os.environ.get("UAS_STEP_ENVIRONMENT")
+    env_str = config.get("step_environment")
     if env_str:
         try:
             environment = json.loads(env_str)
@@ -1448,7 +1448,7 @@ def main():
     # Section 5b: If workspace files aren't provided by the architect,
     # scan the workspace directly so the LLM knows what already exists.
     if not workspace_files:
-        workspace_path = os.environ.get("UAS_WORKSPACE") or os.environ.get("WORKSPACE")
+        workspace_path = config.get("workspace") or os.environ.get("WORKSPACE")
         if workspace_path:
             workspace_files = scan_workspace(workspace_path) or None
 

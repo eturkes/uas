@@ -1,0 +1,68 @@
+# UAS configuration file
+#
+# Place at one of:
+#   ~/.config/uas/config.toml        (user-global defaults)
+#   {workspace}/.uas/config.toml     (project-level overrides)
+#
+# UAS_* environment variables always take highest priority over file config.
+# Keys match env var names without the UAS_ prefix (e.g. UAS_MODEL -> model).
+
+# ── Core ─────────────────────────────────────────────────────────────────────
+
+# LLM model for general use (runtime default: claude-opus-4-6)
+# model = "claude-sonnet-4-6"
+
+# Model overrides for specific roles
+# model_planner = "claude-opus-4-6"
+# model_coder = "claude-sonnet-4-6"
+
+# Execution mode: "container" or "local"
+# sandbox_mode = "container"
+
+# Workspace root directory
+# workspace = "/workspace"
+
+# ── Execution ────────────────────────────────────────────────────────────────
+
+# Maximum parallel step execution (0 = auto)
+# max_parallel = 0
+
+# Maximum context length for specs (0 = unlimited)
+# max_context_length = 0
+
+# Maximum error output length (0 = unlimited)
+# max_error_length = 0
+
+# LLM call timeout in seconds (omit or comment out for no timeout)
+# llm_timeout = 300
+
+# Best-of-N parallel code generation (1 = disabled)
+# best_of_n = 1
+
+# ── Retry ────────────────────────────────────────────────────────────────────
+
+# Enable persistent retry for unattended runs (indefinite backoff)
+# persistent_retry = false
+
+# Rate limit retry configuration
+# rate_limit_wait = 120
+# rate_limit_max_wait = 600
+# rate_limit_retries = 3
+
+# Usage/quota limit retry configuration
+# usage_limit_wait = 3600
+# usage_limit_retries = 5
+
+# ── Flags ────────────────────────────────────────────────────────────────────
+
+# Minimal mode: skip optional LLM calls (research, guardrails, etc.)
+# minimal = false
+
+# Verbose logging
+# verbose = false
+
+# Dry run: plan but don't execute steps
+# dry_run = false
+
+# Disable LLM-based code guardrails
+# no_llm_guardrails = false

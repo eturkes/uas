@@ -71,6 +71,8 @@ from .report import generate_report
 from .trace_export import TraceExporter
 from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 
+import config
+
 from orchestrator.llm_client import (
     estimate_cost, classify_error,
     PERSISTENT_RETRY, MAX_BACKOFF, PERSISTENT_RETRY_RESET,
@@ -78,26 +80,26 @@ from orchestrator.llm_client import (
 )
 
 MAX_SPEC_REWRITES = 4
-MAX_PARALLEL = int(os.environ.get("UAS_MAX_PARALLEL", "0"))
-WORKSPACE = os.environ.get("UAS_WORKSPACE", "/workspace")
+MAX_PARALLEL = config.get("max_parallel")
+WORKSPACE = config.get("workspace")
 PROJECT_DIR = WORKSPACE
-MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
+MINIMAL_MODE = config.get("minimal")
 
-MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
+MAX_ERROR_LENGTH = config.get("max_error_length")
 
 # Rate limit detection and backoff configuration.
 _RATE_LIMIT_RESET_RE = re.compile(r"resets?\s+(\d{1,2})(?::(\d{2}))?\s*(?:am|pm)?\s*\(?utc\)?", re.IGNORECASE)
-RATE_LIMIT_BASE_WAIT = int(os.environ.get("UAS_RATE_LIMIT_WAIT", "120"))
-RATE_LIMIT_MAX_WAIT = int(os.environ.get("UAS_RATE_LIMIT_MAX_WAIT", "600"))
-MAX_RATE_LIMIT_RETRIES = int(os.environ.get("UAS_RATE_LIMIT_RETRIES", "3"))
+RATE_LIMIT_BASE_WAIT = config.get("rate_limit_wait")
+RATE_LIMIT_MAX_WAIT = config.get("rate_limit_max_wait")
+MAX_RATE_LIMIT_RETRIES = config.get("rate_limit_retries")
 
 # Usage-limit patterns (account-level quota exhaustion, needs long waits).
 _USAGE_LIMIT_PATTERNS = [
     "out of extra usage", "out of usage", "usage limit",
     "exceeded your limit", "plan limit",
 ]
-USAGE_LIMIT_WAIT = int(os.environ.get("UAS_USAGE_LIMIT_WAIT", "3600"))
-MAX_USAGE_LIMIT_RETRIES = int(os.environ.get("UAS_USAGE_LIMIT_RETRIES", "5"))
+USAGE_LIMIT_WAIT = config.get("usage_limit_wait")
+MAX_USAGE_LIMIT_RETRIES = config.get("usage_limit_retries")
 
 
 def _is_usage_limited(error_text: str) -> bool:
@@ -831,10 +833,10 @@ def parse_args():
 def get_goal(args) -> str:
     if args.goal:
         return " ".join(args.goal)
-    goal = os.environ.get("UAS_GOAL")
+    goal = config.get("goal")
     if goal:
         return goal
-    goal_file = getattr(args, "goal_file", None) or os.environ.get("UAS_GOAL_FILE")
+    goal_file = getattr(args, "goal_file", None) or config.get("goal_file")
     if goal_file:
         goal_file = os.path.expanduser(goal_file)
         if not os.path.isabs(goal_file):
@@ -4620,7 +4622,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 guardrail_warnings = []
                 _use_llm_guardrails = (
                     not MINIMAL_MODE
-                    and os.environ.get("UAS_NO_LLM_GUARDRAILS", "") != "1"
+                    and not config.get("no_llm_guardrails")
                 )
                 try:
                     for entry in os.listdir(PROJECT_DIR):
@@ -5282,27 +5284,19 @@ def try_resume() -> dict | None:
 
 def main():
     args = parse_args()
-    verbose = args.verbose or os.environ.get("UAS_VERBOSE", "").lower() in (
-        "1", "true", "yes",
-    )
+    verbose = args.verbose or config.get("verbose")
     configure_logging(verbose)
 
-    dry_run = args.dry_run or os.environ.get("UAS_DRY_RUN", "").lower() in (
-        "1", "true", "yes",
-    )
+    dry_run = args.dry_run or config.get("dry_run")
 
     # Collect flags
-    output_flag = args.output or os.environ.get("UAS_OUTPUT") or None
-    report_flag = args.report or os.environ.get("UAS_REPORT") or None
-    trace_flag = args.trace or os.environ.get("UAS_TRACE") or None
-    explain_flag = args.explain or os.environ.get("UAS_EXPLAIN", "").lower() in (
-        "1", "true", "yes",
-    )
-    events_flag = args.events or os.environ.get("UAS_EVENTS") or None
+    output_flag = args.output or config.get("output") or None
+    report_flag = args.report or config.get("report") or None
+    trace_flag = args.trace or config.get("trace") or None
+    explain_flag = args.explain or config.get("explain")
+    events_flag = args.events or config.get("events") or None
 
-    resume = (args.resume or os.environ.get("UAS_RESUME", "").lower() in (
-        "1", "true", "yes",
-    )) and not args.fresh
+    resume = (args.resume or config.get("resume")) and not args.fresh
 
     # Determine run context: resume existing run or start fresh.
     # We need the run_id early so that event log, provenance, and
@@ -5363,7 +5357,7 @@ def main():
         os.makedirs(_goals_dir, exist_ok=True)
         _goal_file_src = (
             getattr(args, "goal_file", None)
-            or os.environ.get("UAS_GOAL_FILE")
+            or config.get("goal_file")
         )
         if _goal_file_src:
             _goal_file_src = os.path.expanduser(_goal_file_src)

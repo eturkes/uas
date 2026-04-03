@@ -128,7 +128,7 @@ to indefinite retry with capped exponential backoff and periodic heartbeat loggi
 
 ---
 
-## Section 4: Layered Configuration System [ ]
+## Section 4: Layered Configuration System [x]
 
 **Problem:** UAS configuration is entirely through env vars (~25 `UAS_*` variables). Claude
 Code has a layered config system (`src/utils/config.ts`, `src/utils/settings/`): project-level

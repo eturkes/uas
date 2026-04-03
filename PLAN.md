@@ -246,7 +246,7 @@ dashboard to show live generation status (tokens generated, elapsed time, curren
 
 ---
 
-## Section 7: Step Dependency Safety Classification [ ]
+## Section 7: Step Dependency Safety Classification [x]
 
 **Problem:** UAS parallelizes independent steps (no dependency edges), but doesn't consider
 whether steps touch the same files or resources. Two "independent" steps that both write to

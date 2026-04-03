@@ -212,7 +212,7 @@ Sub-problems: none. Risk areas: none. Parallelization: N/A.
 Failure modes: none expected.
 </analysis>
 <complexity_assessment>trivial — single standard library call, 1 step</complexity_assessment>
-[{{"title": "Print datetime", "description": "Write a Python script that prints the current date and time using the datetime module.", "depends_on": [], "verify": "stdout contains a date/time string", "environment": []}}]
+[{{"title": "Print datetime", "description": "Write a Python script that prints the current date and time using the datetime module.", "depends_on": [], "verify": "stdout contains a date/time string", "environment": [], "outputs": []}}]
 
 Example 2 — Medium with dependencies:
 Goal: "Download a CSV from a URL, clean it, and produce summary statistics"
@@ -225,9 +225,9 @@ Failure modes: network timeout, malformed CSV, empty dataset after cleaning.
 </analysis>
 <complexity_assessment>medium — 3 sequential data processing steps</complexity_assessment>
 [
-  {{"title": "Download CSV", "description": "Download the CSV file from the given URL using requests and save it to the workspace as raw_data.csv. Validate the response is valid CSV (not HTML error page). Print the number of rows and columns.", "depends_on": [], "verify": "raw_data.csv exists in workspace, has >0 rows, and stdout prints row/column counts", "environment": ["requests"]}},
-  {{"title": "Clean data", "description": "Read raw_data.csv from the workspace, handle missing values (drop rows with >50% nulls, fill numeric nulls with median), remove duplicates, and save as cleaned_data.csv. Print cleaning summary showing rows before, rows dropped, rows remaining.", "depends_on": [1], "verify": "cleaned_data.csv exists, row count <= raw_data.csv row count, stdout shows before/after row counts and number of nulls filled", "environment": ["pandas"]}},
-  {{"title": "Summary statistics", "description": "Read cleaned_data.csv, compute summary statistics (mean, median, std, min, max for numeric columns), and save results to summary.json and summary.txt. Print the summary table to stdout.", "depends_on": [2], "verify": "summary.json contains keys for each numeric column with mean/median/std/min/max values; summary.txt is human-readable; stdout shows the statistics table", "environment": ["pandas"]}}
+  {{"title": "Download CSV", "description": "Download the CSV file from the given URL using requests and save it to the workspace as raw_data.csv. Validate the response is valid CSV (not HTML error page). Print the number of rows and columns.", "depends_on": [], "verify": "raw_data.csv exists in workspace, has >0 rows, and stdout prints row/column counts", "environment": ["requests"], "outputs": ["raw_data.csv"]}},
+  {{"title": "Clean data", "description": "Read raw_data.csv from the workspace, handle missing values (drop rows with >50% nulls, fill numeric nulls with median), remove duplicates, and save as cleaned_data.csv. Print cleaning summary showing rows before, rows dropped, rows remaining.", "depends_on": [1], "verify": "cleaned_data.csv exists, row count <= raw_data.csv row count, stdout shows before/after row counts and number of nulls filled", "environment": ["pandas"], "outputs": ["cleaned_data.csv"]}},
+  {{"title": "Summary statistics", "description": "Read cleaned_data.csv, compute summary statistics (mean, median, std, min, max for numeric columns), and save results to summary.json and summary.txt. Print the summary table to stdout.", "depends_on": [2], "verify": "summary.json contains keys for each numeric column with mean/median/std/min/max values; summary.txt is human-readable; stdout shows the statistics table", "environment": ["pandas"], "outputs": ["summary.json", "summary.txt"]}}
 ]
 
 Example 3 — Complex with parallelism:
@@ -241,9 +241,9 @@ Failure modes: blocked by site, empty results, no matching products.
 </analysis>
 <complexity_assessment>medium — 2 parallel scraping steps + 1 comparison</complexity_assessment>
 [
-  {{"title": "Scrape site A", "description": "Scrape product names and prices from site A using requests and BeautifulSoup. Save results as site_a_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_a_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"]}},
-  {{"title": "Scrape site B", "description": "Scrape product names and prices from site B using requests and BeautifulSoup. Save results as site_b_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_b_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"]}},
-  {{"title": "Compare prices", "description": "Read site_a_products.json and site_b_products.json from the workspace. Match products by name and compare prices. Save comparison to price_comparison.csv and print a summary of which site is cheaper on average.", "depends_on": [1, 2], "verify": "price_comparison.csv exists and contains matched products", "environment": ["pandas"]}}
+  {{"title": "Scrape site A", "description": "Scrape product names and prices from site A using requests and BeautifulSoup. Save results as site_a_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_a_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"], "outputs": ["site_a_products.json"]}},
+  {{"title": "Scrape site B", "description": "Scrape product names and prices from site B using requests and BeautifulSoup. Save results as site_b_products.json in the workspace. Print count of products found.", "depends_on": [], "verify": "site_b_products.json exists and contains a non-empty list", "environment": ["requests", "beautifulsoup4"], "outputs": ["site_b_products.json"]}},
+  {{"title": "Compare prices", "description": "Read site_a_products.json and site_b_products.json from the workspace. Match products by name and compare prices. Save comparison to price_comparison.csv and print a summary of which site is cheaper on average.", "depends_on": [1, 2], "verify": "price_comparison.csv exists and contains matched products", "environment": ["pandas"], "outputs": ["price_comparison.csv"]}}
 ]
 
 Example 4 — Complex multi-phase project:
@@ -266,18 +266,18 @@ dashboard tabs render empty, translation keys missing.
 </analysis>
 <complexity_assessment>complex — 12 steps across 3 phases with integration checkpoints</complexity_assessment>
 [
-  {{"title": "Data simulator", "description": "Create a data simulation module that generates realistic e-commerce transaction data matching the specification. Save simulated data as data/transactions.csv with columns: customer_id, age, region, product_category, channel, first_purchase_value, purchase_count_month3, purchase_count_month6, churned. Print row count and column summary.", "depends_on": [], "verify": "data/transactions.csv has >100 rows, all specified columns present, no nulls in required fields, value ranges are plausible", "environment": ["pandas", "numpy"]}},
-  {{"title": "Data cleaning pipeline", "description": "Create a cleaning module that reads data/transactions.csv, validates data types, handles missing values, creates derived features (growth_rate, lifetime_value), and saves cleaned_data.csv. Print cleaning report with before/after row counts.", "depends_on": [1], "verify": "cleaned_data.csv exists, derived columns present, no unexpected nulls, row count logged", "environment": ["pandas"]}},
-  {{"title": "Bilingual translation strings", "description": "Create a translations module with all UI strings in English and Japanese. Export as translations.json with structure {{\"en\": {{...}}, \"ja\": {{...}}}}. Include labels for all dashboard elements, column display names, and status descriptions.", "depends_on": [], "verify": "translations.json has en and ja keys with identical key sets, no empty values", "environment": []}},
-  {{"title": "Phase 1 integration checkpoint", "description": "Validate that the data simulator, cleaning pipeline, and translations module work together. Import each module, run the pipeline end-to-end, verify cleaned_data.csv columns match translation keys, print interface summary.", "depends_on": [1, 2, 3], "verify": "all imports succeed, pipeline runs without errors, column-translation alignment verified", "environment": ["pandas"]}},
-  {{"title": "Predictive model training", "description": "Train an XGBoost model to predict churned from first-interaction features ONLY (age, region, product_category, channel, first_purchase_value). Save trained model to models/xgb_model.joblib and metrics to models/metrics.json. Print accuracy, F1, and confusion matrix.", "depends_on": [4], "verify": "model file exists, metrics.json shows accuracy > majority-class baseline, confusion matrix is not degenerate", "environment": ["xgboost", "scikit-learn", "joblib"]}},
-  {{"title": "SHAP explainability", "description": "Load models/xgb_model.joblib and compute SHAP values for the test set. Save SHAP summary plot as outputs/shap_summary.png and feature importance as outputs/shap_importance.json. Print top 5 features.", "depends_on": [5], "verify": "shap_summary.png exists and is >1KB, shap_importance.json has entries for all features", "environment": ["shap", "matplotlib"]}},
-  {{"title": "Customer segmentation", "description": "Perform clustering on cleaned_data.csv to discover customer segments with distinct behaviour patterns. Save segment assignments to outputs/segments.csv and profiles to outputs/segment_profiles.json. Print segment sizes and key characteristics.", "depends_on": [4], "verify": "segments.csv has a segment column with 2-5 distinct values, profiles describe each segment", "environment": ["scikit-learn", "pandas"]}},
-  {{"title": "Phase 2 integration checkpoint", "description": "Validate that model, SHAP, and segmentation outputs are compatible. Load all artifacts, verify SHAP features match model features, verify segment IDs align with customer IDs in cleaned data. Print summary.", "depends_on": [5, 6, 7], "verify": "all artifacts load, feature alignment verified, no orphaned customer IDs", "environment": ["joblib", "pandas"]}},
-  {{"title": "Dashboard tab: cohort overview", "description": "Create the cohort overview tab showing customer demographics, channel distribution, and outcome summary charts. Read from cleaned_data.csv and translations.json. Save as src/tab_overview.py.", "depends_on": [8], "verify": "tab_overview.py imports successfully, renders without errors when called with test data", "environment": ["plotly", "dash"]}},
-  {{"title": "Dashboard tab: customer simulator", "description": "Create the customer simulator tab allowing users to input customer features and see predicted outcomes using the trained model. Read model from models/xgb_model.joblib. Save as src/tab_simulator.py.", "depends_on": [8], "verify": "tab_simulator.py imports and renders, prediction returns valid probability", "environment": ["plotly", "dash", "joblib"]}},
-  {{"title": "Dashboard tab: insight engine", "description": "Create the insight engine tab displaying SHAP explanations and segment profiles. Read from outputs/shap_importance.json and outputs/segment_profiles.json. Save as src/tab_insights.py.", "depends_on": [8], "verify": "tab_insights.py imports and renders, shows SHAP and segment data", "environment": ["plotly", "dash"]}},
-  {{"title": "Dashboard assembly and bilingual toggle", "description": "Assemble all tabs into a unified Dash application with bilingual language toggle. Import tab_overview, tab_simulator, tab_insights, and translations. Save as app.py. Print startup confirmation.", "depends_on": [9, 10, 11, 3], "verify": "app.py starts without import errors, all 3 tabs render, language toggle switches strings", "environment": ["dash"]}}
+  {{"title": "Data simulator", "description": "Create a data simulation module that generates realistic e-commerce transaction data matching the specification. Save simulated data as data/transactions.csv with columns: customer_id, age, region, product_category, channel, first_purchase_value, purchase_count_month3, purchase_count_month6, churned. Print row count and column summary.", "depends_on": [], "verify": "data/transactions.csv has >100 rows, all specified columns present, no nulls in required fields, value ranges are plausible", "environment": ["pandas", "numpy"], "outputs": ["data/transactions.csv"]}},
+  {{"title": "Data cleaning pipeline", "description": "Create a cleaning module that reads data/transactions.csv, validates data types, handles missing values, creates derived features (growth_rate, lifetime_value), and saves cleaned_data.csv. Print cleaning report with before/after row counts.", "depends_on": [1], "verify": "cleaned_data.csv exists, derived columns present, no unexpected nulls, row count logged", "environment": ["pandas"], "outputs": ["cleaned_data.csv"]}},
+  {{"title": "Bilingual translation strings", "description": "Create a translations module with all UI strings in English and Japanese. Export as translations.json with structure {{\"en\": {{...}}, \"ja\": {{...}}}}. Include labels for all dashboard elements, column display names, and status descriptions.", "depends_on": [], "verify": "translations.json has en and ja keys with identical key sets, no empty values", "environment": [], "outputs": ["translations.json"]}},
+  {{"title": "Phase 1 integration checkpoint", "description": "Validate that the data simulator, cleaning pipeline, and translations module work together. Import each module, run the pipeline end-to-end, verify cleaned_data.csv columns match translation keys, print interface summary.", "depends_on": [1, 2, 3], "verify": "all imports succeed, pipeline runs without errors, column-translation alignment verified", "environment": ["pandas"], "outputs": []}},
+  {{"title": "Predictive model training", "description": "Train an XGBoost model to predict churned from first-interaction features ONLY (age, region, product_category, channel, first_purchase_value). Save trained model to models/xgb_model.joblib and metrics to models/metrics.json. Print accuracy, F1, and confusion matrix.", "depends_on": [4], "verify": "model file exists, metrics.json shows accuracy > majority-class baseline, confusion matrix is not degenerate", "environment": ["xgboost", "scikit-learn", "joblib"], "outputs": ["models/xgb_model.joblib", "models/metrics.json"]}},
+  {{"title": "SHAP explainability", "description": "Load models/xgb_model.joblib and compute SHAP values for the test set. Save SHAP summary plot as outputs/shap_summary.png and feature importance as outputs/shap_importance.json. Print top 5 features.", "depends_on": [5], "verify": "shap_summary.png exists and is >1KB, shap_importance.json has entries for all features", "environment": ["shap", "matplotlib"], "outputs": ["outputs/shap_summary.png", "outputs/shap_importance.json"]}},
+  {{"title": "Customer segmentation", "description": "Perform clustering on cleaned_data.csv to discover customer segments with distinct behaviour patterns. Save segment assignments to outputs/segments.csv and profiles to outputs/segment_profiles.json. Print segment sizes and key characteristics.", "depends_on": [4], "verify": "segments.csv has a segment column with 2-5 distinct values, profiles describe each segment", "environment": ["scikit-learn", "pandas"], "outputs": ["outputs/segments.csv", "outputs/segment_profiles.json"]}},
+  {{"title": "Phase 2 integration checkpoint", "description": "Validate that model, SHAP, and segmentation outputs are compatible. Load all artifacts, verify SHAP features match model features, verify segment IDs align with customer IDs in cleaned data. Print summary.", "depends_on": [5, 6, 7], "verify": "all artifacts load, feature alignment verified, no orphaned customer IDs", "environment": ["joblib", "pandas"], "outputs": []}},
+  {{"title": "Dashboard tab: cohort overview", "description": "Create the cohort overview tab showing customer demographics, channel distribution, and outcome summary charts. Read from cleaned_data.csv and translations.json. Save as src/tab_overview.py.", "depends_on": [8], "verify": "tab_overview.py imports successfully, renders without errors when called with test data", "environment": ["plotly", "dash"], "outputs": ["src/tab_overview.py"]}},
+  {{"title": "Dashboard tab: customer simulator", "description": "Create the customer simulator tab allowing users to input customer features and see predicted outcomes using the trained model. Read model from models/xgb_model.joblib. Save as src/tab_simulator.py.", "depends_on": [8], "verify": "tab_simulator.py imports and renders, prediction returns valid probability", "environment": ["plotly", "dash", "joblib"], "outputs": ["src/tab_simulator.py"]}},
+  {{"title": "Dashboard tab: insight engine", "description": "Create the insight engine tab displaying SHAP explanations and segment profiles. Read from outputs/shap_importance.json and outputs/segment_profiles.json. Save as src/tab_insights.py.", "depends_on": [8], "verify": "tab_insights.py imports and renders, shows SHAP and segment data", "environment": ["plotly", "dash"], "outputs": ["src/tab_insights.py"]}},
+  {{"title": "Dashboard assembly and bilingual toggle", "description": "Assemble all tabs into a unified Dash application with bilingual language toggle. Import tab_overview, tab_simulator, tab_insights, and translations. Save as app.py. Print startup confirmation.", "depends_on": [9, 10, 11, 3], "verify": "app.py starts without import errors, all 3 tabs render, language toggle switches strings", "environment": ["dash"], "outputs": ["app.py"]}}
 ]
 </examples>
 
@@ -446,6 +446,10 @@ the exact same directory name — never introduce synonyms like "output/", "resu
 or "out/". Specify the directory name explicitly in step descriptions so the code \
 generator uses the same path. Prefer a single well-named directory for each purpose \
 (e.g., "data/" for datasets, "models/" for trained models, "outputs/" for results).
+15. Every step MUST include an "outputs" field listing every file path (relative to the \
+workspace) that the step creates or modifies. Use glob patterns for dynamic filenames \
+(e.g., "data/*.csv"). Steps without depends_on edges but with overlapping outputs will \
+be serialized to prevent data races, so declaring outputs accurately is important.
 </rules>
 
 <output_format>
@@ -455,10 +459,14 @@ array. Each element:
 "description": "detailed task for a code-generating LLM", \
 "depends_on": [step_numbers], \
 "verify": "how to verify this step succeeded beyond exit code 0", \
-"environment": ["packages needed, if any"]}}
+"environment": ["packages needed, if any"], \
+"outputs": ["file paths/globs this step creates or modifies, relative to workspace"]}}
 
 Steps are numbered starting from 1. depends_on references must use 1-based step \
 numbers (e.g. step 2 depending on step 1 should have "depends_on": [1]).
+The "outputs" field lists every file the step writes or modifies. Use glob patterns \
+for dynamic filenames (e.g., "data/*.csv"). Steps with overlapping outputs will be \
+serialized even if they have no depends_on edge, so accurate outputs are critical.
 </output_format>
 """
 
@@ -614,6 +622,7 @@ def decompose_goal(goal: str, spec: str = "") -> list[dict]:
         step.setdefault("depends_on", [])
         step.setdefault("verify", "")
         step.setdefault("environment", [])
+        step.setdefault("outputs", [])
 
     # Normalize 0-indexed depends_on to 1-indexed.
     # The LLM sometimes returns 0-based step references despite the prompt
@@ -865,6 +874,7 @@ def enforce_minimum_steps(
         step.setdefault("depends_on", [])
         step.setdefault("verify", "")
         step.setdefault("environment", [])
+        step.setdefault("outputs", [])
 
     # Normalize 0-indexed depends_on
     has_zero_ref = any(0 in s.get("depends_on", []) for s in new_steps)
@@ -1188,7 +1198,7 @@ Number the new steps starting from {next_step_number}.
 
 Return ONLY a JSON array of step objects:
 [{{"title": "...", "description": "...", "depends_on": [...], \
-"verify": "...", "environment": [...]}}]
+"verify": "...", "environment": [...], "outputs": [...]}}]
 </instructions>
 """
 
@@ -1350,6 +1360,7 @@ def fill_coverage_gaps(
         step.setdefault("depends_on", [])
         step.setdefault("verify", "")
         step.setdefault("environment", [])
+        step.setdefault("outputs", [])
         if "title" not in step or "description" not in step:
             continue
 
@@ -1431,8 +1442,8 @@ Split this into exactly TWO steps:
 
 Return ONLY a JSON array of exactly 2 step objects:
 [
-  {{"title": "...", "description": "...", "depends_on": [...], "verify": "...", "environment": [...]}},
-  {{"title": "...", "description": "...", "depends_on": [{step_number}, ...], "verify": "...", "environment": [...]}}
+  {{"title": "...", "description": "...", "depends_on": [...], "verify": "...", "environment": [...], "outputs": [...]}},
+  {{"title": "...", "description": "...", "depends_on": [{step_number}, ...], "verify": "...", "environment": [...], "outputs": [...]}}
 ]
 
 Use the SAME step numbering context: the creation step replaces step \
@@ -2804,7 +2815,8 @@ Each element:
 "description": "detailed task for a code-generating LLM", \
 "depends_on": [step_numbers], \
 "verify": "how to verify this step succeeded", \
-"environment": ["packages needed"]}}
+"environment": ["packages needed"], \
+"outputs": ["file paths this step creates or modifies"]}}
 </instructions>
 """
 
@@ -2878,6 +2890,7 @@ def _validate_replan_steps(new_steps: list[dict],
         step.setdefault("depends_on", [])
         step.setdefault("verify", "")
         step.setdefault("environment", [])
+        step.setdefault("outputs", [])
     # Normalize 0-indexed depends_on
     has_zero_ref = any(0 in s.get("depends_on", []) for s in new_steps)
     if has_zero_ref:
@@ -3196,7 +3209,7 @@ Number the steps starting from {next_step_number}.
 
 Return ONLY a JSON array of step objects:
 [{{"title": "Fix: ...", "description": "...", "depends_on": [...], \
-"verify": "...", "environment": [...]}}]
+"verify": "...", "environment": [...], "outputs": [...]}}]
 </instructions>
 """
 
@@ -3274,6 +3287,7 @@ def generate_corrective_steps(
         step.setdefault("depends_on", [])
         step.setdefault("verify", "")
         step.setdefault("environment", [])
+        step.setdefault("outputs", [])
 
     # Filter out malformed steps
     new_steps = [s for s in new_steps if "title" in s and "description" in s]

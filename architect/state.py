@@ -386,6 +386,7 @@ def add_steps(state: dict, steps: list[dict]) -> dict:
             "title": step["title"],
             "description": step["description"],
             "depends_on": step.get("depends_on", []),
+            "outputs": step.get("outputs", []),
             "verify": step.get("verify", ""),
             "environment": step.get("environment", []),
             "status": "pending",

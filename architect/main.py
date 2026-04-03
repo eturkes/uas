@@ -108,6 +108,82 @@ def _is_usage_limited(error_text: str) -> bool:
     return any(pat in lower for pat in _USAGE_LIMIT_PATTERNS)
 
 
+# ---------------------------------------------------------------------------
+# Section 7 (PLAN.md): File-conflict detection for parallel step safety
+# ---------------------------------------------------------------------------
+
+def _outputs_overlap(a: str, b: str) -> bool:
+    """Return True if two output path patterns overlap.
+
+    Handles exact matches and fnmatch-style globs (e.g. ``*.json``
+    matching ``config.json``).
+    """
+    import fnmatch
+    if a == b:
+        return True
+    # Check if either pattern matches the other as a glob
+    if fnmatch.fnmatch(a, b) or fnmatch.fnmatch(b, a):
+        return True
+    return False
+
+
+def find_file_conflicts(steps: list[dict]) -> list[tuple[int, int]]:
+    """Return pairs of step IDs whose declared outputs overlap.
+
+    Only considers the ``outputs`` field on each step dict. Steps with
+    empty or missing ``outputs`` never conflict.
+    """
+    conflicts: list[tuple[int, int]] = []
+    for i, sa in enumerate(steps):
+        outs_a = sa.get("outputs", [])
+        if not outs_a:
+            continue
+        for j in range(i + 1, len(steps)):
+            sb = steps[j]
+            outs_b = sb.get("outputs", [])
+            if not outs_b:
+                continue
+            for oa in outs_a:
+                for ob in outs_b:
+                    if _outputs_overlap(oa, ob):
+                        conflicts.append((sa["id"], sb["id"]))
+                        break
+                else:
+                    continue
+                break  # already recorded this pair
+    return conflicts
+
+
+def _partition_by_conflicts(
+    steps: list[dict],
+    conflicts: list[tuple[int, int]],
+) -> list[list[dict]]:
+    """Split *steps* into sequential batches with no intra-batch conflicts.
+
+    Steps within the same batch can run in parallel.  Batches must be
+    executed sequentially.  Uses a greedy first-fit algorithm.
+    """
+    if not conflicts:
+        return [steps]
+
+    conflict_set: set[tuple[int, int]] = set()
+    for a, b in conflicts:
+        conflict_set.add((a, b))
+        conflict_set.add((b, a))
+
+    batches: list[list[dict]] = []
+    for step in steps:
+        placed = False
+        for batch in batches:
+            if not any((step["id"], s["id"]) in conflict_set for s in batch):
+                batch.append(step)
+                placed = True
+                break
+        if not placed:
+            batches.append([step])
+    return batches
+
+
 # Section 8: Regex to extract package versions from pip/uv install output.
 # Matches lines like "Successfully installed requests-2.31.0 pandas-2.1.4"
 # and uv output like "Installed 3 packages in 120ms" followed by
@@ -1709,11 +1785,19 @@ def print_plan(state: dict):
 
     for level_idx, level in enumerate(levels, 1):
         print(f"--- Level {level_idx} (parallel) ---", file=sys.stderr)
+        level_steps = [step_by_id[sid] for sid in level]
+        conflicts = find_file_conflicts(level_steps)
+        if conflicts:
+            print(f"  ** File conflicts: {conflicts} — will be serialized",
+                  file=sys.stderr)
         for sid in level:
             step = step_by_id[sid]
             deps = step["depends_on"]
             deps_str = f" [depends on: {deps}]" if deps else ""
-            print(f"  Step {sid}: {step['title']}{deps_str}", file=sys.stderr)
+            outs = step.get("outputs", [])
+            outs_str = f" [outputs: {outs}]" if outs else ""
+            print(f"  Step {sid}: {step['title']}{deps_str}{outs_str}",
+                  file=sys.stderr)
             print(f"    {step['description']}", file=sys.stderr)
         print(file=sys.stderr)
 
@@ -5656,6 +5740,7 @@ def main():
             new_step.setdefault("files_written", [])
             new_step.setdefault("uas_result", None)
             new_step.setdefault("summary", "")
+            new_step.setdefault("outputs", [])
 
         # Remap depends_on references that point to other new steps.
         # Deps referencing completed steps stay unchanged.
@@ -5697,6 +5782,7 @@ def main():
                     gs.setdefault("files_written", [])
                     gs.setdefault("uas_result", None)
                     gs.setdefault("summary", "")
+                    gs.setdefault("outputs", [])
                     state["steps"].append(gs)
 
         step_by_id = {s["id"]: s for s in state["steps"]}
@@ -5811,36 +5897,40 @@ def main():
                 level_idx = did_replan
                 continue
         else:
-            # Multiple independent steps — run in parallel
-            workers = min(len(pending), MAX_PARALLEL) if MAX_PARALLEL else len(pending)
-            logger.info("  Running %d independent steps in parallel (max %d workers): %s",
-                        len(pending), workers, [s["id"] for s in pending])
-            dashboard.log(
-                f"Running {len(pending)} steps in parallel: "
-                + ", ".join(f"#{s['id']}" for s in pending)
-            )
+            # Multiple independent steps — run in parallel.
+            # Section 7: Check for file-output conflicts and split into
+            # sequential batches where conflicting steps are serialized.
+            conflicts = find_file_conflicts(pending)
+            batches = _partition_by_conflicts(pending, conflicts)
+            if len(batches) > 1:
+                conflict_ids = [(a, b) for a, b in conflicts]
+                logger.warning(
+                    "  File conflicts detected among steps %s — "
+                    "serializing into %d sub-batches.",
+                    conflict_ids, len(batches),
+                )
+                event_log.emit(
+                    EventType.STEP_ENRICHED,
+                    data={
+                        "file_conflicts": conflict_ids,
+                        "sub_batches": len(batches),
+                    },
+                )
+
             failed_step = None
             completed_in_level = []
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=workers,
-            ) as executor:
-                future_to_step = {
-                    executor.submit(
-                        execute_step, step, state, completed_outputs,
-                        progress_counts, dashboard,
-                    ): step
-                    for step in pending
-                }
-                for future in concurrent.futures.as_completed(future_to_step):
-                    step = future_to_step[future]
-                    try:
-                        success = future.result()
-                    except Exception as exc:
-                        logger.error("  Step %s raised exception: %s",
-                                     step["id"], exc)
-                        step["status"] = "failed"
-                        step["error"] = str(exc)
-                        success = False
+
+            for batch_idx, batch in enumerate(batches):
+                if failed_step is not None:
+                    break
+
+                if len(batch) == 1:
+                    # Single step in batch — no threading overhead
+                    step = batch[0]
+                    success = execute_step(
+                        step, state, completed_outputs,
+                        progress_counts, dashboard=dashboard,
+                    )
                     if success:
                         progress_counts["completed"] += 1
                         completed_outputs[step["id"]] = {
@@ -5849,9 +5939,60 @@ def main():
                             "files": step.get("files_written", []),
                         }
                         completed_in_level.append(step)
-                    elif failed_step is None:
+                    else:
                         progress_counts["failed"] += 1
                         failed_step = step
+                    continue
+
+                workers = min(len(batch), MAX_PARALLEL) if MAX_PARALLEL else len(batch)
+                if len(batches) > 1:
+                    logger.info(
+                        "  Sub-batch %d/%d: running %d steps in parallel: %s",
+                        batch_idx + 1, len(batches), len(batch),
+                        [s["id"] for s in batch],
+                    )
+                else:
+                    logger.info(
+                        "  Running %d independent steps in parallel "
+                        "(max %d workers): %s",
+                        len(batch), workers, [s["id"] for s in batch],
+                    )
+                dashboard.log(
+                    f"Running {len(batch)} steps in parallel: "
+                    + ", ".join(f"#{s['id']}" for s in batch)
+                )
+
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=workers,
+                ) as executor:
+                    future_to_step = {
+                        executor.submit(
+                            execute_step, step, state, completed_outputs,
+                            progress_counts, dashboard,
+                        ): step
+                        for step in batch
+                    }
+                    for future in concurrent.futures.as_completed(future_to_step):
+                        step = future_to_step[future]
+                        try:
+                            success = future.result()
+                        except Exception as exc:
+                            logger.error("  Step %s raised exception: %s",
+                                         step["id"], exc)
+                            step["status"] = "failed"
+                            step["error"] = str(exc)
+                            success = False
+                        if success:
+                            progress_counts["completed"] += 1
+                            completed_outputs[step["id"]] = {
+                                "stdout": step.get("output", ""),
+                                "stderr": step.get("stderr_output", ""),
+                                "files": step.get("files_written", []),
+                            }
+                            completed_in_level.append(step)
+                        elif failed_step is None:
+                            progress_counts["failed"] += 1
+                            failed_step = step
 
             if failed_step is not None:
                 state["total_elapsed"] = time.monotonic() - run_start
@@ -5962,6 +6103,7 @@ def main():
                 cs.setdefault("files_written", [])
                 cs.setdefault("uas_result", None)
                 cs.setdefault("summary", "")
+                cs.setdefault("outputs", [])
                 cs.setdefault("timing", {
                     "llm_time": 0.0, "sandbox_time": 0.0, "total_time": 0.0,
                 })
@@ -6068,6 +6210,7 @@ def main():
                         cs.setdefault("files_written", [])
                         cs.setdefault("uas_result", None)
                         cs.setdefault("summary", "")
+                        cs.setdefault("outputs", [])
                         cs.setdefault("timing", {
                             "llm_time": 0.0, "sandbox_time": 0.0,
                             "total_time": 0.0,

@@ -287,42 +287,6 @@ class ClaudeCodeClient:
             return LLMResult(text=stdout.strip(), usage={"input": 0, "output": 0})
 
     @staticmethod
-    def _dispatch_progress(event: dict, callback):
-        """Dispatch a stream-json event to the progress callback."""
-        etype = event.get("type", "")
-
-        if etype == "content_block_delta":
-            delta = event.get("delta", {})
-            if delta.get("type") == "text_delta":
-                callback({"type": "delta", "text": delta.get("text", "")})
-        elif etype == "message_start":
-            msg = event.get("message", {})
-            callback({
-                "type": "start",
-                "model": msg.get("model", ""),
-                "usage": msg.get("usage", {}),
-            })
-        elif etype in ("message_stop", "message_delta"):
-            raw_usage = event.get("usage") or {}
-            if raw_usage:
-                callback({
-                    "type": "stop",
-                    "usage": {
-                        "input": raw_usage.get("input_tokens", 0),
-                        "output": raw_usage.get("output_tokens", 0),
-                    },
-                })
-        elif etype == "result":
-            raw_usage = event.get("usage") or {}
-            callback({
-                "type": "stop",
-                "usage": {
-                    "input": raw_usage.get("input_tokens", 0),
-                    "output": raw_usage.get("output_tokens", 0),
-                },
-            })
-
-    @staticmethod
     def _parse_stream_json_output(stdout: str, model: str) -> LLMResult:
         """Parse stream-json CLI output (newline-delimited JSON events).
 
@@ -372,8 +336,7 @@ class ClaudeCodeClient:
 
         return LLMResult(text=result_text, usage=usage)
 
-    def generate(self, prompt: str, stream: bool = False,
-                 progress_callback=None) -> LLMResult:
+    def generate(self, prompt: str) -> LLMResult:
         """Send a prompt to Claude Code CLI and return text + token usage.
 
         Returns an ``LLMResult(text, usage)`` named tuple.  Callers can

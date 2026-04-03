@@ -124,7 +124,7 @@ def generate_project_spec(
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "generate_spec"})
     try:
-        spec, _usage = client.generate(prompt, stream=True)
+        spec, _usage = client.generate(prompt)
         event_log.emit(
             EventType.LLM_CALL_COMPLETE, data={"purpose": "generate_spec"},
         )
@@ -175,7 +175,7 @@ def research_goal(goal: str) -> str:
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "research_goal"})
     try:
-        result, _usage = client.generate(prompt, stream=True)
+        result, _usage = client.generate(prompt)
         event_log.emit(
             EventType.LLM_CALL_COMPLETE, data={"purpose": "research_goal"}
         )
@@ -626,7 +626,7 @@ def decompose_goal(goal: str, spec: str = "",
     )
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "decompose_goal"})
-    response, _usage = client.generate(prompt, stream=True)
+    response, _usage = client.generate(prompt)
     event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "decompose_goal"})
     steps = parse_steps_json(response)
     if not steps:
@@ -1917,7 +1917,7 @@ def critique_and_refine_plan(goal: str, steps: list[dict]) -> list[dict]:
     event_log = get_event_log()
     try:
         event_log.emit(EventType.LLM_CALL_START, data={"purpose": "critique_plan"})
-        response, _usage = client.generate(prompt, stream=True)
+        response, _usage = client.generate(prompt)
         event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "critique_plan"})
     except Exception as e:
         logger.warning("Plan critique failed, using original plan: %s", e)
@@ -3036,7 +3036,7 @@ def replan_remaining_steps(goal: str, state: dict,
                        data={"purpose": "replan_remaining_steps",
                              "attempt": attempt + 1})
         try:
-            response, _usage = client.generate(prompt, stream=True)
+            response, _usage = client.generate(prompt)
             event_log.emit(EventType.LLM_CALL_COMPLETE,
                            data={"purpose": "replan_remaining_steps",
                                  "attempt": attempt + 1})

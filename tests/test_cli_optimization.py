@@ -37,7 +37,7 @@ class TestStreamingGenerate:
         mock_run.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="response text", stderr="")
         client = ClaudeCodeClient()
-        result = client.generate("hello", stream=False)
+        result = client.generate("hello")
         assert mock_run.called
         assert result.text == "response text"
 

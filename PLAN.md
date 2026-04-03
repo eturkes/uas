@@ -25,7 +25,7 @@ is over-engineered for a system that only needs the final JSON result.
       capture_output=True, text=True, timeout=self.timeout)` call.
       Feed the prompt via `input=` kwarg (stdin), collect result from
       `result.stdout`.
-- [ ] **1.3** Remove the `progress_callback` / `stream-json` code paths from
+- [x] **1.3** Remove the `progress_callback` / `stream-json` code paths from
       `generate()` and `_dispatch_progress()`. UAS does not need real-time
       token streaming; the Orchestrator only consumes the final
       `LLMResult(text, usage)`.

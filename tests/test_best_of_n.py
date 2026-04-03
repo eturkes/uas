@@ -133,7 +133,8 @@ class TestGenerateAndVote:
     @patch("orchestrator.main.extract_code")
     def test_selects_successful_sample(self, mock_extract, mock_sandbox):
         client = MagicMock()
-        client.generate.side_effect = ["resp0", "resp1"]
+        _u = {"input": 0, "output": 0}
+        client.generate.side_effect = [("resp0", _u), ("resp1", _u)]
 
         mock_extract.side_effect = ["code0", "code1"]
         mock_sandbox.side_effect = [
@@ -149,7 +150,8 @@ class TestGenerateAndVote:
     @patch("orchestrator.main.extract_code")
     def test_selects_richest_among_successes(self, mock_extract, mock_sandbox):
         client = MagicMock()
-        client.generate.side_effect = ["resp0", "resp1"]
+        _u = {"input": 0, "output": 0}
+        client.generate.side_effect = [("resp0", _u), ("resp1", _u)]
 
         mock_extract.side_effect = ["code0", "code1"]
         mock_sandbox.side_effect = [
@@ -169,7 +171,8 @@ class TestGenerateAndVote:
     @patch("orchestrator.main.extract_code")
     def test_all_extraction_failures_returns_none(self, mock_extract, mock_sandbox):
         client = MagicMock()
-        client.generate.side_effect = ["no code", "no code"]
+        _u = {"input": 0, "output": 0}
+        client.generate.side_effect = [("no code", _u), ("no code", _u)]
         mock_extract.side_effect = [None, None]
 
         code, result = generate_and_vote(client, "prompt", 2)
@@ -181,7 +184,8 @@ class TestGenerateAndVote:
     @patch("orchestrator.main.extract_code")
     def test_partial_extraction_failure(self, mock_extract, mock_sandbox):
         client = MagicMock()
-        client.generate.side_effect = ["resp0", "resp1"]
+        _u = {"input": 0, "output": 0}
+        client.generate.side_effect = [("resp0", _u), ("resp1", _u)]
         mock_extract.side_effect = [None, "code1"]
         mock_sandbox.return_value = {"exit_code": 0, "stdout": "ok", "stderr": ""}
 
@@ -196,7 +200,8 @@ class TestGenerateAndVote:
     def test_falls_back_to_least_bad(self, mock_extract, mock_sandbox):
         """When none succeed, selects the least-bad failure."""
         client = MagicMock()
-        client.generate.side_effect = ["r0", "r1"]
+        _u = {"input": 0, "output": 0}
+        client.generate.side_effect = [("r0", _u), ("r1", _u)]
         mock_extract.side_effect = ["code0", "code1"]
         mock_sandbox.side_effect = [
             {"exit_code": 1, "stdout": "", "stderr": "critical"},
@@ -212,7 +217,8 @@ class TestGenerateAndVote:
     @patch("orchestrator.main.extract_code")
     def test_three_samples(self, mock_extract, mock_sandbox):
         client = MagicMock()
-        client.generate.side_effect = ["r0", "r1", "r2"]
+        _u = {"input": 0, "output": 0}
+        client.generate.side_effect = [("r0", _u), ("r1", _u), ("r2", _u)]
         mock_extract.side_effect = ["code0", "code1", "code2"]
         mock_sandbox.side_effect = [
             {"exit_code": 1, "stdout": "", "stderr": "err"},
@@ -229,7 +235,8 @@ class TestGenerateAndVote:
     @patch("orchestrator.main.extract_code")
     def test_exception_in_one_sample_handled(self, mock_extract, mock_sandbox):
         client = MagicMock()
-        client.generate.side_effect = [RuntimeError("LLM timeout"), "resp1"]
+        _u = {"input": 0, "output": 0}
+        client.generate.side_effect = [RuntimeError("LLM timeout"), ("resp1", _u)]
         mock_extract.return_value = "code1"
         mock_sandbox.return_value = {"exit_code": 0, "stdout": "ok", "stderr": ""}
 
@@ -242,7 +249,8 @@ class TestGenerateAndVote:
     @patch("orchestrator.main.extract_code")
     def test_prompt_hints_applied(self, mock_extract, mock_sandbox):
         client = MagicMock()
-        client.generate.side_effect = ["r0", "r1", "r2"]
+        _u = {"input": 0, "output": 0}
+        client.generate.side_effect = [("r0", _u), ("r1", _u), ("r2", _u)]
         mock_extract.side_effect = ["c0", "c1", "c2"]
         mock_sandbox.return_value = {"exit_code": 0, "stdout": "ok", "stderr": ""}
 
@@ -275,7 +283,7 @@ class TestMainLoopWithBestOfN:
         monkeypatch.delenv("UAS_BEST_OF_N", raising=False)
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
-        mock_client.generate.return_value = '```python\nprint("hello")\n```'
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
         mock_client_factory.return_value = mock_client
         mock_sandbox.return_value = {"exit_code": 0, "stdout": "hello", "stderr": ""}
 
@@ -297,7 +305,7 @@ class TestMainLoopWithBestOfN:
         monkeypatch.setenv("UAS_BEST_OF_N", "3")
         mock_args.return_value = argparse.Namespace(task=["task"], verbose=False)
         mock_client = MagicMock()
-        mock_client.generate.return_value = '```python\nprint("hello")\n```'
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
         mock_client_factory.return_value = mock_client
 
         # Verify sandbox OK, then first attempt fails, second attempt uses voting
@@ -327,7 +335,7 @@ class TestMainLoopWithBestOfN:
         monkeypatch.setenv("UAS_BEST_OF_N", "2")
         mock_args.return_value = argparse.Namespace(task=["task"], verbose=False)
         mock_client = MagicMock()
-        mock_client.generate.return_value = '```python\nprint("hello")\n```'
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
         mock_client_factory.return_value = mock_client
 
         mock_sandbox.side_effect = [
@@ -357,7 +365,7 @@ class TestMainLoopWithBestOfN:
         monkeypatch.delenv("UAS_STEP_ID", raising=False)
         mock_args.return_value = argparse.Namespace(task=["task"], verbose=False)
         mock_client = MagicMock()
-        mock_client.generate.return_value = '```python\nprint("hello")\n```'
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
         mock_client_factory.return_value = mock_client
 
         mock_sandbox.side_effect = [
@@ -381,8 +389,9 @@ class TestTaskAwareScoring:
     @patch("orchestrator.main.MINIMAL_MODE", False)
     @patch("orchestrator.main.get_llm_client")
     def test_files_priority_boosts_file_creation(self, mock_get_client):
+        _u = {"input": 0, "output": 0}
         mock_client = MagicMock()
-        mock_client.generate.return_value = '{"priorities": ["files", "stdout_content", "exit_code"]}'
+        mock_client.generate.return_value = ('{"priorities": ["files", "stdout_content", "exit_code"]}', _u)
         mock_get_client.return_value = mock_client
 
         with_files = {
@@ -399,15 +408,16 @@ class TestTaskAwareScoring:
         task = "create data files for analysis"
         score_with = score_result(with_files, task=task)
         _score_guidance_cache.clear()
-        mock_client.generate.return_value = '{"priorities": ["files", "stdout_content", "exit_code"]}'
+        mock_client.generate.return_value = ('{"priorities": ["files", "stdout_content", "exit_code"]}', _u)
         score_without = score_result(without_files, task=task)
         assert score_with > score_without
 
     @patch("orchestrator.main.MINIMAL_MODE", False)
     @patch("orchestrator.main.get_llm_client")
     def test_stdout_priority_boosts_computation(self, mock_get_client):
+        _u = {"input": 0, "output": 0}
         mock_client = MagicMock()
-        mock_client.generate.return_value = '{"priorities": ["stdout_content", "exit_code", "files"]}'
+        mock_client.generate.return_value = ('{"priorities": ["stdout_content", "exit_code", "files"]}', _u)
         mock_get_client.return_value = mock_client
 
         verbose = {
@@ -424,7 +434,7 @@ class TestTaskAwareScoring:
         task = "compute the factorial of 100"
         score_verbose = score_result(verbose, task=task)
         _score_guidance_cache.clear()
-        mock_client.generate.return_value = '{"priorities": ["stdout_content", "exit_code", "files"]}'
+        mock_client.generate.return_value = ('{"priorities": ["stdout_content", "exit_code", "files"]}', _u)
         score_quiet = score_result(quiet, task=task)
         assert score_verbose > score_quiet
 
@@ -444,7 +454,7 @@ class TestTaskAwareScoring:
     @patch("orchestrator.main.get_llm_client")
     def test_cache_prevents_multiple_llm_calls(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = '{"priorities": ["files", "exit_code", "stdout_content"]}'
+        mock_client.generate.return_value = ('{"priorities": ["files", "exit_code", "stdout_content"]}', {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         result = {"exit_code": 0, "stdout": "ok", "stderr": ""}
@@ -470,7 +480,7 @@ class TestTaskAwareScoring:
     @patch("orchestrator.main.get_llm_client")
     def test_invalid_priorities_ignored(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = '{"priorities": ["invalid_signal", "also_bad"]}'
+        mock_client.generate.return_value = ('{"priorities": ["invalid_signal", "also_bad"]}', {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         result = {"exit_code": 0, "stdout": "ok", "stderr": ""}
@@ -483,7 +493,7 @@ class TestTaskAwareScoring:
     @patch("orchestrator.main.get_llm_client")
     def test_prompt_includes_task(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = '{"priorities": ["exit_code"]}'
+        mock_client.generate.return_value = ('{"priorities": ["exit_code"]}', {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         score_result({"exit_code": 0, "stdout": "", "stderr": ""}, task="build a calculator")
@@ -498,7 +508,7 @@ class TestGetBestOfNLlm:
     def test_llm_recommends_n1_for_obvious_fix(self, mock_get_client, monkeypatch):
         monkeypatch.setenv("UAS_BEST_OF_N", "3")
         mock_client = MagicMock()
-        mock_client.generate.return_value = '{"n": 1}'
+        mock_client.generate.return_value = ('{"n": 1}', {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         result = _get_best_of_n_llm(2, "build a script", "NameError: name 'x' is not defined")
@@ -508,7 +518,7 @@ class TestGetBestOfNLlm:
     def test_llm_recommends_n3_for_complex_error(self, mock_get_client, monkeypatch):
         monkeypatch.setenv("UAS_BEST_OF_N", "3")
         mock_client = MagicMock()
-        mock_client.generate.return_value = '{"n": 3}'
+        mock_client.generate.return_value = ('{"n": 3}', {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         result = _get_best_of_n_llm(2, "build a web app", "architectural failure in routing")
@@ -528,7 +538,7 @@ class TestGetBestOfNLlm:
     def test_capped_by_uas_best_of_n(self, mock_get_client, monkeypatch):
         monkeypatch.setenv("UAS_BEST_OF_N", "2")
         mock_client = MagicMock()
-        mock_client.generate.return_value = '{"n": 3}'
+        mock_client.generate.return_value = ('{"n": 3}', {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         result = _get_best_of_n_llm(2, "task", "error")
@@ -546,7 +556,7 @@ class TestGetBestOfNLlm:
     def test_invalid_json_falls_back(self, mock_get_client, monkeypatch):
         monkeypatch.setenv("UAS_BEST_OF_N", "3")
         mock_client = MagicMock()
-        mock_client.generate.return_value = "not json at all"
+        mock_client.generate.return_value = ("not json at all", {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         result = _get_best_of_n_llm(2, "task", "error")
@@ -556,7 +566,7 @@ class TestGetBestOfNLlm:
     def test_json_in_markdown_fences(self, mock_get_client, monkeypatch):
         monkeypatch.setenv("UAS_BEST_OF_N", "3")
         mock_client = MagicMock()
-        mock_client.generate.return_value = '```json\n{"n": 2}\n```'
+        mock_client.generate.return_value = ('```json\n{"n": 2}\n```', {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         result = _get_best_of_n_llm(2, "task", "error")

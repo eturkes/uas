@@ -137,10 +137,10 @@ class TestShouldReplanLlm:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_returns_llm_decision_needs_replan(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps({
+        client.generate.return_value = (json.dumps({
             "needs_replan": True,
             "reason": "Step 2 expects data.csv but step 1 produced output.json",
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {
@@ -161,10 +161,10 @@ class TestShouldReplanLlm:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_returns_llm_decision_no_replan(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps({
+        client.generate.return_value = (json.dumps({
             "needs_replan": False,
             "reason": "Output matches expectations",
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {
@@ -206,7 +206,7 @@ class TestShouldReplanLlm:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_falls_back_to_heuristic_on_bad_json(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "I'm not sure about this."
+        client.generate.return_value = ("I'm not sure about this.", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {
@@ -245,10 +245,10 @@ class TestShouldReplanLlm:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_prompt_contains_step_context(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps({
+        client.generate.return_value = (json.dumps({
             "needs_replan": False,
             "reason": "All good",
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {
@@ -276,7 +276,8 @@ class TestShouldReplanLlm:
         client.generate.return_value = (
             "```json\n"
             '{"needs_replan": true, "reason": "format mismatch"}\n'
-            "```"
+            "```",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -304,7 +305,7 @@ class TestReplanRemainingSteps:
     @patch("architect.planner.get_llm_client")
     def test_returns_new_steps_on_success(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {
                 "title": "Process actual output",
                 "description": "Read actual.json and process it.",
@@ -312,7 +313,7 @@ class TestReplanRemainingSteps:
                 "verify": "processed.csv exists",
                 "environment": ["pandas"],
             },
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {
@@ -359,7 +360,7 @@ class TestReplanRemainingSteps:
     @patch("architect.planner.get_llm_client")
     def test_returns_none_on_unparseable_response(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "I can't do this task."
+        client.generate.return_value = ("I can't do this task.", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {
@@ -380,10 +381,10 @@ class TestReplanRemainingSteps:
     @patch("architect.planner.get_llm_client")
     def test_prompt_contains_context(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "New step", "description": "Do work",
              "depends_on": [1], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {
@@ -411,7 +412,7 @@ class TestReplanRemainingSteps:
     @patch("architect.planner.get_llm_client")
     def test_returns_none_on_empty_steps(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "[]"
+        client.generate.return_value = ("[]", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {
@@ -429,10 +430,10 @@ class TestReplanRemainingSteps:
     @patch("architect.planner.get_llm_client")
     def test_normalizes_zero_indexed_deps(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Step A", "description": "Do A",
              "depends_on": [0], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {
@@ -457,12 +458,12 @@ class TestReplanRemainingSteps:
         client = MagicMock()
         # LLM produces steps with IDs 3,4 (continuing after completed 1,2)
         # Step 4 depends on new step 3
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"id": 3, "title": "Fetch data", "description": "Download data",
              "depends_on": [1], "verify": "", "environment": []},
             {"id": 4, "title": "Process data", "description": "Process it",
              "depends_on": [3], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {
@@ -497,12 +498,12 @@ class TestReplanRemainingSteps:
         client = MagicMock()
         # LLM uses positional numbering: step 1 of new list depends on
         # completed step 1, step 2 of new list depends on step 1 of new list
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Fetch data", "description": "Download data",
              "depends_on": [1], "verify": "", "environment": []},
             {"title": "Process data", "description": "Process it",
              "depends_on": [1], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {
@@ -526,10 +527,10 @@ class TestReplanRemainingSteps:
     def test_rejects_self_referencing_new_step(self, mock_get_client):
         """New step that depends on itself should be rejected."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"id": 3, "title": "Bad step", "description": "Self-ref",
              "depends_on": [3], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {
@@ -564,12 +565,12 @@ class TestReplanBackwardLevel:
         client = MagicMock()
         # Re-plan returns a new step that depends only on step 1 (completed)
         # and a second step that depends on the new step
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "New analysis", "description": "Analyze data.csv",
              "depends_on": [1], "verify": "", "environment": []},
             {"title": "Generate report", "description": "Build report",
              "depends_on": [3], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         # Steps 1 and 2 completed; step 3 is pending (current execution level)
@@ -880,10 +881,10 @@ class TestReplanIntegration:
     @patch("architect.planner.get_llm_client")
     def test_replan_with_multiple_completed_steps(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Adjusted step", "description": "Use actual output",
              "depends_on": [1], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {

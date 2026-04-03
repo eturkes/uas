@@ -16,7 +16,7 @@ class TestEstimateComplexity:
     @patch("architect.planner.get_llm_client")
     def test_returns_trivial(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "trivial"
+        client.generate.return_value = ("trivial", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = estimate_complexity("print hello world")
@@ -25,7 +25,7 @@ class TestEstimateComplexity:
     @patch("architect.planner.get_llm_client")
     def test_returns_simple(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "simple"
+        client.generate.return_value = ("simple", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = estimate_complexity("download a file and parse it")
@@ -34,7 +34,7 @@ class TestEstimateComplexity:
     @patch("architect.planner.get_llm_client")
     def test_returns_medium(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "medium"
+        client.generate.return_value = ("medium", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = estimate_complexity("build a web scraper")
@@ -43,7 +43,7 @@ class TestEstimateComplexity:
     @patch("architect.planner.get_llm_client")
     def test_returns_complex(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "complex"
+        client.generate.return_value = ("complex", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = estimate_complexity("build a full web app with auth")
@@ -52,7 +52,7 @@ class TestEstimateComplexity:
     @patch("architect.planner.get_llm_client")
     def test_extracts_from_sentence(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "I think this is medium complexity."
+        client.generate.return_value = ("I think this is medium complexity.", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = estimate_complexity("some goal")
@@ -61,7 +61,7 @@ class TestEstimateComplexity:
     @patch("architect.planner.get_llm_client")
     def test_unparseable_defaults_medium(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "I'm not sure"
+        client.generate.return_value = ("I'm not sure", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = estimate_complexity("some goal")
@@ -79,7 +79,7 @@ class TestEstimateComplexity:
     @patch("architect.planner.get_llm_client")
     def test_prompt_includes_goal(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "simple"
+        client.generate.return_value = ("simple", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         estimate_complexity("build a calculator")
@@ -91,7 +91,7 @@ class TestEstimateComplexity:
         """If response contains multiple categories, the first match wins."""
         client = MagicMock()
         # "trivial" comes before "complex" in the check order
-        client.generate.return_value = "trivial but could be complex"
+        client.generate.return_value = ("trivial but could be complex", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = estimate_complexity("ambiguous goal")
@@ -231,7 +231,7 @@ class TestDecomposeGoalWithVoting:
         client = MagicMock()
         plan_json = self._make_plan_json(3)
         analysis = "<analysis>Analysis here</analysis>\n<complexity_assessment>medium</complexity_assessment>\n"
-        client.generate.return_value = analysis + plan_json
+        client.generate.return_value = (analysis + plan_json, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = decompose_goal_with_voting("build a scraper", n_samples=3)
@@ -246,7 +246,7 @@ class TestDecomposeGoalWithVoting:
         client = MagicMock()
         plan_json = self._make_plan_json(5)
         analysis = "<analysis>Complex task</analysis>\n<complexity_assessment>complex</complexity_assessment>\n"
-        client.generate.return_value = analysis + plan_json
+        client.generate.return_value = (analysis + plan_json, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = decompose_goal_with_voting("full web app", n_samples=3)
@@ -281,9 +281,9 @@ class TestDecomposeGoalWithVoting:
 
         analysis = "<analysis>Some analysis</analysis>\n<complexity_assessment>medium</complexity_assessment>\n"
         client.generate.side_effect = [
-            analysis + plan_a,
-            analysis + plan_b,
-            plan_c,
+            (analysis + plan_a, {"input": 0, "output": 0}),
+            (analysis + plan_b, {"input": 0, "output": 0}),
+            (plan_c, {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 
@@ -325,9 +325,9 @@ class TestDecomposeGoalWithVoting:
         ])
         analysis = "<analysis>x</analysis>\n<complexity_assessment>x</complexity_assessment>\n"
         client.generate.side_effect = [
-            analysis + good_plan,
-            "invalid json",
-            "also invalid",
+            (analysis + good_plan, {"input": 0, "output": 0}),
+            ("invalid json", {"input": 0, "output": 0}),
+            ("also invalid", {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 
@@ -356,7 +356,7 @@ class TestDecomposeGoalWithVoting:
         client = MagicMock()
         plan_json = self._make_plan_json(3)
         analysis = "<analysis>x</analysis>\n<complexity_assessment>x</complexity_assessment>\n"
-        client.generate.return_value = analysis + plan_json
+        client.generate.return_value = (analysis + plan_json, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         decompose_goal_with_voting("some goal", n_samples=3)
@@ -381,7 +381,7 @@ class TestDecomposeGoalWithVoting:
              "verify": "", "environment": []},
         ])
         analysis = "<analysis>x</analysis>\n<complexity_assessment>x</complexity_assessment>\n"
-        client.generate.return_value = analysis + plan
+        client.generate.return_value = (analysis + plan, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = decompose_goal_with_voting("goal", n_samples=1)

@@ -200,7 +200,7 @@ class TestMainLoop:
     def test_success_on_first_attempt(self, mock_client_factory, mock_sandbox, mock_args):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
-        mock_client.generate.return_value = '```python\nprint("hello")\n```'
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
         mock_client_factory.return_value = mock_client
         mock_sandbox.return_value = {"exit_code": 0, "stdout": "hello", "stderr": ""}
 
@@ -219,7 +219,7 @@ class TestMainLoop:
     def test_retry_on_sandbox_failure(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
-        mock_client.generate.return_value = '```python\nprint("hello")\n```'
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
         mock_client_factory.return_value = mock_client
         # Verify succeeds, first exec fails, second exec succeeds
         mock_sandbox.side_effect = [
@@ -241,7 +241,7 @@ class TestMainLoop:
     def test_failure_after_all_retries(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
-        mock_client.generate.return_value = '```python\nprint("hello")\n```'
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
         mock_client_factory.return_value = mock_client
         # Verify succeeds, all attempts fail
         mock_sandbox.side_effect = [
@@ -262,7 +262,7 @@ class TestMainLoop:
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         # LLM returns text with no code block
-        mock_client.generate.return_value = "I cannot do that."
+        mock_client.generate.return_value = ("I cannot do that.", {"input": 0, "output": 0})
         mock_client_factory.return_value = mock_client
         mock_sandbox.return_value = {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""}
 
@@ -291,7 +291,7 @@ class TestMainLoop:
     def test_uas_result_parsed_on_success(self, mock_client_factory, mock_sandbox, mock_args):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
-        mock_client.generate.return_value = '```python\nprint("hello")\n```'
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
         mock_client_factory.return_value = mock_client
         mock_sandbox.return_value = {
             "exit_code": 0,
@@ -310,10 +310,11 @@ class TestMainLoop:
     def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
+        _u = {"input": 0, "output": 0}
         # First response has syntax error (not truncation), second is valid
         mock_client.generate.side_effect = [
-            '```python\ndef foo(x):\n    x = = 2\n```',
-            '```python\nprint("hello")\n```',
+            ('```python\ndef foo(x):\n    x = = 2\n```', _u),
+            ('```python\nprint("hello")\n```', _u),
         ]
         mock_client_factory.return_value = mock_client
         mock_sandbox.side_effect = [
@@ -334,10 +335,11 @@ class TestMainLoop:
     def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
+        _u = {"input": 0, "output": 0}
         # First response uses input(), second is valid
         mock_client.generate.side_effect = [
-            '```python\nname = input("Enter name: ")\nprint(name)\n```',
-            '```python\nprint("hello")\n```',
+            ('```python\nname = input("Enter name: ")\nprint(name)\n```', _u),
+            ('```python\nprint("hello")\n```', _u),
         ]
         mock_client_factory.return_value = mock_client
         mock_sandbox.side_effect = [
@@ -398,7 +400,8 @@ class TestRetryStrategy:
     def test_llm_guidance_injected_into_prompt(self, mock_get_client):
         client = MagicMock()
         client.generate.return_value = (
-            "The error is a missing import. Add 'import os' at the top."
+            "The error is a missing import. Add 'import os' at the top.",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -424,7 +427,7 @@ class TestRetryStrategy:
     @patch("orchestrator.main.get_llm_client")
     def test_llm_empty_response_falls_back(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = ""
+        client.generate.return_value = ("", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         prompt = build_prompt("task", attempt=2,
@@ -443,7 +446,7 @@ class TestRetryStrategy:
     @patch("orchestrator.main.get_llm_client")
     def test_prompt_xml_structure_with_llm_guidance(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "Try a different approach using subprocess."
+        client.generate.return_value = ("Try a different approach using subprocess.", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         prompt = build_prompt("run a command", attempt=2,
@@ -458,7 +461,7 @@ class TestRetryStrategy:
     @patch("orchestrator.main.get_llm_client")
     def test_attempt_history_passed_to_llm(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "Use a different library for HTTP requests."
+        client.generate.return_value = ("Use a different library for HTTP requests.", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         history = [

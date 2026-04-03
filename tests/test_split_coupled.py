@@ -130,7 +130,7 @@ class TestSplitCoupledSteps:
     def test_splits_coupled_step(self, mock_get_client):
         """A step that creates and integrates should be split into two."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {
                 "title": "Create temporal analysis module",
                 "description": "Create temporal.py with analysis functions.",
@@ -145,7 +145,7 @@ class TestSplitCoupledSteps:
                 "verify": "pipeline uses temporal",
                 "environment": [],
             },
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = [
@@ -195,7 +195,7 @@ class TestSplitCoupledSteps:
     def test_bad_parse_keeps_step(self, mock_get_client):
         """If LLM returns unparseable response, the original step is kept."""
         client = MagicMock()
-        client.generate.return_value = "I cannot split this step."
+        client.generate.return_value = ("I cannot split this step.", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = [
@@ -208,10 +208,10 @@ class TestSplitCoupledSteps:
     def test_dependency_remapping_multiple_refs(self, mock_get_client):
         """Steps referencing the split step should be remapped to the integration step."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Create module", "description": "Create new module", "depends_on": [], "verify": "", "environment": []},
             {"title": "Integrate module", "description": "Wire into existing", "depends_on": [1], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = [
@@ -231,10 +231,10 @@ class TestSplitCoupledSteps:
     def test_no_step_creates_file_and_modifies_existing(self, mock_get_client):
         """After splitting, no step should both create and integrate."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Create analysis module", "description": "Write analysis.py", "depends_on": [], "verify": "", "environment": []},
             {"title": "Wire analysis into dashboard", "description": "Update dashboard to use analysis", "depends_on": [2], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = [

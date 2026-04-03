@@ -36,7 +36,8 @@ class TestDistillDependencyOutputLlm:
     def test_llm_extracts_csv_schema(self, mock_get_client):
         mock_client = MagicMock()
         mock_client.generate.return_value = (
-            "File: data.csv\nColumns: name (str), age (int), salary (float)"
+            "File: data.csv\nColumns: name (str), age (int), salary (float)",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = mock_client
 
@@ -59,7 +60,7 @@ class TestDistillDependencyOutputLlm:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_llm_extracts_file_path(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = "File path: output.json"
+        mock_client.generate.return_value = ("File path: output.json", {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         dep_step = {
@@ -117,7 +118,7 @@ class TestDistillDependencyOutputLlm:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_output_more_concise_than_template(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = "File: data.csv"
+        mock_client.generate.return_value = ("File: data.csv", {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         dep_step = {
@@ -137,7 +138,7 @@ class TestDistillDependencyOutputLlm:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_empty_llm_response_falls_back(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = ""
+        mock_client.generate.return_value = ("", {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         dep_step = {
@@ -157,7 +158,7 @@ class TestDistillDependencyOutputLlm:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_verification_preserved_in_llm_output(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = "File: out.txt"
+        mock_client.generate.return_value = ("File: out.txt", {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         dep_step = {
@@ -177,7 +178,7 @@ class TestDistillDependencyOutputLlm:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_events_emitted(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = "summary"
+        mock_client.generate.return_value = ("summary", {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         dep_step = {

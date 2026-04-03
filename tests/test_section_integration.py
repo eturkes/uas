@@ -81,16 +81,16 @@ class TestPostDecompositionPipeline:
 
             # First call: extract_requirements
             if idx == 0:
-                return json.dumps([
+                return (json.dumps([
                     "data simulator",
                     "ML model",
                     "SHAP analysis",
                     "dashboard",
-                ])
+                ]), {"input": 0, "output": 0})
 
             # Second call: verify_coverage (SHAP uncovered)
             if idx == 1:
-                return json.dumps([
+                return (json.dumps([
                     {"requirement": "data simulator", "covered": True,
                      "covering_steps": [1]},
                     {"requirement": "ML model", "covered": True,
@@ -99,30 +99,30 @@ class TestPostDecompositionPipeline:
                      "covering_steps": []},
                     {"requirement": "dashboard", "covered": True,
                      "covering_steps": [5]},
-                ])
+                ]), {"input": 0, "output": 0})
 
             # Third call: fill_coverage_gaps
             if idx == 2:
-                return json.dumps([{
+                return (json.dumps([{
                     "title": "SHAP explainability",
                     "description": "Compute SHAP values for the model",
                     "depends_on": [2],
                     "verify": "SHAP values computed",
                     "environment": ["shap"],
-                }])
+                }]), {"input": 0, "output": 0})
 
             # Fourth call: split_coupled_steps (for the coupled step)
             if idx == 3:
-                return json.dumps([
+                return (json.dumps([
                     {"title": "Create dashboard layout",
                      "description": "Build the dashboard skeleton",
                      "depends_on": [4], "verify": "", "environment": []},
                     {"title": "Wire data into dashboard",
                      "description": "Connect model outputs to dashboard",
                      "depends_on": [4, 5], "verify": "", "environment": []},
-                ])
+                ]), {"input": 0, "output": 0})
 
-            return "[]"
+            return ("[]", {"input": 0, "output": 0})
 
         client.generate.side_effect = _mock_generate
         mock_get_client.return_value = client
@@ -194,10 +194,10 @@ class TestCoverageReplanIntegration:
         """Requirements extracted by ensure_coverage are usable by
         replan_remaining_steps for protection."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Revised step", "description": "Updated approach",
              "depends_on": [1]},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
         mock_verify.return_value = [
             {"requirement": "data sim", "covered": True,
@@ -314,7 +314,7 @@ class TestCorrectionAndCoverage:
     def test_corrective_steps_are_valid_for_coverage(self, mock_get_client):
         """Corrective steps have the required fields for coverage analysis."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Fix: empty overview tab",
              "description": "Populate overview tab with cohort statistics",
              "depends_on": [3], "verify": "tab renders data",
@@ -323,7 +323,7 @@ class TestCorrectionAndCoverage:
              "description": "Correct locale mapping in translations.py",
              "depends_on": [1], "verify": "mapping test passes",
              "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = {
@@ -394,7 +394,7 @@ class TestComplexityScalingPipeline:
         ]
 
         client = MagicMock()
-        client.generate.return_value = json.dumps(expanded_plan)
+        client.generate.return_value = (json.dumps(expanded_plan), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         # Start with too few steps for a complex goal
@@ -443,14 +443,14 @@ class TestDAGIntegrity:
         """Splitting coupled steps and inserting checkpoints produces
         a valid acyclic DAG."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Create analysis module",
              "description": "Write analysis.py",
              "depends_on": [1], "verify": "", "environment": []},
             {"title": "Wire analysis into pipeline",
              "description": "Update pipeline.py to use analysis",
              "depends_on": [1, 2], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = [
@@ -530,7 +530,7 @@ class TestOverloadedStepSplitting:
         expanded = [_step(f"Step {i+1}", depends_on=[i] if i > 0 else [])
                     for i in range(10)]
         client = MagicMock()
-        client.generate.return_value = json.dumps(expanded)
+        client.generate.return_value = (json.dumps(expanded), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         # 8 steps but all overloaded

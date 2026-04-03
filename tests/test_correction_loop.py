@@ -50,14 +50,14 @@ class TestGenerateCorrective:
     def test_one_step_per_issue(self, mock_get_client):
         """Each validation issue should map to one corrective step."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Fix: empty overview tab",
              "description": "Populate the overview tab with cohort stats",
              "depends_on": [2], "verify": "", "environment": []},
             {"title": "Fix: motor column mapping",
              "description": "Correct JA->EN mapping for motor column",
              "depends_on": [1], "verify": "", "environment": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = _make_state()
@@ -82,7 +82,7 @@ class TestGenerateCorrective:
             for i in range(10)
         ])
         client = MagicMock()
-        client.generate.return_value = steps_json
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = _make_state()
@@ -122,7 +122,7 @@ class TestGenerateCorrective:
     def test_unparseable_response_returns_empty(self, mock_get_client):
         """If LLM returns garbage, return empty list gracefully."""
         client = MagicMock()
-        client.generate.return_value = "This is not JSON at all."
+        client.generate.return_value = ("This is not JSON at all.", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = _make_state()
@@ -136,9 +136,9 @@ class TestGenerateCorrective:
     def test_defaults_filled(self, mock_get_client):
         """Steps missing optional fields get defaults."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Fix X", "description": "Do X"},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = _make_state()
@@ -155,11 +155,11 @@ class TestGenerateCorrective:
     def test_malformed_steps_filtered(self, mock_get_client):
         """Steps without title or description are filtered out."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Good step", "description": "Has both fields"},
             {"title": "Missing desc"},  # no description
             {"description": "Missing title"},  # no title
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = _make_state()
@@ -174,9 +174,9 @@ class TestGenerateCorrective:
     def test_next_step_number_continues_from_state(self, mock_get_client):
         """Step numbering should continue from max existing step ID."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Fix", "description": "Fix it", "depends_on": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = _make_state(num_completed=5)

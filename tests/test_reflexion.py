@@ -28,13 +28,13 @@ class TestGenerateReflection:
     @patch("architect.planner.get_llm_client")
     def test_returns_structured_dict(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps({
+        client.generate.return_value = (json.dumps({
             "error_type": "dependency_error",
             "root_cause": "pandas not installed",
             "strategy_tried": "import pandas directly",
             "lesson": "always pip install first",
             "what_to_try_next": "add pip install pandas before import",
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "process data with pandas"}
@@ -48,7 +48,7 @@ class TestGenerateReflection:
     @patch("architect.planner.get_llm_client")
     def test_handles_code_fenced_json(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = '```json\n{"error_type": "logic_error", "root_cause": "off by one", "strategy_tried": "loop", "lesson": "check bounds", "what_to_try_next": "fix index"}\n```'
+        client.generate.return_value = ('```json\n{"error_type": "logic_error", "root_cause": "off by one", "strategy_tried": "loop", "lesson": "check bounds", "what_to_try_next": "fix index"}\n```', {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "iterate"}
@@ -59,7 +59,7 @@ class TestGenerateReflection:
     @patch("architect.planner.get_llm_client")
     def test_fallback_on_unparseable_response(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "This is not JSON at all."
+        client.generate.return_value = ("This is not JSON at all.", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "task"}
@@ -82,13 +82,13 @@ class TestGenerateReflection:
     @patch("architect.planner.get_llm_client")
     def test_truncates_long_output(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps({
+        client.generate.return_value = (json.dumps({
             "error_type": "logic_error",
             "root_cause": "bug",
             "strategy_tried": "x",
             "lesson": "y",
             "what_to_try_next": "z",
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "task"}
@@ -104,7 +104,7 @@ class TestReflectionHistoryInRewrite:
     @patch("architect.planner.get_llm_client")
     def test_reflections_included_in_prompt(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "Install dependencies first then create the data loader"
+        client.generate.return_value = ("Install dependencies first then create the data loader", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
@@ -140,7 +140,7 @@ class TestReflectionHistoryInRewrite:
     @patch("architect.planner.get_llm_client")
     def test_no_reflections_no_section(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "rewritten"
+        client.generate.return_value = ("rewritten", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "task"}
@@ -152,7 +152,7 @@ class TestReflectionHistoryInRewrite:
     @patch("architect.planner.get_llm_client")
     def test_empty_reflections_no_section(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "rewritten"
+        client.generate.return_value = ("rewritten", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "task"}
@@ -179,7 +179,7 @@ class TestTraceRootCause:
     @patch("architect.planner.get_llm_client")
     def test_identifies_self(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "SELF"
+        client.generate.return_value = ("SELF", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "process data", "depends_on": [1]}
@@ -196,7 +196,7 @@ class TestTraceRootCause:
     @patch("architect.planner.get_llm_client")
     def test_identifies_dependency(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "STEP_1"
+        client.generate.return_value = ("STEP_1", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "process data", "depends_on": [1]}
@@ -213,7 +213,7 @@ class TestTraceRootCause:
     @patch("architect.planner.get_llm_client")
     def test_invalid_dep_id_returns_self(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "STEP_99"
+        client.generate.return_value = ("STEP_99", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "task", "depends_on": [1]}
@@ -243,7 +243,7 @@ class TestTraceRootCause:
     @patch("architect.planner.get_llm_client")
     def test_prompt_contains_dependency_info(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "SELF"
+        client.generate.return_value = ("SELF", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "analyze results", "depends_on": [1, 2]}
@@ -268,7 +268,7 @@ class TestTraceRootCause:
     def test_handles_string_output(self, mock_get_client):
         """completed_outputs may contain plain strings instead of dicts."""
         client = MagicMock()
-        client.generate.return_value = "SELF"
+        client.generate.return_value = ("SELF", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "task", "depends_on": [1]}

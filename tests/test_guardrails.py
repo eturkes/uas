@@ -303,7 +303,7 @@ class TestLLMProjectStructure:
             "suggestions": ["Consider adding a Makefile"],
         })
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.llm_client.get_llm_client",
                     return_value=mock_client):
@@ -325,7 +325,7 @@ class TestLLMProjectStructure:
             "suggestions": [],
         })
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.llm_client.get_llm_client",
                     return_value=mock_client):

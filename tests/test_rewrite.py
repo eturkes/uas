@@ -17,9 +17,9 @@ class TestCheckRewriteQualityLLM:
     @patch("architect.planner.get_llm_client")
     def test_poor_quality_returns_true(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps(
+        client.generate.return_value = (json.dumps(
             {"quality": "poor", "reason": "repeats the error"}
-        )
+        ), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = _check_rewrite_quality("bad rewrite", "original task", "some error")
@@ -29,9 +29,9 @@ class TestCheckRewriteQualityLLM:
     @patch("architect.planner.get_llm_client")
     def test_good_quality_returns_false(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps(
+        client.generate.return_value = (json.dumps(
             {"quality": "good", "reason": "addresses root cause"}
-        )
+        ), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = _check_rewrite_quality("Create the output file with proper error handling", "original task", "some error")
@@ -67,7 +67,8 @@ class TestCheckRewriteQualityLLM:
     def test_json_in_code_fence_parsed(self, mock_get_client):
         client = MagicMock()
         client.generate.return_value = (
-            '```json\n{"quality": "poor", "reason": "bad"}\n```'
+            '```json\n{"quality": "poor", "reason": "bad"}\n```',
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -81,9 +82,9 @@ class TestRewriteQualityInReflectAndRewrite:
     def test_poor_quality_triggers_resampling(self, mock_get_client):
         client = MagicMock()
         client.generate.side_effect = [
-            "first rewrite attempt",
-            json.dumps({"quality": "poor", "reason": "not actionable"}),
-            "second rewrite attempt",
+            ("first rewrite attempt", {"input": 0, "output": 0}),
+            (json.dumps({"quality": "poor", "reason": "not actionable"}), {"input": 0, "output": 0}),
+            ("second rewrite attempt", {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 
@@ -97,8 +98,8 @@ class TestRewriteQualityInReflectAndRewrite:
     def test_good_quality_no_resampling(self, mock_get_client):
         client = MagicMock()
         client.generate.side_effect = [
-            "Create the output file with proper error handling",
-            json.dumps({"quality": "good", "reason": "addresses root cause"}),
+            ("Create the output file with proper error handling", {"input": 0, "output": 0}),
+            (json.dumps({"quality": "good", "reason": "addresses root cause"}), {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 
@@ -112,9 +113,9 @@ class TestRewriteQualityInReflectAndRewrite:
     def test_low_confidence_still_triggers_resampling(self, mock_get_client):
         client = MagicMock()
         client.generate.side_effect = [
-            "Create the initial implementation of the parser",
-            json.dumps({"quality": "good", "reason": "looks fine"}),
-            "Build the parser using a corrected approach",
+            ("Create the initial implementation of the parser", {"input": 0, "output": 0}),
+            (json.dumps({"quality": "good", "reason": "looks fine"}), {"input": 0, "output": 0}),
+            ("Build the parser using a corrected approach", {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 
@@ -139,7 +140,7 @@ class TestRewriteQualityInReflectAndRewrite:
         client = MagicMock()
         # First response: short and clean with action verb → heuristic fallback says not confused
         client.generate.side_effect = [
-            "Create the output file and validate results",
+            ("Create the output file and validate results", {"input": 0, "output": 0}),
             RuntimeError("quality check API down"),
         ]
         mock_get_client.return_value = client

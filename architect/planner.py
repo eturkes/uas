@@ -124,7 +124,7 @@ def generate_project_spec(
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "generate_spec"})
     try:
-        spec = client.generate(prompt, stream=True)
+        spec, _usage = client.generate(prompt, stream=True)
         event_log.emit(
             EventType.LLM_CALL_COMPLETE, data={"purpose": "generate_spec"},
         )
@@ -175,7 +175,7 @@ def research_goal(goal: str) -> str:
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "research_goal"})
     try:
-        result = client.generate(prompt, stream=True)
+        result, _usage = client.generate(prompt, stream=True)
         event_log.emit(
             EventType.LLM_CALL_COMPLETE, data={"purpose": "research_goal"}
         )
@@ -626,7 +626,7 @@ def decompose_goal(goal: str, spec: str = "",
     )
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "decompose_goal"})
-    response = client.generate(prompt, stream=True)
+    response, _usage = client.generate(prompt, stream=True)
     event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "decompose_goal"})
     steps = parse_steps_json(response)
     if not steps:
@@ -703,7 +703,8 @@ def estimate_complexity(goal: str) -> str:
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "estimate_complexity"})
     try:
-        response = client.generate(prompt).strip().lower()
+        response, _usage = client.generate(prompt)
+        response = response.strip().lower()
     except Exception as e:
         logger.warning("Complexity estimation failed, defaulting to medium: %s", e)
         return "medium"
@@ -875,7 +876,7 @@ def enforce_minimum_steps(
     event_log.emit(EventType.LLM_CALL_START,
                    data={"purpose": "enforce_minimum_steps"})
     try:
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
     except Exception as e:
         logger.warning("  Re-decomposition failed: %s — keeping original plan.", e)
         return steps
@@ -972,7 +973,7 @@ def select_best_plan(goal: str, plans: list[list[dict]]) -> tuple[list[dict], in
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "select_best_plan"})
     try:
         client = get_llm_client(role="planner")
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
         event_log.emit(
             EventType.LLM_CALL_COMPLETE, data={"purpose": "select_best_plan"}
         )
@@ -1104,7 +1105,7 @@ def decompose_goal_with_voting(
             prompt = DECOMPOSITION_PROMPT.format(
                 goal=goal, spec=spec_formatted,
             ) + suffix
-            response = client.generate(prompt)
+            response, _usage = client.generate(prompt)
             steps = parse_steps_json(response)
             if not steps:
                 return None
@@ -1265,7 +1266,7 @@ def extract_requirements(goal: str) -> list[str]:
     event_log.emit(EventType.LLM_CALL_START,
                    data={"purpose": "extract_requirements"})
     try:
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
     except Exception as e:
         logger.warning("Requirement extraction failed: %s", e)
         return []
@@ -1323,7 +1324,7 @@ def verify_coverage(
     event_log.emit(EventType.LLM_CALL_START,
                    data={"purpose": "verify_coverage"})
     try:
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
     except Exception as e:
         logger.warning("Coverage verification failed: %s", e)
         # Fail-open: assume all covered to avoid blocking execution
@@ -1391,7 +1392,7 @@ def fill_coverage_gaps(
     event_log.emit(EventType.LLM_CALL_START,
                    data={"purpose": "fill_coverage_gaps"})
     try:
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
     except Exception as e:
         logger.warning("Gap-filling failed: %s", e)
         return []
@@ -1581,7 +1582,7 @@ def split_coupled_steps(steps: list[dict]) -> list[dict]:
                        data={"purpose": "split_coupled_step",
                              "step": old_num})
         try:
-            response = client.generate(prompt)
+            response, _usage = client.generate(prompt)
         except Exception as e:
             logger.warning("  Split failed for step %d: %s — keeping as-is.", old_num, e)
             remap[old_num] = next_new
@@ -1916,7 +1917,7 @@ def critique_and_refine_plan(goal: str, steps: list[dict]) -> list[dict]:
     event_log = get_event_log()
     try:
         event_log.emit(EventType.LLM_CALL_START, data={"purpose": "critique_plan"})
-        response = client.generate(prompt, stream=True)
+        response, _usage = client.generate(prompt, stream=True)
         event_log.emit(EventType.LLM_CALL_COMPLETE, data={"purpose": "critique_plan"})
     except Exception as e:
         logger.warning("Plan critique failed, using original plan: %s", e)
@@ -2090,7 +2091,7 @@ def generate_reflection(step: dict, stdout: str, stderr: str,
     event_log.emit(EventType.LLM_CALL_START,
                    data={"purpose": "generate_reflection"})
     try:
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
         event_log.emit(EventType.LLM_CALL_COMPLETE,
                        data={"purpose": "generate_reflection"})
     except Exception as e:
@@ -2193,7 +2194,8 @@ def trace_root_cause(step: dict, error: str,
     event_log.emit(EventType.LLM_CALL_START,
                    data={"purpose": "trace_root_cause"})
     try:
-        response = client.generate(prompt).strip().upper()
+        response, _usage = client.generate(prompt)
+        response = response.strip().upper()
         event_log.emit(EventType.LLM_CALL_COMPLETE,
                        data={"purpose": "trace_root_cause"})
     except Exception as e:
@@ -2374,7 +2376,7 @@ def _check_rewrite_quality(result: str, original_desc: str, error: str) -> bool:
             event_log = get_event_log()
             event_log.emit(EventType.LLM_CALL_START,
                            data={"purpose": "rewrite_quality_check"})
-            response = client.generate(prompt)
+            response, _usage = client.generate(prompt)
             event_log.emit(EventType.LLM_CALL_COMPLETE,
                            data={"purpose": "rewrite_quality_check"})
 
@@ -2473,7 +2475,7 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START,
                    data={"purpose": "reflect_and_rewrite"})
-    response = client.generate(prompt)
+    response, _usage = client.generate(prompt)
     event_log.emit(EventType.LLM_CALL_COMPLETE,
                    data={"purpose": "reflect_and_rewrite"})
 
@@ -2492,7 +2494,7 @@ def reflect_and_rewrite(step: dict, orchestrator_stdout: str,
         logger.warning("  Low-confidence reflection, resampling rewrite...")
     if _check_rewrite_quality(result, step["description"], stderr_trimmed) or low_confidence:
         logger.warning("  Red-flag detected in rewrite output, resampling...")
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
         result = re.sub(r"<diagnosis>.*?</diagnosis>", "", response, flags=re.DOTALL)
         result = re.sub(r"<counterfactual>.*?</counterfactual>", "", result, flags=re.DOTALL)
         result = re.sub(r"<strategies>.*?</strategies>", "", result, flags=re.DOTALL)
@@ -2584,7 +2586,7 @@ def merge_steps_with_llm(goal: str, steps: list[dict]) -> list[dict]:
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "merge_steps"})
     try:
         client = get_llm_client(role="planner")
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
         event_log.emit(
             EventType.LLM_CALL_COMPLETE, data={"purpose": "merge_steps"}
         )
@@ -3034,7 +3036,7 @@ def replan_remaining_steps(goal: str, state: dict,
                        data={"purpose": "replan_remaining_steps",
                              "attempt": attempt + 1})
         try:
-            response = client.generate(prompt, stream=True)
+            response, _usage = client.generate(prompt, stream=True)
             event_log.emit(EventType.LLM_CALL_COMPLETE,
                            data={"purpose": "replan_remaining_steps",
                                  "attempt": attempt + 1})
@@ -3226,7 +3228,8 @@ def decompose_failing_step(step: dict, orchestrator_stdout: str,
         stderr=stderr_trimmed,
     )
 
-    result = client.generate(prompt).strip()
+    result, _usage = client.generate(prompt)
+    result = result.strip()
     return result if result else step["description"]
 
 
@@ -3316,7 +3319,7 @@ def generate_corrective_steps(
     event_log.emit(EventType.LLM_CALL_START,
                    data={"purpose": "generate_corrective_steps"})
     try:
-        response = client.generate(prompt)
+        response, _usage = client.generate(prompt)
     except Exception as e:
         logger.warning("Corrective step generation failed: %s", e)
         return []

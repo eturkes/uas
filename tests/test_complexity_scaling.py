@@ -155,7 +155,7 @@ class TestEnforceMinimumSteps:
         # Mock LLM returning a larger plan
         expanded_steps = self._make_steps(10)
         client = MagicMock()
-        client.generate.return_value = json.dumps(expanded_steps)
+        client.generate.return_value = (json.dumps(expanded_steps), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = enforce_minimum_steps("complex goal", original_steps, "complex")
@@ -179,7 +179,7 @@ class TestEnforceMinimumSteps:
         """If the LLM returns unparseable JSON, original steps are preserved."""
         original_steps = self._make_steps(3)
         client = MagicMock()
-        client.generate.return_value = "not valid json at all"
+        client.generate.return_value = ("not valid json at all", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = enforce_minimum_steps("complex goal", original_steps, "complex")
@@ -190,7 +190,7 @@ class TestEnforceMinimumSteps:
         """If re-decomposition returns fewer steps than original, keep original."""
         original_steps = self._make_steps(5)
         client = MagicMock()
-        client.generate.return_value = json.dumps(self._make_steps(2))
+        client.generate.return_value = (json.dumps(self._make_steps(2)), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = enforce_minimum_steps("complex goal", original_steps, "complex")
@@ -202,7 +202,7 @@ class TestEnforceMinimumSteps:
         original_steps = self._make_steps(2)
         expanded = self._make_steps(5)
         client = MagicMock()
-        client.generate.return_value = json.dumps(expanded)
+        client.generate.return_value = (json.dumps(expanded), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = enforce_minimum_steps("medium goal", original_steps, "medium")
@@ -226,7 +226,7 @@ class TestEnforceMinimumSteps:
 
         expanded = self._make_steps(12)
         client = MagicMock()
-        client.generate.return_value = json.dumps(expanded)
+        client.generate.return_value = (json.dumps(expanded), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = enforce_minimum_steps("complex goal", steps, "complex")
@@ -250,7 +250,7 @@ class TestEnforceMinimumSteps:
             {"title": "D", "description": "Do D", "depends_on": [1, 2]},
         ]
         client = MagicMock()
-        client.generate.return_value = json.dumps(new_steps)
+        client.generate.return_value = (json.dumps(new_steps), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = enforce_minimum_steps("medium goal", original_steps, "medium")

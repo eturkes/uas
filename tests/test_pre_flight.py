@@ -22,7 +22,7 @@ class TestPreFlightLLM:
             "safe_to_run": False,
         })
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.main.get_llm_client", return_value=mock_client):
             errors, warnings = pre_execution_check_llm(code, "analyze data")
@@ -44,7 +44,7 @@ class TestPreFlightLLM:
             "safe_to_run": True,
         })
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.main.get_llm_client", return_value=mock_client):
             errors, warnings = pre_execution_check_llm(code, "read data")
@@ -88,7 +88,7 @@ class TestPreFlightLLM:
         )
         llm_response = json.dumps({"issues": [], "safe_to_run": True})
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.main.get_llm_client", return_value=mock_client):
             errors, warnings = pre_execution_check_llm(code, "simple task")
@@ -100,7 +100,7 @@ class TestPreFlightLLM:
         code = 'print(f"UAS_RESULT: ok")\n'
         llm_response = '```json\n{"issues": [{"description": "no pip install", "severity": "critical"}], "safe_to_run": false}\n```'
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.main.get_llm_client", return_value=mock_client):
             errors, warnings = pre_execution_check_llm(code, "task")
@@ -118,7 +118,7 @@ class TestPreFlightLLM:
         code = 'print(f"UAS_RESULT: ok")\n'
         llm_response = json.dumps({"issues": [], "safe_to_run": False})
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.main.get_llm_client", return_value=mock_client):
             errors, warnings = pre_execution_check_llm(code, "task")
@@ -130,7 +130,7 @@ class TestPreFlightLLM:
         code = 'print(f"UAS_RESULT: ok")\n'
         llm_response = json.dumps({"issues": [], "safe_to_run": True})
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
         mock_event_log = MagicMock()
 
         with patch("orchestrator.main.get_llm_client", return_value=mock_client), \

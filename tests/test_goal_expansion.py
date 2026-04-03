@@ -39,7 +39,7 @@ class TestGenerateProjectSpec:
     @patch("architect.planner.get_llm_client")
     def test_returns_spec_for_medium_goal(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = SAMPLE_SPEC
+        client.generate.return_value = (SAMPLE_SPEC, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = generate_project_spec("analyze sales data", complexity="medium")
@@ -50,7 +50,7 @@ class TestGenerateProjectSpec:
     @patch("architect.planner.get_llm_client")
     def test_returns_spec_for_complex_goal(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = SAMPLE_SPEC
+        client.generate.return_value = (SAMPLE_SPEC, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = generate_project_spec("build a dashboard", complexity="complex")
@@ -65,7 +65,7 @@ class TestGenerateProjectSpec:
     @patch("architect.planner.get_llm_client")
     def test_returns_spec_for_simple_goal(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = SAMPLE_SPEC
+        client.generate.return_value = (SAMPLE_SPEC, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = generate_project_spec("download a file", complexity="simple")
@@ -83,7 +83,7 @@ class TestGenerateProjectSpec:
     @patch("architect.planner.get_llm_client")
     def test_empty_response_returns_empty(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "   "
+        client.generate.return_value = ("   ", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = generate_project_spec("goal", complexity="medium")
@@ -92,7 +92,7 @@ class TestGenerateProjectSpec:
     @patch("architect.planner.get_llm_client")
     def test_whitespace_stripped(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "\n  # Project Specification\n\n## 1. Overview\nTest  \n"
+        client.generate.return_value = ("\n  # Project Specification\n\n## 1. Overview\nTest  \n", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = generate_project_spec("goal", complexity="medium")
@@ -102,7 +102,7 @@ class TestGenerateProjectSpec:
     @patch("architect.planner.get_llm_client")
     def test_uses_planner_role(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = SAMPLE_SPEC
+        client.generate.return_value = (SAMPLE_SPEC, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         generate_project_spec("any goal", complexity="medium")
@@ -111,7 +111,7 @@ class TestGenerateProjectSpec:
     @patch("architect.planner.get_llm_client")
     def test_prompt_includes_goal(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = SAMPLE_SPEC
+        client.generate.return_value = (SAMPLE_SPEC, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         generate_project_spec("build a web scraper", complexity="medium")
@@ -121,7 +121,7 @@ class TestGenerateProjectSpec:
     @patch("architect.planner.get_llm_client")
     def test_research_context_included_in_prompt(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = SAMPLE_SPEC
+        client.generate.return_value = (SAMPLE_SPEC, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         generate_project_spec(
@@ -135,7 +135,7 @@ class TestGenerateProjectSpec:
     @patch("architect.planner.get_llm_client")
     def test_no_research_no_tags(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = SAMPLE_SPEC
+        client.generate.return_value = (SAMPLE_SPEC, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         generate_project_spec("build something", complexity="medium")
@@ -146,7 +146,7 @@ class TestGenerateProjectSpec:
     def test_default_complexity_is_medium(self, mock_get_client):
         """Default complexity should not skip spec generation."""
         client = MagicMock()
-        client.generate.return_value = SAMPLE_SPEC
+        client.generate.return_value = (SAMPLE_SPEC, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = generate_project_spec("do something")

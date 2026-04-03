@@ -89,7 +89,7 @@ class TestCritiqueAndRefinePlan:
     @patch("architect.planner.get_llm_client")
     def test_plan_ok_returns_original(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "PLAN_OK"
+        client.generate.return_value = ("PLAN_OK", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = self._make_steps()
@@ -103,7 +103,7 @@ class TestCritiqueAndRefinePlan:
              "verify": "check it", "environment": []},
         ]
         client = MagicMock()
-        client.generate.return_value = json.dumps(refined)
+        client.generate.return_value = (json.dumps(refined), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = self._make_steps()
@@ -114,7 +114,7 @@ class TestCritiqueAndRefinePlan:
     @patch("architect.planner.get_llm_client")
     def test_unparseable_response_returns_original(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "I have some thoughts but no JSON"
+        client.generate.return_value = ("I have some thoughts but no JSON", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = self._make_steps()
@@ -139,7 +139,8 @@ class TestReflectAndRewrite:
         client.generate.return_value = (
             "<diagnosis>Logic error in parsing</diagnosis>\n"
             "<strategies>1. Use regex. 2. Use json. Pick json.</strategies>\n"
-            "Improved task: parse the data using json.loads"
+            "Improved task: parse the data using json.loads",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -153,7 +154,7 @@ class TestReflectAndRewrite:
     @patch("architect.planner.get_llm_client")
     def test_llm_driven_strategy_menu_in_prompt(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "Create the module using a completely different approach"
+        client.generate.return_value = ("Create the module using a completely different approach", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
@@ -174,7 +175,7 @@ class TestReflectAndRewrite:
     @patch("architect.planner.get_llm_client")
     def test_multiple_attempts_count(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "Build a final defensive implementation of the parser"
+        client.generate.return_value = ("Build a final defensive implementation of the parser", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
@@ -195,7 +196,7 @@ class TestReflectAndRewrite:
     def test_red_flag_excessive_length_resamples(self, mock_get_client):
         client = MagicMock()
         long_response = "x" * 10000
-        client.generate.side_effect = [long_response, "Create a fixed implementation of the task"]
+        client.generate.side_effect = [(long_response, {"input": 0, "output": 0}), ("Create a fixed implementation of the task", {"input": 0, "output": 0})]
         mock_get_client.return_value = client
 
         step = {"description": "short task"}
@@ -210,8 +211,8 @@ class TestReflectAndRewrite:
         error_text = "A" * 300
         # First response contains the error verbatim
         client.generate.side_effect = [
-            f"some prefix {error_text} some suffix",
-            "Create a clean implementation of the parser",
+            (f"some prefix {error_text} some suffix", {"input": 0, "output": 0}),
+            ("Create a clean implementation of the parser", {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 
@@ -224,7 +225,8 @@ class TestReflectAndRewrite:
     def test_empty_result_returns_original(self, mock_get_client):
         client = MagicMock()
         client.generate.return_value = (
-            "<diagnosis>x</diagnosis><strategies>y</strategies>"
+            "<diagnosis>x</diagnosis><strategies>y</strategies>",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -237,7 +239,7 @@ class TestReflectAndRewrite:
     def test_stdout_stderr_trimmed_in_prompt(self, mock_get_client):
         """Long stdout and stderr are trimmed to avoid flooding the prompt."""
         client = MagicMock()
-        client.generate.return_value = "rewritten"
+        client.generate.return_value = ("rewritten", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "task"}
@@ -255,7 +257,7 @@ class TestReflectAndRewrite:
     @patch("architect.planner.get_llm_client")
     def test_previous_attempts_included(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "Create an improved implementation of the data loader"
+        client.generate.return_value = ("Create an improved implementation of the data loader", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "do something"}
@@ -275,7 +277,7 @@ class TestReflectAndRewrite:
     @patch("architect.planner.get_llm_client")
     def test_no_previous_attempts_section_when_none(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "rewritten"
+        client.generate.return_value = ("rewritten", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "task"}
@@ -290,7 +292,8 @@ class TestReflectAndRewrite:
             "<diagnosis>Logic error</diagnosis>\n"
             "<counterfactual>Root cause is in this step, not a dependency.</counterfactual>\n"
             "<strategies>1. Fix parsing. Pick 1.</strategies>\n"
-            "Improved: fix the parsing logic"
+            "Improved: fix the parsing logic",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -322,7 +325,8 @@ class TestDecomposeFailingStep:
     def test_returns_decomposed_description(self, mock_get_client):
         client = MagicMock()
         client.generate.return_value = (
-            "Phase 1: download the file. Phase 2: parse it. Phase 3: save results."
+            "Phase 1: download the file. Phase 2: parse it. Phase 3: save results.",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -333,7 +337,7 @@ class TestDecomposeFailingStep:
     @patch("architect.planner.get_llm_client")
     def test_empty_returns_original(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "  "
+        client.generate.return_value = ("  ", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "original task"}
@@ -343,7 +347,7 @@ class TestDecomposeFailingStep:
     @patch("architect.planner.get_llm_client")
     def test_prompt_includes_failure_context(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "decomposed"
+        client.generate.return_value = ("decomposed", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"description": "my task"}
@@ -361,7 +365,8 @@ class TestResearchGoal:
         client.generate.return_value = (
             "1. Key findings: Use OpenAPI 3.1 specification.\n"
             "2. Recommended: pandas 2.1.0\n"
-            "3. Pitfalls: Avoid manual schema validation.\n"
+            "3. Pitfalls: Avoid manual schema validation.\n",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -384,7 +389,7 @@ class TestResearchGoal:
     @patch("architect.planner.get_llm_client")
     def test_returns_empty_on_blank_response(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "   "
+        client.generate.return_value = ("   ", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         result = research_goal("some goal")
@@ -393,7 +398,7 @@ class TestResearchGoal:
     @patch("architect.planner.get_llm_client")
     def test_prompt_contains_research_instructions(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "No additional research needed"
+        client.generate.return_value = ("No additional research needed", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         research_goal("Print hello world")
@@ -410,7 +415,7 @@ class TestSpecInDecomposition:
             {"title": "step1", "description": "do X", "depends_on": []}
         ])
         client = MagicMock()
-        client.generate.return_value = steps_json
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         spec = "## 1. Overview\nBuild an analytics tool using OpenAPI 3.1 standards."
@@ -427,7 +432,7 @@ class TestSpecInDecomposition:
             {"title": "step1", "description": "do X", "depends_on": []}
         ])
         client = MagicMock()
-        client.generate.return_value = steps_json
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         decompose_goal("Print hello", spec="")
@@ -443,7 +448,7 @@ class TestSpecInDecomposition:
         ])
         client = MagicMock()
         # Return valid steps for all generate calls (plan generation + selection)
-        client.generate.return_value = steps_json
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         spec = "## 8. Constraints\nUse library X v3.0 for best results."
@@ -464,7 +469,7 @@ class TestSpecInDecomposition:
             {"title": "s1", "description": "d1", "depends_on": []}
         ])
         client = MagicMock()
-        client.generate.return_value = steps_json
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         spec = "## 1. Overview\nRelevant finding here."
@@ -484,7 +489,7 @@ class TestSpecInDecomposition:
             {"title": "s1", "description": "d1", "depends_on": []}
         ])
         client = MagicMock()
-        client.generate.return_value = steps_json
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         decompose_goal_with_voting(

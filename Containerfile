@@ -22,6 +22,8 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && ln -sf /root/.local/bin/uv /usr/local/bin/uv
 
+COPY config.py .
+COPY hooks.py .
 COPY orchestrator/ ./orchestrator/
 COPY architect/ ./architect/
 COPY entrypoint.sh .

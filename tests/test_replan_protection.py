@@ -123,9 +123,9 @@ class TestReplanCoverageRetry:
     ):
         """If the first replan covers all requirements, no retry needed."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "New step", "description": "Do X", "depends_on": [1]},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
         mock_verify.return_value = [
             {"requirement": "model", "covered": True, "covering_steps": [2]},
@@ -158,9 +158,9 @@ class TestReplanCoverageRetry:
         """If first attempt drops a requirement, retry with dropped info."""
         client = MagicMock()
         # Both attempts return valid steps
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Step A", "description": "Do A", "depends_on": [1]},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         # First call: SHAP uncovered; second call: all covered
@@ -201,10 +201,10 @@ class TestReplanCoverageRetry:
     ):
         """After 2 retries, fall back to fill_coverage_gaps."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Partial", "description": "Does not cover SHAP",
              "depends_on": [1]},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         # All 3 attempts (1 initial + 2 retries) leave SHAP uncovered
@@ -246,9 +246,9 @@ class TestReplanCoverageRetry:
     ):
         """Without requirements, replan works as before (no coverage check)."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "New step", "description": "Do X", "depends_on": [1]},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         state = _make_state(
@@ -276,16 +276,16 @@ class TestReplanCoverageRetry:
         client = MagicMock()
         # First attempt: partial plan; second attempt: complete plan
         client.generate.side_effect = [
-            json.dumps([
+            (json.dumps([
                 {"title": "Partial", "description": "No SHAP",
                  "depends_on": [1]},
-            ]),
-            json.dumps([
+            ]), {"input": 0, "output": 0}),
+            (json.dumps([
                 {"title": "Full", "description": "With SHAP",
                  "depends_on": [1]},
                 {"title": "SHAP step", "description": "SHAP analysis",
                  "depends_on": [1]},
-            ]),
+            ]), {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 
@@ -331,9 +331,9 @@ class TestStateRequirementsField:
     ):
         """When state has requirements, they appear as protected in prompt."""
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"title": "Step", "description": "Do it", "depends_on": [1]},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
         mock_verify.return_value = [
             {"requirement": "subgroup discovery", "covered": True,

@@ -38,7 +38,7 @@ class TestValidateWorkspaceLLM:
             "summary": "The workspace has a file but it does not contain CSV parsing output.",
         })
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.llm_client.get_llm_client",
                     return_value=mock_client):
@@ -67,7 +67,7 @@ class TestValidateWorkspaceLLM:
             "summary": "Workspace contains a parser and statistics output as expected.",
         })
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.llm_client.get_llm_client",
                     return_value=mock_client):
@@ -120,7 +120,7 @@ class TestValidateWorkspaceLLM:
             "summary": "App correctly prints hello world.",
         })
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("architect.main.MINIMAL_MODE", False), \
              patch("orchestrator.llm_client.get_llm_client",
@@ -149,7 +149,7 @@ class TestValidateWorkspaceLLM:
             "summary": "Report file exists but has no content.",
         })
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("architect.main.MINIMAL_MODE", False), \
              patch("orchestrator.llm_client.get_llm_client",
@@ -184,7 +184,7 @@ class TestValidateWorkspaceLLM:
         state = self._make_state()
         llm_response = '```json\n{"goal_satisfied": true, "confidence": "high", "issues": [], "summary": "OK"}\n```'
         mock_client = MagicMock()
-        mock_client.generate.return_value = llm_response
+        mock_client.generate.return_value = (llm_response, {"input": 0, "output": 0})
 
         with patch("orchestrator.llm_client.get_llm_client",
                     return_value=mock_client):

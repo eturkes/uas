@@ -26,10 +26,10 @@ class TestLLMRetryDecision:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_llm_continue_false_stops_retries(self, mock_get_client, mock_event_log):
         client = MagicMock()
-        client.generate.return_value = json.dumps({
+        client.generate.return_value = (json.dumps({
             "continue": False,
             "reason": "repeated dependency error with no new approach",
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = client
         mock_event_log.return_value = MagicMock()
 
@@ -47,10 +47,10 @@ class TestLLMRetryDecision:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_llm_continue_true_allows_retries(self, mock_get_client, mock_event_log):
         client = MagicMock()
-        client.generate.return_value = json.dumps({
+        client.generate.return_value = (json.dumps({
             "continue": True,
             "reason": "new approach suggested using csv module",
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = client
         mock_event_log.return_value = MagicMock()
 
@@ -82,10 +82,10 @@ class TestLLMRetryDecision:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_hard_ceiling_respected_even_with_llm_continue(self, mock_get_client, mock_event_log):
         client = MagicMock()
-        client.generate.return_value = json.dumps({
+        client.generate.return_value = (json.dumps({
             "continue": True,
             "reason": "should keep trying",
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         step = {"id": 1, "description": "task"}
@@ -101,7 +101,7 @@ class TestLLMRetryDecision:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_llm_response_with_code_fences(self, mock_get_client, mock_event_log):
         client = MagicMock()
-        client.generate.return_value = '```json\n{"continue": false, "reason": "stagnating"}\n```'
+        client.generate.return_value = ('```json\n{"continue": false, "reason": "stagnating"}\n```', {"input": 0, "output": 0})
         mock_get_client.return_value = client
         mock_event_log.return_value = MagicMock()
 
@@ -115,7 +115,7 @@ class TestLLMRetryDecision:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_llm_unparseable_response_falls_back(self, mock_get_client, mock_event_log):
         client = MagicMock()
-        client.generate.return_value = "I think you should keep trying!"
+        client.generate.return_value = ("I think you should keep trying!", {"input": 0, "output": 0})
         mock_get_client.return_value = client
         mock_event_log.return_value = MagicMock()
 
@@ -136,7 +136,7 @@ class TestLLMRetryDecision:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_event_log_emitted(self, mock_get_client, mock_event_log):
         client = MagicMock()
-        client.generate.return_value = json.dumps({"continue": True, "reason": "ok"})
+        client.generate.return_value = (json.dumps({"continue": True, "reason": "ok"}), {"input": 0, "output": 0})
         mock_get_client.return_value = client
         event_log = MagicMock()
         mock_event_log.return_value = event_log

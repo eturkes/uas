@@ -21,11 +21,11 @@ class TestExtractRequirements:
     @patch("architect.planner.get_llm_client")
     def test_parses_json_array(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             "data simulator",
             "cleaning pipeline",
             "XGBoost model",
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         reqs = extract_requirements("Build a data pipeline with ML model")
@@ -37,7 +37,8 @@ class TestExtractRequirements:
         client.generate.return_value = (
             "```json\n"
             '["req A", "req B"]\n'
-            "```"
+            "```",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -48,7 +49,8 @@ class TestExtractRequirements:
     def test_extracts_from_surrounding_text(self, mock_get_client):
         client = MagicMock()
         client.generate.return_value = (
-            'Here are the requirements: ["alpha", "beta"] hope that helps.'
+            'Here are the requirements: ["alpha", "beta"] hope that helps.',
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -67,7 +69,7 @@ class TestExtractRequirements:
     @patch("architect.planner.get_llm_client")
     def test_returns_empty_on_unparseable(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = "I cannot parse this goal."
+        client.generate.return_value = ("I cannot parse this goal.", {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         reqs = extract_requirements("Goal text")
@@ -76,7 +78,7 @@ class TestExtractRequirements:
     @patch("architect.planner.get_llm_client")
     def test_prompt_includes_goal(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = '["req1"]'
+        client.generate.return_value = ('["req1"]', {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         extract_requirements("Build a dashboard")
@@ -92,10 +94,10 @@ class TestVerifyCoverage:
     @patch("architect.planner.get_llm_client")
     def test_all_covered(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"requirement": "data simulator", "covered": True, "covering_steps": [1]},
             {"requirement": "ML model", "covered": True, "covering_steps": [2]},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = [
@@ -109,10 +111,10 @@ class TestVerifyCoverage:
     @patch("architect.planner.get_llm_client")
     def test_detects_uncovered(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {"requirement": "data simulator", "covered": True, "covering_steps": [1]},
             {"requirement": "SHAP explainability", "covered": False, "covering_steps": []},
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         steps = [
@@ -153,7 +155,8 @@ class TestVerifyCoverage:
             + json.dumps([
                 {"requirement": "r1", "covered": False, "covering_steps": []},
             ])
-            + "\n```"
+            + "\n```",
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = client
 
@@ -173,7 +176,7 @@ class TestFillCoverageGaps:
     @patch("architect.planner.get_llm_client")
     def test_generates_new_steps(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = json.dumps([
+        client.generate.return_value = (json.dumps([
             {
                 "title": "SHAP analysis",
                 "description": "Implement SHAP explainability",
@@ -181,7 +184,7 @@ class TestFillCoverageGaps:
                 "verify": "SHAP values computed",
                 "environment": ["shap"],
             },
-        ])
+        ]), {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         existing = [
@@ -215,7 +218,7 @@ class TestFillCoverageGaps:
     @patch("architect.planner.get_llm_client")
     def test_prompt_includes_next_step_number(self, mock_get_client):
         client = MagicMock()
-        client.generate.return_value = '[]'
+        client.generate.return_value = ('[]', {"input": 0, "output": 0})
         mock_get_client.return_value = client
 
         existing = [
@@ -239,11 +242,11 @@ class TestEnsureCoverage:
         # First call: extract_requirements
         # Second call: verify_coverage (all covered)
         client.generate.side_effect = [
-            json.dumps(["req A", "req B"]),
-            json.dumps([
+            (json.dumps(["req A", "req B"]), {"input": 0, "output": 0}),
+            (json.dumps([
                 {"requirement": "req A", "covered": True, "covering_steps": [1]},
                 {"requirement": "req B", "covered": True, "covering_steps": [2]},
-            ]),
+            ]), {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 
@@ -260,18 +263,18 @@ class TestEnsureCoverage:
         client = MagicMock()
         client.generate.side_effect = [
             # extract_requirements
-            json.dumps(["data sim", "ML model", "SHAP"]),
+            (json.dumps(["data sim", "ML model", "SHAP"]), {"input": 0, "output": 0}),
             # verify_coverage — SHAP uncovered
-            json.dumps([
+            (json.dumps([
                 {"requirement": "data sim", "covered": True, "covering_steps": [1]},
                 {"requirement": "ML model", "covered": True, "covering_steps": [2]},
                 {"requirement": "SHAP", "covered": False, "covering_steps": []},
-            ]),
+            ]), {"input": 0, "output": 0}),
             # fill_coverage_gaps
-            json.dumps([{
+            (json.dumps([{
                 "title": "Add SHAP", "description": "SHAP analysis",
                 "depends_on": [2], "verify": "ok", "environment": [],
-            }]),
+            }]), {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 
@@ -302,7 +305,7 @@ class TestEnsureCoverage:
         client = MagicMock()
         client.generate.side_effect = [
             # extract_requirements — comprehensive list
-            json.dumps([
+            (json.dumps([
                 "data simulator from spec",
                 "cleaning pipeline",
                 "bilingual translations",
@@ -313,9 +316,9 @@ class TestEnsureCoverage:
                 "dashboard tab: patient simulator",
                 "dashboard tab: insight engine",
                 "bilingual toggle",
-            ]),
+            ]), {"input": 0, "output": 0}),
             # verify_coverage — most uncovered
-            json.dumps([
+            (json.dumps([
                 {"requirement": "data simulator from spec", "covered": True, "covering_steps": [1]},
                 {"requirement": "cleaning pipeline", "covered": True, "covering_steps": [2]},
                 {"requirement": "bilingual translations", "covered": True, "covering_steps": [3]},
@@ -326,9 +329,9 @@ class TestEnsureCoverage:
                 {"requirement": "dashboard tab: patient simulator", "covered": False, "covering_steps": []},
                 {"requirement": "dashboard tab: insight engine", "covered": True, "covering_steps": [5]},
                 {"requirement": "bilingual toggle", "covered": True, "covering_steps": [3]},
-            ]),
+            ]), {"input": 0, "output": 0}),
             # fill_coverage_gaps — 5 new steps
-            json.dumps([
+            (json.dumps([
                 {"title": "XGBoost model", "description": "Train predictive model",
                  "depends_on": [2], "verify": "model saved", "environment": ["xgboost"]},
                 {"title": "SHAP analysis", "description": "Compute SHAP values",
@@ -339,7 +342,7 @@ class TestEnsureCoverage:
                  "depends_on": [5], "verify": "tab renders", "environment": []},
                 {"title": "Patient simulator tab", "description": "Dashboard tab 2",
                  "depends_on": [5], "verify": "tab renders", "environment": []},
-            ]),
+            ]), {"input": 0, "output": 0}),
         ]
         mock_get_client.return_value = client
 

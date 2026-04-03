@@ -52,7 +52,7 @@ class TestPostRunMetaLearning:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_llm_identifies_systemic_pattern(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = json.dumps({
+        mock_client.generate.return_value = (json.dumps({
             "systemic_lessons": [
                 {"pattern": "dependency errors recur in data processing steps",
                  "recommendation": "pre-install common data packages"},
@@ -61,7 +61,7 @@ class TestPostRunMetaLearning:
             "knowledge_to_persist": [
                 {"key": "data_pipeline_deps", "value": "always install pandas early"},
             ],
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         state = _make_state()
@@ -89,14 +89,14 @@ class TestPostRunMetaLearning:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_lessons_persisted_to_knowledge_base(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = json.dumps({
+        mock_client.generate.return_value = (json.dumps({
             "systemic_lessons": [],
             "decomposition_feedback": "",
             "knowledge_to_persist": [
                 {"key": "k1", "value": "v1"},
                 {"key": "k2", "value": "v2"},
             ],
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         state = _make_state()
@@ -190,7 +190,7 @@ class TestPostRunMetaLearning:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_malformed_json_returns_none(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = "not valid json at all"
+        mock_client.generate.return_value = ("not valid json at all", {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         state = _make_state()
@@ -207,11 +207,11 @@ class TestPostRunMetaLearning:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_events_emitted(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = json.dumps({
+        mock_client.generate.return_value = (json.dumps({
             "systemic_lessons": [],
             "decomposition_feedback": "",
             "knowledge_to_persist": [],
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         state = _make_state()
@@ -235,7 +235,8 @@ class TestPostRunMetaLearning:
         mock_client.generate.return_value = (
             '```json\n{"systemic_lessons": [], '
             '"decomposition_feedback": "fine", '
-            '"knowledge_to_persist": []}\n```'
+            '"knowledge_to_persist": []}\n```',
+            {"input": 0, "output": 0},
         )
         mock_get_client.return_value = mock_client
 
@@ -255,14 +256,14 @@ class TestPostRunMetaLearning:
     @patch("orchestrator.llm_client.get_llm_client")
     def test_empty_knowledge_items_skipped(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.generate.return_value = json.dumps({
+        mock_client.generate.return_value = (json.dumps({
             "systemic_lessons": [],
             "decomposition_feedback": "",
             "knowledge_to_persist": [
                 {"key": "", "value": ""},
                 {"key": "valid", "value": "lesson"},
             ],
-        })
+        }), {"input": 0, "output": 0})
         mock_get_client.return_value = mock_client
 
         state = _make_state()

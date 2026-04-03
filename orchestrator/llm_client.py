@@ -268,84 +268,6 @@ class ClaudeCodeClient:
         self.model = model
         self.role = role
 
-    def _run_streaming(self, cmd, env, input_text=None, cwd=None,
-                        progress_callback=None):
-        """Run the CLI streaming stdout to the logger line-by-line.
-
-        When *input_text* is provided it is written to the process's stdin
-        and the pipe is closed before stdout is consumed.  This avoids
-        passing large prompts as command-line arguments which can exceed
-        the OS ARG_MAX limit.
-
-        When *progress_callback* is provided and the output is stream-json
-        format (newline-delimited JSON events), each event is parsed and
-        dispatched to the callback.  Falls back to line-by-line logging
-        if the first line of output is not valid stream-json.
-        """
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            stdin=subprocess.PIPE if input_text else subprocess.DEVNULL,
-            env=env,
-            cwd=cwd,
-        )
-        # Feed the prompt via stdin and close the pipe so the process
-        # knows input is complete.  Must happen before reading stdout
-        # to avoid deadlocks.
-        if input_text and proc.stdin:
-            try:
-                proc.stdin.write(input_text)
-                proc.stdin.close()
-            except BrokenPipeError:
-                pass  # Process may have exited early
-        # Collect stderr in a background thread to avoid pipe deadlock
-        stderr_chunks = []
-        stderr_thread = threading.Thread(
-            target=lambda: stderr_chunks.append(proc.stderr.read()),
-            daemon=True,
-        )
-        stderr_thread.start()
-
-        stdout_lines = []
-        _stream_json = None  # None=undetermined, True/False after first line
-
-        for line in proc.stdout:
-            stdout_lines.append(line)
-
-            # When a progress callback is set, detect and parse stream-json
-            if progress_callback is not None and _stream_json is not False:
-                stripped = line.strip()
-                if stripped:
-                    if _stream_json is None:
-                        try:
-                            evt = _json.loads(stripped)
-                            _stream_json = isinstance(evt, dict) and "type" in evt
-                        except (_json.JSONDecodeError, ValueError):
-                            _stream_json = False
-                    if _stream_json:
-                        try:
-                            evt = _json.loads(stripped)
-                            self._dispatch_progress(evt, progress_callback)
-                        except (_json.JSONDecodeError, ValueError):
-                            pass
-                        continue
-
-            logger.info("  %s", line.rstrip())
-
-        try:
-            proc.wait(timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            raise
-
-        stderr_thread.join(timeout=5)
-        stdout = "".join(stdout_lines)
-        stderr = stderr_chunks[0] if stderr_chunks else ""
-        return stdout, stderr, proc.returncode
-
     @staticmethod
     def _parse_json_output(stdout: str, model: str) -> LLMResult:
         """Try to parse CLI JSON output and extract text + usage.
@@ -530,9 +452,12 @@ class ClaudeCodeClient:
             retry_start_time = time.monotonic()
             while True:
                 try:
-                    stdout, stderr, returncode = self._run_streaming(
-                        cmd, env, input_text=prompt, cwd=isolation_dir,
-                        progress_callback=progress_callback,
+                    proc = subprocess.run(
+                        cmd, input=prompt, capture_output=True, text=True,
+                        timeout=self.timeout, env=env, cwd=isolation_dir,
+                    )
+                    stdout, stderr, returncode = (
+                        proc.stdout, proc.stderr, proc.returncode,
                     )
                 except subprocess.TimeoutExpired:
                     err = classify_error(

@@ -6,7 +6,8 @@ pollute the workspace.
 """
 
 import os
-from unittest.mock import MagicMock, patch
+import subprocess
+from unittest.mock import patch
 
 import pytest
 
@@ -16,10 +17,10 @@ from orchestrator.llm_client import ClaudeCodeClient
 class TestGenerateIsolation:
     """Verify that generate() isolates the CLI subprocess."""
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_passes_temp_cwd_to_run_streaming(self, _mock_which, mock_stream):
-        """generate() should pass a temp directory as cwd to _run_streaming."""
+    def test_passes_temp_cwd_to_subprocess(self, _mock_which, mock_run):
+        """generate() should pass a temp directory as cwd to subprocess.run."""
         captured = {}
 
         def capture(*args, **kwargs):
@@ -27,49 +28,52 @@ class TestGenerateIsolation:
             captured["existed"] = (
                 os.path.isdir(captured["cwd"]) if captured["cwd"] else False
             )
-            return ("response", "", 0)
+            return subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="response", stderr="")
 
-        mock_stream.side_effect = capture
+        mock_run.side_effect = capture
         ClaudeCodeClient().generate("hello")
 
         assert captured["cwd"] is not None
         assert captured["existed"] is True
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
     def test_workspace_vars_removed_from_env(
-        self, _mock_which, mock_stream, monkeypatch
+        self, _mock_which, mock_run, monkeypatch
     ):
         """WORKSPACE and UAS_WORKSPACE must not leak to the CLI."""
         monkeypatch.setenv("WORKSPACE", "/ws")
         monkeypatch.setenv("UAS_WORKSPACE", "/uas_ws")
-        mock_stream.return_value = ("response", "", 0)
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="response", stderr="")
         ClaudeCodeClient().generate("hello")
 
-        env = mock_stream.call_args[0][1]
+        env = mock_run.call_args.kwargs["env"]
         assert "WORKSPACE" not in env
         assert "UAS_WORKSPACE" not in env
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_claude_config_dir_inside_isolation(self, _mock_which, mock_stream):
+    def test_claude_config_dir_inside_isolation(self, _mock_which, mock_run):
         """CLAUDE_CONFIG_DIR should be a subdirectory of the isolation dir."""
         captured = {}
 
         def capture(*args, **kwargs):
             captured["cwd"] = kwargs.get("cwd")
-            captured["env"] = args[1]
-            return ("response", "", 0)
+            captured["env"] = kwargs.get("env", {})
+            return subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="response", stderr="")
 
-        mock_stream.side_effect = capture
+        mock_run.side_effect = capture
         ClaudeCodeClient().generate("hello")
 
         assert captured["env"]["CLAUDE_CONFIG_DIR"].startswith(captured["cwd"])
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
     def test_credentials_copied_to_isolation_dir(
-        self, _mock_which, mock_stream, tmp_path, monkeypatch
+        self, _mock_which, mock_run, tmp_path, monkeypatch
     ):
         """Credential files from the original config dir should be copied."""
         # Create a fake config dir with credentials
@@ -82,99 +86,72 @@ class TestGenerateIsolation:
         captured = {}
 
         def capture(*args, **kwargs):
-            captured["env"] = args[1]
+            captured["env"] = kwargs.get("env", {})
             iso_cred = os.path.join(
                 captured["env"]["CLAUDE_CONFIG_DIR"], ".credentials.json"
             )
             captured["cred_exists"] = os.path.isfile(iso_cred)
-            return ("response", "", 0)
+            return subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="response", stderr="")
 
-        mock_stream.side_effect = capture
+        mock_run.side_effect = capture
         ClaudeCodeClient().generate("hello")
 
         assert captured["cred_exists"] is True
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_isolation_dir_cleaned_up_on_success(self, _mock_which, mock_stream):
+    def test_isolation_dir_cleaned_up_on_success(self, _mock_which, mock_run):
         """Temp dir must be removed after a successful generation."""
         captured = {}
 
         def capture(*args, **kwargs):
             captured["cwd"] = kwargs.get("cwd")
-            return ("response", "", 0)
+            return subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="response", stderr="")
 
-        mock_stream.side_effect = capture
+        mock_run.side_effect = capture
         ClaudeCodeClient().generate("hello")
 
         assert not os.path.exists(captured["cwd"])
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_isolation_dir_cleaned_up_on_error(self, _mock_which, mock_stream):
+    def test_isolation_dir_cleaned_up_on_error(self, _mock_which, mock_run):
         """Temp dir must be removed even when the CLI fails."""
         captured = {}
 
         def capture(*args, **kwargs):
             captured["cwd"] = kwargs.get("cwd")
-            return ("", "Invalid API key", 1)
+            return subprocess.CompletedProcess(
+                args=args[0], returncode=1, stdout="", stderr="Invalid API key")
 
-        mock_stream.side_effect = capture
+        mock_run.side_effect = capture
         with pytest.raises(RuntimeError):
             ClaudeCodeClient().generate("hello")
 
         assert not os.path.exists(captured["cwd"])
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_same_dir_reused_across_retries(self, _mock_which, mock_stream, _sleep):
+    def test_same_dir_reused_across_retries(self, _mock_which, mock_run, _sleep):
         """All retry attempts must share the same isolation directory."""
         cwds = []
 
         def capture(*args, **kwargs):
             cwds.append(kwargs.get("cwd"))
             if len(cwds) < 2:
-                return ("", "Connection refused", 1)
-            return ("ok", "", 0)
+                return subprocess.CompletedProcess(
+                    args=args[0], returncode=1, stdout="", stderr="Connection refused")
+            return subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="ok", stderr="")
 
-        mock_stream.side_effect = capture
+        mock_run.side_effect = capture
         ClaudeCodeClient().generate("hello")
 
         assert len(cwds) == 2
         assert cwds[0] == cwds[1]
-
-
-class TestRunStreamingCwd:
-    """Verify that _run_streaming forwards cwd to subprocess.Popen."""
-
-    @patch("orchestrator.llm_client.subprocess.Popen")
-    def test_cwd_forwarded_to_popen(self, mock_popen):
-        proc = MagicMock()
-        proc.stdout = iter([])
-        proc.stderr.read.return_value = ""
-        proc.returncode = 0
-        mock_popen.return_value = proc
-
-        ClaudeCodeClient()._run_streaming(
-            ["claude", "-p"], {}, cwd="/tmp/test_dir",
-        )
-
-        _, kwargs = mock_popen.call_args
-        assert kwargs["cwd"] == "/tmp/test_dir"
-
-    @patch("orchestrator.llm_client.subprocess.Popen")
-    def test_cwd_defaults_to_none(self, mock_popen):
-        proc = MagicMock()
-        proc.stdout = iter([])
-        proc.stderr.read.return_value = ""
-        proc.returncode = 0
-        mock_popen.return_value = proc
-
-        ClaudeCodeClient()._run_streaming(["claude", "-p"], {})
-
-        _, kwargs = mock_popen.call_args
-        assert kwargs.get("cwd") is None
 
 
 class TestClaudeMdIsolationGuidance:

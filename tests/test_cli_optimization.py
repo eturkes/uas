@@ -6,6 +6,7 @@ and delimited output parsing (5d).
 
 import json
 import os
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -29,24 +30,26 @@ from architect.executor import (
 
 
 class TestStreamingGenerate:
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_always_streams(self, _mock_which, mock_stream):
-        """generate() always uses _run_streaming for real-time output."""
-        mock_stream.return_value = ("response text", "", 0)
+    def test_calls_subprocess_run(self, _mock_which, mock_run):
+        """generate() uses subprocess.run to call the CLI."""
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="response text", stderr="")
         client = ClaudeCodeClient()
         result = client.generate("hello", stream=False)
-        assert mock_stream.called
+        assert mock_run.called
         assert result.text == "response text"
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_json_output_format_used(self, _mock_which, mock_stream):
+    def test_json_output_format_used(self, _mock_which, mock_run):
         """generate() uses --output-format json for token tracking."""
-        mock_stream.return_value = ("response text", "", 0)
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="response text", stderr="")
         client = ClaudeCodeClient()
         client.generate("hello")
-        cmd = mock_stream.call_args[0][0]
+        cmd = mock_run.call_args[0][0]
         assert "--output-format" in cmd
         idx = cmd.index("--output-format")
         assert cmd[idx + 1] == "json"

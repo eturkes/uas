@@ -5,6 +5,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+def _cp(stdout="", stderr="", returncode=0):
+    """Create a CompletedProcess for mocking subprocess.run."""
+    return subprocess.CompletedProcess(args=[], returncode=returncode,
+                                       stdout=stdout, stderr=stderr)
+
+
 from orchestrator.llm_client import (
     ClaudeCodeClient,
     DEFAULT_TIMEOUT,
@@ -41,95 +47,96 @@ class TestGetLlmClient:
 
 
 class TestModelFlag:
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_model_flag_passed(self, _mock_which, mock_stream):
-        mock_stream.return_value = ("response", "", 0)
+    def test_model_flag_passed(self, _mock_which, mock_run):
+        mock_run.return_value = _cp("response")
         client = ClaudeCodeClient(model="claude-sonnet-4-6")
         client.generate("hello")
-        cmd = mock_stream.call_args[0][0]
+        cmd = mock_run.call_args[0][0]
         assert "--model" in cmd
         idx = cmd.index("--model")
         assert cmd[idx + 1] == "claude-sonnet-4-6"
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_fallback_model_when_none(self, _mock_which, mock_stream):
-        mock_stream.return_value = ("response", "", 0)
+    def test_fallback_model_when_none(self, _mock_which, mock_run):
+        mock_run.return_value = _cp("response")
         client = ClaudeCodeClient(model=None)
         client.generate("hello")
-        cmd = mock_stream.call_args[0][0]
+        cmd = mock_run.call_args[0][0]
         assert "--model" in cmd
         idx = cmd.index("--model")
         assert cmd[idx + 1] == "claude-opus-4-6"
 
 
+@patch("orchestrator.llm_client.PERSISTENT_RETRY", False)
 class TestRetryBehaviour:
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_retries_on_timeout(self, _mock_which, mock_stream, mock_sleep):
-        mock_stream.side_effect = [
+    def test_retries_on_timeout(self, _mock_which, mock_run, mock_sleep):
+        mock_run.side_effect = [
             subprocess.TimeoutExpired(cmd="claude", timeout=120),
-            ("ok", "", 0),
+            _cp("ok"),
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "ok"
-        assert mock_stream.call_count == 2
+        assert mock_run.call_count == 2
         assert mock_sleep.call_count == 1
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_retries_on_transient_stderr(self, _mock_which, mock_stream, mock_sleep):
-        mock_stream.side_effect = [
-            ("", "Connection refused", 1),
-            ("ok", "", 0),
+    def test_retries_on_transient_stderr(self, _mock_which, mock_run, mock_sleep):
+        mock_run.side_effect = [
+            _cp("", "Connection refused", 1),
+            _cp("ok"),
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "ok"
-        assert mock_stream.call_count == 2
+        assert mock_run.call_count == 2
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_raises_after_max_retries(self, _mock_which, mock_stream, mock_sleep):
-        mock_stream.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=120)
+    def test_raises_after_max_retries(self, _mock_which, mock_run, mock_sleep):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=120)
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError, match="timed out"):
             client.generate("test")
-        assert mock_stream.call_count == 1 + MAX_RETRIES
+        assert mock_run.call_count == 1 + MAX_RETRIES
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_no_retry_on_non_transient_error(self, _mock_which, mock_stream, mock_sleep):
-        mock_stream.return_value = ("", "Invalid API key", 1)
+    def test_no_retry_on_non_transient_error(self, _mock_which, mock_run, mock_sleep):
+        mock_run.return_value = _cp("", "Invalid API key", 1)
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError):
             client.generate("test")
-        assert mock_stream.call_count == 1
+        assert mock_run.call_count == 1
         mock_sleep.assert_not_called()
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_no_retry_on_file_not_found(self, _mock_which, mock_stream):
-        mock_stream.side_effect = FileNotFoundError("No such file")
+    def test_no_retry_on_file_not_found(self, _mock_which, mock_run):
+        mock_run.side_effect = FileNotFoundError("No such file")
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError, match="not found in PATH"):
             client.generate("test")
-        assert mock_stream.call_count == 1
+        assert mock_run.call_count == 1
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_exponential_backoff(self, _mock_which, mock_stream, mock_sleep):
-        mock_stream.side_effect = [
+    def test_exponential_backoff(self, _mock_which, mock_run, mock_sleep):
+        mock_run.side_effect = [
             subprocess.TimeoutExpired(cmd="claude", timeout=120),
             subprocess.TimeoutExpired(cmd="claude", timeout=120),
-            ("ok", "", 0),
+            _cp("ok"),
         ]
         client = ClaudeCodeClient()
         client.generate("test")
@@ -139,36 +146,36 @@ class TestRetryBehaviour:
         mock_sleep.assert_any_call(INITIAL_BACKOFF * 2)
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_overloaded_uses_longer_backoff(self, _mock_which, mock_stream, mock_sleep):
+    def test_overloaded_uses_longer_backoff(self, _mock_which, mock_run, mock_sleep):
         """529 overloaded errors should use OVERLOADED_BACKOFF, not INITIAL_BACKOFF."""
-        mock_stream.side_effect = [
-            ("", 'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}', 1),
-            ("ok", "", 0),
+        mock_run.side_effect = [
+            _cp("", 'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}', 1),
+            _cp("ok"),
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "ok"
-        assert mock_stream.call_count == 2
+        assert mock_run.call_count == 2
         # Overloaded backoff: OVERLOADED_BACKOFF * 2^0
         mock_sleep.assert_called_with(OVERLOADED_BACKOFF)
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_529_retries_until_success(self, _mock_which, mock_stream, mock_sleep):
+    def test_529_retries_until_success(self, _mock_which, mock_run, mock_sleep):
         """529 errors should be retried across multiple attempts."""
-        mock_stream.side_effect = [
-            ("", "529 overloaded_error", 1),
-            ("", "529 overloaded_error", 1),
-            ("", "529 overloaded_error", 1),
-            ("ok", "", 0),
+        mock_run.side_effect = [
+            _cp("", "529 overloaded_error", 1),
+            _cp("", "529 overloaded_error", 1),
+            _cp("", "529 overloaded_error", 1),
+            _cp("ok"),
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "ok"
-        assert mock_stream.call_count == 4
+        assert mock_run.call_count == 4
 
 
 class TestClassifyError:
@@ -266,56 +273,57 @@ class TestClassifyError:
         assert "out" in err.raw_output
 
 
+@patch("orchestrator.llm_client.PERSISTENT_RETRY", False)
 class TestRateLimitInStdout:
     """Regression tests: rate limit text in stdout must not be returned as
     valid LLM content — it should be retried as a transient error."""
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_rate_limit_in_stdout_retried(self, _mock_which, mock_stream, mock_sleep):
-        mock_stream.side_effect = [
-            ("You've hit your limit · resets 1pm (UTC)", "", 1),
-            ("valid response", "", 0),
+    def test_rate_limit_in_stdout_retried(self, _mock_which, mock_run, mock_sleep):
+        mock_run.side_effect = [
+            _cp("You've hit your limit · resets 1pm (UTC)", "", 1),
+            _cp("valid response"),
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "valid response"
-        assert mock_stream.call_count == 2
+        assert mock_run.call_count == 2
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_rate_limit_in_stderr_with_stdout_retried(self, _mock_which, mock_stream, mock_sleep):
+    def test_rate_limit_in_stderr_with_stdout_retried(self, _mock_which, mock_run, mock_sleep):
         """Even if stdout has content, a rate-limit in stderr should trigger retry."""
-        mock_stream.side_effect = [
-            ("partial output", "rate limit exceeded", 1),
-            ("valid response", "", 0),
+        mock_run.side_effect = [
+            _cp("partial output", "rate limit exceeded", 1),
+            _cp("valid response"),
         ]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "valid response"
-        assert mock_stream.call_count == 2
+        assert mock_run.call_count == 2
 
     @patch("orchestrator.llm_client.time.sleep")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_rate_limit_exhausted_raises_not_returns(self, _mock_which, mock_stream, mock_sleep):
+    def test_rate_limit_exhausted_raises_not_returns(self, _mock_which, mock_run, mock_sleep):
         """When all transient retries are exhausted, raise instead of returning
         the rate limit message as valid LLM content."""
-        mock_stream.return_value = ("You've hit your limit · resets 6pm (UTC)", "", 1)
+        mock_run.return_value = _cp("You've hit your limit · resets 6pm (UTC)", "", 1)
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError):
             client.generate("test")
         # Should have attempted initial + MAX_RETRIES = 5 calls
-        assert mock_stream.call_count == 1 + MAX_RETRIES
+        assert mock_run.call_count == 1 + MAX_RETRIES
 
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_non_transient_stdout_still_returned(self, _mock_which, mock_stream):
+    def test_non_transient_stdout_still_returned(self, _mock_which, mock_run):
         """Non-transient failures with stdout should still return partial output
         for truncation recovery."""
-        mock_stream.return_value = ("partial valid code output", "some non-transient error", 1)
+        mock_run.return_value = _cp("partial valid code output", "some non-transient error", 1)
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "partial valid code output"
@@ -326,25 +334,25 @@ class TestPersistentRetry:
 
     @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_retries_beyond_max_on_429(self, _mock_which, mock_stream, mock_hb_sleep):
+    def test_retries_beyond_max_on_429(self, _mock_which, mock_run, mock_hb_sleep):
         """With PERSISTENT_RETRY, retryable errors retry beyond MAX_RETRIES."""
-        errors = [("", "429 Too Many Requests", 1)] * (MAX_RETRIES + 2)
-        mock_stream.side_effect = errors + [("ok", "", 0)]
+        errors = [_cp("", "429 Too Many Requests", 1)] * (MAX_RETRIES + 2)
+        mock_run.side_effect = errors + [_cp("ok")]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "ok"
-        assert mock_stream.call_count == MAX_RETRIES + 3
+        assert mock_run.call_count == MAX_RETRIES + 3
 
     @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_backoff_caps_at_max_backoff(self, _mock_which, mock_stream, mock_hb_sleep):
+    def test_backoff_caps_at_max_backoff(self, _mock_which, mock_run, mock_hb_sleep):
         """Backoff is capped at MAX_BACKOFF (300s) in persistent mode."""
-        errors = [("", "overloaded", 1)] * 6
-        mock_stream.side_effect = errors + [("ok", "", 0)]
+        errors = [_cp("", "overloaded", 1)] * 6
+        mock_run.side_effect = errors + [_cp("ok")]
         client = ClaudeCodeClient()
         client.generate("test")
         for call in mock_hb_sleep.call_args_list:
@@ -352,39 +360,39 @@ class TestPersistentRetry:
 
     @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_non_retryable_raises_in_persistent_mode(self, _mock_which, mock_stream, mock_hb_sleep):
+    def test_non_retryable_raises_in_persistent_mode(self, _mock_which, mock_run, mock_hb_sleep):
         """Non-retryable errors still raise immediately in persistent mode."""
-        mock_stream.return_value = ("", "Invalid API key", 1)
+        mock_run.return_value = _cp("", "Invalid API key", 1)
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError):
             client.generate("test")
-        assert mock_stream.call_count == 1
+        assert mock_run.call_count == 1
         mock_hb_sleep.assert_not_called()
 
     @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_capacity_unlimited_in_persistent_mode(self, _mock_which, mock_stream, mock_hb_sleep):
+    def test_capacity_unlimited_in_persistent_mode(self, _mock_which, mock_run, mock_hb_sleep):
         """In persistent mode, capacity errors retry beyond MAX_CAPACITY_RETRIES (3)."""
-        errors = [("", "529 overloaded_error", 1)] * 5
-        mock_stream.side_effect = errors + [("ok", "", 0)]
+        errors = [_cp("", "529 overloaded_error", 1)] * 5
+        mock_run.side_effect = errors + [_cp("ok")]
         client = ClaudeCodeClient()
         result = client.generate("test")
         assert result.text == "ok"
-        assert mock_stream.call_count == 6
+        assert mock_run.call_count == 6
 
     @patch("orchestrator.llm_client.PERSISTENT_RETRY", True)
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
-    @patch("orchestrator.llm_client.ClaudeCodeClient._run_streaming")
+    @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_uses_heartbeat_sleep(self, _mock_which, mock_stream, mock_hb_sleep):
+    def test_uses_heartbeat_sleep(self, _mock_which, mock_run, mock_hb_sleep):
         """Persistent mode uses _sleep_with_heartbeat instead of time.sleep."""
-        mock_stream.side_effect = [
-            ("", "Connection refused", 1),
-            ("ok", "", 0),
+        mock_run.side_effect = [
+            _cp("", "Connection refused", 1),
+            _cp("ok"),
         ]
         client = ClaudeCodeClient()
         client.generate("test")

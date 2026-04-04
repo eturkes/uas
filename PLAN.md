@@ -41,7 +41,7 @@ is over-engineered for a system that only needs the final JSON result.
 - [x] **1.7** Remove `heartbeat_log()` context manager from `llm_client.py`
       (lines 216-244) and its import in `sandbox.py` line 9. Replace the
       sandbox heartbeat usage with a simple timeout on `subprocess.run`.
-- [ ] **1.8** Update all tests that mock `_run_streaming`, `Popen`, or
+- [x] **1.8** Update all tests that mock `_run_streaming`, `Popen`, or
       `progress_callback` behavior. Grep `tests/` for these symbols and
       adapt assertions to the new `subprocess.run` interface.
 - [ ] **1.9** Smoke-test the full pipeline: `architect -> executor ->

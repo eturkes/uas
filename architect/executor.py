@@ -181,62 +181,45 @@ def run_orchestrator(task: str, extra_env: dict | None = None,
 
 def _run_streaming(cmd, env=None, cwd=None, callback=None,
                    container_cleanup=None) -> dict:
-    """Run a subprocess, streaming stderr lines to callback in real time.
+    """Run a subprocess, capturing output and optionally passing stderr to callback.
 
     Args:
         cmd: Command list.
         env: Environment dict (uses current env if None).
         cwd: Working directory.
-        callback: callable(line: str) invoked for each stderr line.
+        callback: callable(line: str) invoked for each stderr line after
+            the process completes.
         container_cleanup: Optional (engine, name) tuple; if the process
             times out, kill and remove the container.
 
     Returns dict with exit_code, stdout, stderr.
     """
-    import threading as _threading
-
     try:
-        proc = subprocess.Popen(
+        result = subprocess.run(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
+            timeout=RUN_TIMEOUT,
             stdin=subprocess.DEVNULL,
             env=env,
             cwd=cwd,
         )
     except FileNotFoundError as e:
         return {"exit_code": -1, "stdout": "", "stderr": str(e)}
-
-    # Read stdout in a background thread to avoid deadlocks
-    stdout_chunks: list[str] = []
-
-    def _read_stdout():
-        stdout_chunks.append(proc.stdout.read())
-
-    stdout_thread = _threading.Thread(target=_read_stdout, daemon=True)
-    stdout_thread.start()
-
-    # Stream stderr line by line, invoking callback
-    stderr_lines: list[str] = []
-    try:
-        for line in proc.stderr:
-            stderr_lines.append(line)
-            if callback:
-                callback(line.rstrip("\n"))
-
-        proc.wait(timeout=RUN_TIMEOUT)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
         if container_cleanup:
             _kill_container(*container_cleanup)
         return {"exit_code": -1, "stdout": "", "stderr": "Orchestrator timed out."}
 
-    stdout_thread.join(timeout=5)
-    stdout = stdout_chunks[0] if stdout_chunks else ""
-    stderr = "".join(stderr_lines)
-    return {"exit_code": proc.returncode, "stdout": stdout, "stderr": stderr}
+    if callback and result.stderr:
+        for line in result.stderr.splitlines():
+            callback(line)
+
+    return {
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
 
 
 def _run_local(task: str, extra_env: dict | None = None,

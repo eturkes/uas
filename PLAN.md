@@ -34,7 +34,7 @@ is over-engineered for a system that only needs the final JSON result.
 - [x] **1.5** Update `run_orchestrator()` in `architect/executor.py`
       (lines 145-190) to remove `progress_callback` plumbing and the
       `UAS_STREAM_PROGRESS` env var injection.
-- [ ] **1.6** In `architect/executor.py`, simplify `_run_streaming()` (lines
+- [x] **1.6** In `architect/executor.py`, simplify `_run_streaming()` (lines
       193-244) to a `subprocess.run()` call. The architect's executor spawns
       `python -m orchestrator.main` — this does not need line-by-line stderr
       streaming either; capture and return.

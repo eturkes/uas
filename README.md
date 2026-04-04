@@ -477,11 +477,9 @@ can avoid wrong assumptions about the execution environment.
 plan output is streamed to stderr line-by-line as it is generated,
 giving real-time visibility into the decomposition process.
 
-**Progress heartbeats:** Other long-running operations (code
-generation, sandbox execution, orchestrator runs) emit periodic
-heartbeat messages to stderr every 15–30 seconds showing elapsed
-time. This ensures continuous feedback even during multi-minute
-waits, so the user always knows the system is still working.
+**Progress heartbeats:** During persistent retry back-off waits,
+periodic heartbeat messages are logged every 30 seconds showing
+remaining time, so the user always knows the system is still working.
 
 **Terminal dashboard:** During execution, a Rich Live dashboard shows
 the DAG structure with step statuses (pending/executing/completed/failed),

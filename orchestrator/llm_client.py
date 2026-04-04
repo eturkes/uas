@@ -1,6 +1,5 @@
 """LLM client via the Claude Code CLI subprocess wrapper."""
 
-import contextlib
 import dataclasses
 import json as _json
 import logging
@@ -8,7 +7,6 @@ import os
 import shutil
 import subprocess
 import tempfile
-import threading
 import time
 import typing
 
@@ -180,8 +178,6 @@ def classify_error(returncode: int, stdout: str, stderr: str) -> LLMError:
     )
 
 
-HEARTBEAT_INTERVAL = 15
-
 # ---------------------------------------------------------------------------
 # Token & cost tracking (Section 1 of PLAN.md)
 # ---------------------------------------------------------------------------
@@ -211,37 +207,6 @@ def estimate_cost(model: str, usage: dict) -> float:
     inp = usage.get("input", 0)
     out = usage.get("output", 0)
     return (inp / 1000) * rates["input"] + (out / 1000) * rates["output"]
-
-
-@contextlib.contextmanager
-def heartbeat_log(label, interval=HEARTBEAT_INTERVAL, log=None):
-    """Log periodic heartbeat messages during long-running operations.
-
-    Usage::
-
-        with heartbeat_log("LLM responding"):
-            result = subprocess.run(...)
-
-    Prints ``label... (Ns elapsed)`` every *interval* seconds until the
-    block exits.
-    """
-    if log is None:
-        log = logger
-    stop = threading.Event()
-
-    def _beat():
-        start = time.monotonic()
-        while not stop.wait(interval):
-            elapsed = time.monotonic() - start
-            log.info("  %s... (%ds elapsed)", label, int(elapsed))
-
-    t = threading.Thread(target=_beat, daemon=True)
-    t.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        t.join(timeout=2)
 
 
 def _sleep_with_heartbeat(duration: float, label: str,

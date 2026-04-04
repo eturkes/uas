@@ -15,7 +15,6 @@ import time as _time
 import config
 
 from orchestrator.claude_config import get_claude_md_content
-from orchestrator.llm_client import heartbeat_log
 from .events import EventType, get_event_log
 from .provenance import get_provenance_graph
 
@@ -166,11 +165,10 @@ def run_orchestrator(task: str, extra_env: dict | None = None,
     event_log.emit(EventType.SANDBOX_START, data={"mode": EXECUTION_MODE})
     sandbox_start = _time.monotonic()
 
-    with heartbeat_log("Orchestrator running", interval=30, log=logger):
-        if EXECUTION_MODE == "local":
-            result = _run_local(task, extra_env, output_callback)
-        else:
-            result = _run_container(task, extra_env, output_callback)
+    if EXECUTION_MODE == "local":
+        result = _run_local(task, extra_env, output_callback)
+    else:
+        result = _run_container(task, extra_env, output_callback)
 
     sandbox_elapsed = _time.monotonic() - sandbox_start
     event_log.emit(EventType.SANDBOX_COMPLETE,

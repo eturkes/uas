@@ -67,7 +67,7 @@ brittle pattern maintenance and gives deterministic structured outputs.
       - Validates the response with `Model.model_validate_json()`.
       - Caches identical inputs (LRU) to avoid redundant API calls for
         repeated evaluations within the same run.
-- [ ] **2.2** Define Pydantic result models in `uas/fuzzy_models.py`:
+- [x] **2.2** Define Pydantic result models in `uas/fuzzy_models.py`:
       - `ExecutionResult(success: bool, revert_needed: bool, error_category:
         str | None, summary: str)`
       - `UASResult(status: Literal["ok", "error"], files_written: list[str],

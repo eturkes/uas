@@ -83,7 +83,7 @@ brittle pattern maintenance and gives deterministic structured outputs.
       `parse_uas_output(stdout: str) -> UASResult`. The function's docstring
       becomes the LLM prompt: "Extract the UAS_RESULT JSON from sandbox
       stdout. Return structured fields."
-- [ ] **2.4** Replace `classify_error()` in `orchestrator/llm_client.py`
+- [x] **2.4** Replace `classify_error()` in `orchestrator/llm_client.py`
       (lines 96-180) and all its pattern lists (`_AUTH_PATTERNS`,
       `_RATE_LIMIT_PATTERNS`, etc.) with a fuzzy function:
       `classify_llm_error(returncode: int, stdout: str, stderr: str)

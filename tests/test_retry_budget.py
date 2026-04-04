@@ -17,7 +17,39 @@ from architect.main import (
     _should_continue_retrying_heuristic,
     MAX_SPEC_REWRITES,
 )
-from orchestrator.llm_client import classify_error
+from orchestrator.llm_client import classify_error, classify_llm_error, INITIAL_BACKOFF, OVERLOADED_BACKOFF
+from uas.fuzzy_models import ErrorClassification
+
+
+def _mock_classify(returncode, stdout, stderr):
+    """Deterministic classification for tests — mimics old regex behaviour."""
+    combined = f"{stderr} {stdout}".lower()
+    if any(p in combined for p in [
+        "not logged in", "invalid api key", "unauthorized",
+    ]):
+        return ErrorClassification(
+            category="auth", retryable=False,
+            recommended_backoff=0, message="Auth error")
+    if any(p in combined for p in [
+        "rate limit", "rate_limit", "hit your limit", "too many requests",
+        "out of usage", "out of extra usage", "429",
+    ]):
+        return ErrorClassification(
+            category="rate_limit", retryable=True,
+            recommended_backoff=OVERLOADED_BACKOFF, message="Rate limit hit")
+    if any(p in combined for p in [
+        "529", "overloaded", "overloaded_error", "capacity",
+    ]):
+        return ErrorClassification(
+            category="capacity", retryable=True,
+            recommended_backoff=OVERLOADED_BACKOFF, message="API at capacity")
+    if returncode != 0 and stdout.strip():
+        return ErrorClassification(
+            category="output_truncated", retryable=False,
+            recommended_backoff=0, message="Output truncated")
+    return ErrorClassification(
+        category="unknown", retryable=False,
+        recommended_backoff=0, message=f"CLI exited with code {returncode}")
 
 
 class TestLLMRetryDecision:
@@ -146,34 +178,35 @@ class TestLLMRetryDecision:
         assert event_log.emit.call_count == 2
 
 
+@patch("orchestrator.llm_client.classify_llm_error", side_effect=_mock_classify)
 class TestRateLimitClassification:
     """Tests that rate-limit/capacity errors are classified as retryable."""
 
-    def test_hit_your_limit_detected(self):
+    def test_hit_your_limit_detected(self, _mock_cls):
         err = classify_error(1, "", "You've hit your limit · resets 6pm (UTC)")
         assert err.retryable is True
         assert err.category == "rate_limit"
 
-    def test_rate_limit_detected(self):
+    def test_rate_limit_detected(self, _mock_cls):
         err = classify_error(1, "", "Error: rate limit exceeded")
         assert err.retryable is True
         assert err.category == "rate_limit"
 
-    def test_429_detected(self):
+    def test_429_detected(self, _mock_cls):
         err = classify_error(1, "", "HTTP 429 Too Many Requests")
         assert err.retryable is True
         assert err.category == "rate_limit"
 
-    def test_overloaded_detected(self):
+    def test_overloaded_detected(self, _mock_cls):
         err = classify_error(1, "", "API is overloaded, try again later")
         assert err.retryable is True
         assert err.category == "capacity"
 
-    def test_normal_error_not_retryable(self):
+    def test_normal_error_not_retryable(self, _mock_cls):
         err = classify_error(1, "", "ModuleNotFoundError: No module named 'foo'")
         assert err.retryable is False
 
-    def test_empty_not_retryable(self):
+    def test_empty_not_retryable(self, _mock_cls):
         err = classify_error(1, "", "")
         assert err.retryable is False
 

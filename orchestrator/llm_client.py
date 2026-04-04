@@ -1,6 +1,5 @@
 """LLM client via the Claude Code CLI subprocess wrapper."""
 
-import dataclasses
 import json as _json
 import logging
 import os
@@ -11,6 +10,9 @@ import time
 import typing
 
 import config
+
+from uas.fuzzy import fuzzy_function
+from uas.fuzzy_models import ErrorClassification
 
 DEFAULT_TIMEOUT = None
 MAX_RETRIES = 4
@@ -29,153 +31,49 @@ logger = logging.getLogger(__name__)
 # Structured error classification (Section 2 of PLAN.md)
 # ---------------------------------------------------------------------------
 
-@dataclasses.dataclass
-class LLMError:
-    """Structured classification of an LLM CLI error."""
-    category: str          # "rate_limit" | "capacity" | "auth" | "connection" | "timeout" | "prompt_too_long" | "output_truncated" | "unknown"
-    message: str
-    retryable: bool
-    recommended_backoff: float  # seconds, 0 if not retryable
-    raw_output: str
+@fuzzy_function
+def classify_llm_error(returncode: int, stdout: str, stderr: str) -> ErrorClassification:
+    """Classify a CLI subprocess error into a structured error category.
 
+    Analyze the return code, stdout, and stderr to determine the error type.
 
-# Pattern lists used by classify_error — kept module-level for testability.
-_AUTH_PATTERNS = [
-    "not logged in",
-    "please run /login",
-    "authentication required",
-    "unauthorized",
-    "invalid api key",
-    "invalid credentials",
-    "expired token",
-    "session expired",
-]
-
-_RATE_LIMIT_PATTERNS = [
-    "rate limit",
-    "rate_limit",
-    "hit your limit",
-    "too many requests",
-    "out of extra usage",
-    "out of usage",
-    "429",
-]
-
-_CAPACITY_PATTERNS = [
-    "529",
-    "overloaded",
-    "overloaded_error",
-    "capacity",
-    "503",
-]
-
-_CONNECTION_PATTERNS = [
-    "connection error",
-    "connection refused",
-    "connection reset",
-    "network is unreachable",
-    "temporary failure",
-]
-
-_TIMEOUT_PATTERNS = [
-    "timed out",
-    "timeout",
-]
-
-_PROMPT_TOO_LONG_PATTERNS = [
-    "prompt too long",
-    "prompt is too long",
-    "context length exceeded",
-    "max.*token.*exceeded",
-    "input too long",
-]
-
-
-def classify_error(returncode: int, stdout: str, stderr: str) -> LLMError:
-    """Classify a CLI error into a structured ``LLMError``.
-
-    Pure function — no I/O.  Examines *returncode*, *stdout*, and *stderr*
-    to determine the error category and recommended recovery action.
+    Categories and their properties:
+    - "rate_limit": 429 errors, throttling, usage limits (e.g. "hit your limit",
+      "too many requests", "out of usage"). retryable=True, recommended_backoff=30.0
+    - "capacity": 529 errors, overloaded servers (e.g. "overloaded",
+      "overloaded_error"). retryable=True, recommended_backoff=30.0
+    - "auth": Authentication failures (e.g. "not logged in", "invalid api key",
+      "unauthorized", "expired token"). retryable=False, recommended_backoff=0.0
+    - "connection": Network errors (e.g. "connection refused", "connection reset",
+      "network is unreachable"). retryable=True, recommended_backoff=2.0
+    - "timeout": Request timeouts (e.g. "timed out"). retryable=True,
+      recommended_backoff=2.0
+    - "prompt_too_long": Context length exceeded, input too long.
+      retryable=False, recommended_backoff=0.0
+    - "output_truncated": Non-zero exit code but stdout contains partial output
+      (no other error pattern matched). retryable=False, recommended_backoff=0.0
+    - "unknown": Cannot determine error type. retryable=False,
+      recommended_backoff=0.0
     """
-    combined = f"{stderr} {stdout}".lower()
-    raw = f"{stderr} {stdout}".strip()
 
-    def _matches(patterns: list[str]) -> bool:
-        return any(pat in combined for pat in patterns)
 
-    if _matches(_AUTH_PATTERNS):
-        return LLMError(
-            category="auth",
-            message="Claude Code CLI is not authenticated. "
-                    "Please run 'claude /login' or check .uas_auth/ credentials.",
+def classify_error(returncode: int, stdout: str, stderr: str) -> ErrorClassification:
+    """Classify a CLI error via LLM-backed fuzzy function.
+
+    Wraps :func:`classify_llm_error` with exception handling — if the fuzzy
+    call fails (e.g. API unreachable), returns a default ``"unknown"``
+    classification so the caller can still make a safe retry decision.
+    """
+    try:
+        return classify_llm_error(returncode, stdout, stderr)
+    except Exception:
+        logger.debug("classify_llm_error failed, returning unknown", exc_info=True)
+        return ErrorClassification(
+            category="unknown",
             retryable=False,
             recommended_backoff=0,
-            raw_output=raw,
+            message=f"CLI exited with code {returncode}.",
         )
-
-    if _matches(_PROMPT_TOO_LONG_PATTERNS):
-        return LLMError(
-            category="prompt_too_long",
-            message="Prompt exceeds maximum context length.",
-            retryable=False,
-            recommended_backoff=0,
-            raw_output=raw,
-        )
-
-    if _matches(_RATE_LIMIT_PATTERNS):
-        return LLMError(
-            category="rate_limit",
-            message="API rate limit hit.",
-            retryable=True,
-            recommended_backoff=OVERLOADED_BACKOFF,
-            raw_output=raw,
-        )
-
-    if _matches(_CAPACITY_PATTERNS):
-        return LLMError(
-            category="capacity",
-            message="API at capacity.",
-            retryable=True,
-            recommended_backoff=OVERLOADED_BACKOFF,
-            raw_output=raw,
-        )
-
-    if _matches(_CONNECTION_PATTERNS):
-        return LLMError(
-            category="connection",
-            message="Network/connection error.",
-            retryable=True,
-            recommended_backoff=INITIAL_BACKOFF,
-            raw_output=raw,
-        )
-
-    if _matches(_TIMEOUT_PATTERNS):
-        return LLMError(
-            category="timeout",
-            message="Request timed out.",
-            retryable=True,
-            recommended_backoff=INITIAL_BACKOFF,
-            raw_output=raw,
-        )
-
-    # Check for output truncation: non-empty stdout with non-zero exit code
-    # suggests the LLM produced partial output before the process was killed.
-    if returncode != 0 and stdout.strip():
-        return LLMError(
-            category="output_truncated",
-            message=f"CLI exited with code {returncode} but produced partial output.",
-            retryable=False,
-            recommended_backoff=0,
-            raw_output=raw,
-        )
-
-    return LLMError(
-        category="unknown",
-        message=f"CLI exited with code {returncode}.",
-        retryable=False,
-        recommended_backoff=0,
-        raw_output=raw,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -364,12 +262,13 @@ class ClaudeCodeClient:
 
                 if returncode != 0:
                     err = classify_error(returncode, stdout, stderr)
+                    raw_output = f"{stderr} {stdout}".strip()
 
                     # Non-retryable errors: raise immediately.
                     if not err.retryable:
                         if err.category == "auth":
                             raise RuntimeError(
-                                f"{err.message} CLI output: {err.raw_output[:200]}"
+                                f"{err.message} CLI output: {raw_output[:200]}"
                             )
                         if err.category == "prompt_too_long":
                             raise RuntimeError(err.message)
@@ -384,7 +283,7 @@ class ClaudeCodeClient:
                         # unknown — raise
                         raise RuntimeError(
                             f"Claude Code CLI exited with code {returncode}: "
-                            f"{err.raw_output[:500]}"
+                            f"{raw_output[:500]}"
                         )
 
                     # Capacity errors have a limited retry budget (3),
@@ -422,7 +321,7 @@ class ClaudeCodeClient:
 
                     raise RuntimeError(
                         f"Claude Code CLI exited with code {returncode}: "
-                        f"{err.raw_output[:500]}"
+                        f"{raw_output[:500]}"
                     )
 
                 # Auth errors can arrive on stdout with exit code 0.

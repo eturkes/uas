@@ -15,15 +15,64 @@ from orchestrator.llm_client import (
     ClaudeCodeClient,
     DEFAULT_TIMEOUT,
     INITIAL_BACKOFF,
-    LLMError,
     MAX_BACKOFF,
     MAX_RETRIES,
     OVERLOADED_BACKOFF,
     PERSISTENT_HEARTBEAT_INTERVAL,
     _sleep_with_heartbeat,
     classify_error,
+    classify_llm_error,
     get_llm_client,
 )
+from uas.fuzzy_models import ErrorClassification
+
+
+def _mock_classify(returncode, stdout, stderr):
+    """Deterministic classification for tests — mimics old regex behaviour."""
+    combined = f"{stderr} {stdout}".lower()
+    if any(p in combined for p in [
+        "not logged in", "invalid api key", "unauthorized",
+        "authentication required",
+    ]):
+        return ErrorClassification(
+            category="auth", retryable=False,
+            recommended_backoff=0, message="Auth error")
+    if any(p in combined for p in ["prompt too long", "context length exceeded"]):
+        return ErrorClassification(
+            category="prompt_too_long", retryable=False,
+            recommended_backoff=0, message="Prompt too long")
+    if any(p in combined for p in [
+        "rate limit", "rate_limit", "hit your limit", "too many requests",
+        "out of usage", "out of extra usage", "429",
+    ]):
+        return ErrorClassification(
+            category="rate_limit", retryable=True,
+            recommended_backoff=OVERLOADED_BACKOFF, message="Rate limit hit")
+    if any(p in combined for p in [
+        "529", "overloaded", "overloaded_error", "capacity",
+    ]):
+        return ErrorClassification(
+            category="capacity", retryable=True,
+            recommended_backoff=OVERLOADED_BACKOFF, message="API at capacity")
+    if any(p in combined for p in [
+        "connection error", "connection refused", "connection reset",
+        "network is unreachable",
+    ]):
+        return ErrorClassification(
+            category="connection", retryable=True,
+            recommended_backoff=INITIAL_BACKOFF, message="Connection error")
+    if any(p in combined for p in ["timed out", "timeout"]):
+        return ErrorClassification(
+            category="timeout", retryable=True,
+            recommended_backoff=INITIAL_BACKOFF, message="Request timed out.")
+    if returncode != 0 and stdout.strip():
+        return ErrorClassification(
+            category="output_truncated", retryable=False,
+            recommended_backoff=0,
+            message=f"CLI exited with code {returncode} with partial output")
+    return ErrorClassification(
+        category="unknown", retryable=False,
+        recommended_backoff=0, message=f"CLI exited with code {returncode}")
 
 
 class TestGetLlmClient:
@@ -46,10 +95,11 @@ class TestGetLlmClient:
         assert client.model is None
 
 
+@patch("orchestrator.llm_client.classify_llm_error", side_effect=_mock_classify)
 class TestModelFlag:
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_model_flag_passed(self, _mock_which, mock_run):
+    def test_model_flag_passed(self, _mock_which, mock_run, _mock_cls):
         mock_run.return_value = _cp("response")
         client = ClaudeCodeClient(model="claude-sonnet-4-6")
         client.generate("hello")
@@ -60,7 +110,7 @@ class TestModelFlag:
 
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_fallback_model_when_none(self, _mock_which, mock_run):
+    def test_fallback_model_when_none(self, _mock_which, mock_run, _mock_cls):
         mock_run.return_value = _cp("response")
         client = ClaudeCodeClient(model=None)
         client.generate("hello")
@@ -70,12 +120,13 @@ class TestModelFlag:
         assert cmd[idx + 1] == "claude-opus-4-6"
 
 
+@patch("orchestrator.llm_client.classify_llm_error", side_effect=_mock_classify)
 @patch("orchestrator.llm_client.PERSISTENT_RETRY", False)
 class TestRetryBehaviour:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_retries_on_timeout(self, _mock_which, mock_run, mock_sleep):
+    def test_retries_on_timeout(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         mock_run.side_effect = [
             subprocess.TimeoutExpired(cmd="claude", timeout=120),
             _cp("ok"),
@@ -89,7 +140,7 @@ class TestRetryBehaviour:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_retries_on_transient_stderr(self, _mock_which, mock_run, mock_sleep):
+    def test_retries_on_transient_stderr(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         mock_run.side_effect = [
             _cp("", "Connection refused", 1),
             _cp("ok"),
@@ -102,7 +153,7 @@ class TestRetryBehaviour:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_raises_after_max_retries(self, _mock_which, mock_run, mock_sleep):
+    def test_raises_after_max_retries(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=120)
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError, match="timed out"):
@@ -112,7 +163,7 @@ class TestRetryBehaviour:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_no_retry_on_non_transient_error(self, _mock_which, mock_run, mock_sleep):
+    def test_no_retry_on_non_transient_error(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         mock_run.return_value = _cp("", "Invalid API key", 1)
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError):
@@ -122,7 +173,7 @@ class TestRetryBehaviour:
 
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_no_retry_on_file_not_found(self, _mock_which, mock_run):
+    def test_no_retry_on_file_not_found(self, _mock_which, mock_run, _mock_cls):
         mock_run.side_effect = FileNotFoundError("No such file")
         client = ClaudeCodeClient()
         with pytest.raises(RuntimeError, match="not found in PATH"):
@@ -132,7 +183,7 @@ class TestRetryBehaviour:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_exponential_backoff(self, _mock_which, mock_run, mock_sleep):
+    def test_exponential_backoff(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         mock_run.side_effect = [
             subprocess.TimeoutExpired(cmd="claude", timeout=120),
             subprocess.TimeoutExpired(cmd="claude", timeout=120),
@@ -148,7 +199,7 @@ class TestRetryBehaviour:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_overloaded_uses_longer_backoff(self, _mock_which, mock_run, mock_sleep):
+    def test_overloaded_uses_longer_backoff(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         """529 overloaded errors should use OVERLOADED_BACKOFF, not INITIAL_BACKOFF."""
         mock_run.side_effect = [
             _cp("", 'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}', 1),
@@ -164,7 +215,7 @@ class TestRetryBehaviour:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_529_retries_until_success(self, _mock_which, mock_run, mock_sleep):
+    def test_529_retries_until_success(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         """529 errors should be retried across multiple attempts."""
         mock_run.side_effect = [
             _cp("", "529 overloaded_error", 1),
@@ -178,101 +229,56 @@ class TestRetryBehaviour:
         assert mock_run.call_count == 4
 
 
+@patch("orchestrator.llm_client.classify_llm_error", side_effect=_mock_classify)
 class TestClassifyError:
-    """Unit tests for classify_error — a pure function with no I/O."""
+    """Tests for classify_error wrapper around classify_llm_error fuzzy fn."""
 
-    def test_timeout(self):
+    def test_passthrough(self, _mock_cls):
+        """classify_error passes through results from classify_llm_error."""
         err = classify_error(1, "", "request timed out")
         assert err.category == "timeout"
         assert err.retryable is True
 
-    def test_connection_error(self):
-        err = classify_error(1, "", "Connection refused by server")
-        assert err.category == "connection"
+    def test_returns_error_classification(self, _mock_cls):
+        """Return type is ErrorClassification."""
+        err = classify_error(1, "", "Connection refused")
+        assert isinstance(err, ErrorClassification)
+
+    def test_fallback_on_fuzzy_failure(self, _mock_cls):
+        """When classify_llm_error raises, classify_error returns unknown."""
+        with patch("orchestrator.llm_client.classify_llm_error",
+                   side_effect=RuntimeError("API down")):
+            err = classify_error(1, "", "Connection refused")
+        assert err.category == "unknown"
+        assert err.retryable is False
+
+    def test_rate_limit(self, _mock_cls):
+        err = classify_error(1, "", "rate limit exceeded")
+        assert err.category == "rate_limit"
         assert err.retryable is True
 
-    def test_auth_error(self):
+    def test_capacity(self, _mock_cls):
+        err = classify_error(1, "", "529 overloaded")
+        assert err.category == "capacity"
+        assert err.retryable is True
+
+    def test_auth(self, _mock_cls):
         err = classify_error(1, "", "Invalid API key")
         assert err.category == "auth"
         assert err.retryable is False
 
-    def test_empty_string_unknown(self):
+    def test_unknown_on_empty(self, _mock_cls):
         err = classify_error(1, "", "")
         assert err.category == "unknown"
         assert err.retryable is False
 
-    def test_rate_limit(self):
-        err = classify_error(1, "", "You've hit your limit · resets 1pm (UTC)")
-        assert err.category == "rate_limit"
-        assert err.retryable is True
-
-    def test_too_many_requests(self):
-        err = classify_error(1, "", "Too many requests, please slow down")
-        assert err.category == "rate_limit"
-        assert err.retryable is True
-
-    def test_overloaded_is_capacity(self):
-        err = classify_error(1, "", "API is overloaded")
-        assert err.category == "capacity"
-        assert err.retryable is True
-
-    def test_529_is_capacity(self):
-        err = classify_error(
-            1, "",
-            'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-        )
-        assert err.category == "capacity"
-        assert err.retryable is True
-
-    def test_overloaded_error_type_is_capacity(self):
-        err = classify_error(1, "", "overloaded_error")
-        assert err.category == "capacity"
-        assert err.retryable is True
-
-    def test_rate_limit_has_longer_backoff(self):
-        err = classify_error(1, "", "rate limit exceeded")
-        assert err.category == "rate_limit"
-        assert err.recommended_backoff == OVERLOADED_BACKOFF
-
-    def test_capacity_has_longer_backoff(self):
-        err = classify_error(1, "", "529 overloaded")
-        assert err.category == "capacity"
-        assert err.recommended_backoff == OVERLOADED_BACKOFF
-
-    def test_429_is_rate_limit(self):
-        err = classify_error(1, "", "HTTP 429 Too Many Requests")
-        assert err.category == "rate_limit"
-        assert err.retryable is True
-
-    def test_connection_has_short_backoff(self):
-        err = classify_error(1, "", "Connection refused")
-        assert err.recommended_backoff == INITIAL_BACKOFF
-
-    def test_timeout_has_short_backoff(self):
-        err = classify_error(1, "", "request timed out")
-        assert err.recommended_backoff == INITIAL_BACKOFF
-
-    def test_prompt_too_long(self):
-        err = classify_error(1, "", "prompt too long")
-        assert err.category == "prompt_too_long"
-        assert err.retryable is False
-
-    def test_output_truncated(self):
+    def test_output_truncated(self, _mock_cls):
         err = classify_error(1, "partial output here", "some error")
         assert err.category == "output_truncated"
         assert err.retryable is False
 
-    def test_auth_in_stdout(self):
-        err = classify_error(0, "not logged in", "")
-        assert err.category == "auth"
-        assert err.retryable is False
 
-    def test_raw_output_preserved(self):
-        err = classify_error(1, "out", "err")
-        assert "err" in err.raw_output
-        assert "out" in err.raw_output
-
-
+@patch("orchestrator.llm_client.classify_llm_error", side_effect=_mock_classify)
 @patch("orchestrator.llm_client.PERSISTENT_RETRY", False)
 class TestRateLimitInStdout:
     """Regression tests: rate limit text in stdout must not be returned as
@@ -281,7 +287,7 @@ class TestRateLimitInStdout:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_rate_limit_in_stdout_retried(self, _mock_which, mock_run, mock_sleep):
+    def test_rate_limit_in_stdout_retried(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         mock_run.side_effect = [
             _cp("You've hit your limit · resets 1pm (UTC)", "", 1),
             _cp("valid response"),
@@ -294,7 +300,7 @@ class TestRateLimitInStdout:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_rate_limit_in_stderr_with_stdout_retried(self, _mock_which, mock_run, mock_sleep):
+    def test_rate_limit_in_stderr_with_stdout_retried(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         """Even if stdout has content, a rate-limit in stderr should trigger retry."""
         mock_run.side_effect = [
             _cp("partial output", "rate limit exceeded", 1),
@@ -308,7 +314,7 @@ class TestRateLimitInStdout:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_rate_limit_exhausted_raises_not_returns(self, _mock_which, mock_run, mock_sleep):
+    def test_rate_limit_exhausted_raises_not_returns(self, _mock_which, mock_run, mock_sleep, _mock_cls):
         """When all transient retries are exhausted, raise instead of returning
         the rate limit message as valid LLM content."""
         mock_run.return_value = _cp("You've hit your limit · resets 6pm (UTC)", "", 1)
@@ -320,7 +326,7 @@ class TestRateLimitInStdout:
 
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_non_transient_stdout_still_returned(self, _mock_which, mock_run):
+    def test_non_transient_stdout_still_returned(self, _mock_which, mock_run, _mock_cls):
         """Non-transient failures with stdout should still return partial output
         for truncation recovery."""
         mock_run.return_value = _cp("partial valid code output", "some non-transient error", 1)
@@ -329,6 +335,7 @@ class TestRateLimitInStdout:
         assert result.text == "partial valid code output"
 
 
+@patch("orchestrator.llm_client.classify_llm_error", side_effect=_mock_classify)
 class TestPersistentRetry:
     """Tests for Section 3: UAS_PERSISTENT_RETRY mode."""
 
@@ -336,7 +343,7 @@ class TestPersistentRetry:
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_retries_beyond_max_on_429(self, _mock_which, mock_run, mock_hb_sleep):
+    def test_retries_beyond_max_on_429(self, _mock_which, mock_run, mock_hb_sleep, _mock_cls):
         """With PERSISTENT_RETRY, retryable errors retry beyond MAX_RETRIES."""
         errors = [_cp("", "429 Too Many Requests", 1)] * (MAX_RETRIES + 2)
         mock_run.side_effect = errors + [_cp("ok")]
@@ -349,7 +356,7 @@ class TestPersistentRetry:
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_backoff_caps_at_max_backoff(self, _mock_which, mock_run, mock_hb_sleep):
+    def test_backoff_caps_at_max_backoff(self, _mock_which, mock_run, mock_hb_sleep, _mock_cls):
         """Backoff is capped at MAX_BACKOFF (300s) in persistent mode."""
         errors = [_cp("", "overloaded", 1)] * 6
         mock_run.side_effect = errors + [_cp("ok")]
@@ -362,7 +369,7 @@ class TestPersistentRetry:
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_non_retryable_raises_in_persistent_mode(self, _mock_which, mock_run, mock_hb_sleep):
+    def test_non_retryable_raises_in_persistent_mode(self, _mock_which, mock_run, mock_hb_sleep, _mock_cls):
         """Non-retryable errors still raise immediately in persistent mode."""
         mock_run.return_value = _cp("", "Invalid API key", 1)
         client = ClaudeCodeClient()
@@ -375,7 +382,7 @@ class TestPersistentRetry:
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_capacity_unlimited_in_persistent_mode(self, _mock_which, mock_run, mock_hb_sleep):
+    def test_capacity_unlimited_in_persistent_mode(self, _mock_which, mock_run, mock_hb_sleep, _mock_cls):
         """In persistent mode, capacity errors retry beyond MAX_CAPACITY_RETRIES (3)."""
         errors = [_cp("", "529 overloaded_error", 1)] * 5
         mock_run.side_effect = errors + [_cp("ok")]
@@ -388,7 +395,7 @@ class TestPersistentRetry:
     @patch("orchestrator.llm_client._sleep_with_heartbeat")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_uses_heartbeat_sleep(self, _mock_which, mock_run, mock_hb_sleep):
+    def test_uses_heartbeat_sleep(self, _mock_which, mock_run, mock_hb_sleep, _mock_cls):
         """Persistent mode uses _sleep_with_heartbeat instead of time.sleep."""
         mock_run.side_effect = [
             _cp("", "Connection refused", 1),

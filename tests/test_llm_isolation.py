@@ -11,15 +11,45 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.llm_client import ClaudeCodeClient
+from orchestrator.llm_client import ClaudeCodeClient, INITIAL_BACKOFF, OVERLOADED_BACKOFF
+from uas.fuzzy_models import ErrorClassification
 
 
+def _mock_classify(returncode, stdout, stderr):
+    """Deterministic classification for tests — mimics old regex behaviour."""
+    combined = f"{stderr} {stdout}".lower()
+    if any(p in combined for p in [
+        "not logged in", "invalid api key", "unauthorized",
+    ]):
+        return ErrorClassification(
+            category="auth", retryable=False,
+            recommended_backoff=0, message="Auth error")
+    if any(p in combined for p in [
+        "connection error", "connection refused", "connection reset",
+    ]):
+        return ErrorClassification(
+            category="connection", retryable=True,
+            recommended_backoff=INITIAL_BACKOFF, message="Connection error")
+    if any(p in combined for p in ["timed out", "timeout"]):
+        return ErrorClassification(
+            category="timeout", retryable=True,
+            recommended_backoff=INITIAL_BACKOFF, message="Request timed out.")
+    if returncode != 0 and stdout.strip():
+        return ErrorClassification(
+            category="output_truncated", retryable=False,
+            recommended_backoff=0, message="Output truncated")
+    return ErrorClassification(
+        category="unknown", retryable=False,
+        recommended_backoff=0, message=f"CLI exited with code {returncode}")
+
+
+@patch("orchestrator.llm_client.classify_llm_error", side_effect=_mock_classify)
 class TestGenerateIsolation:
     """Verify that generate() isolates the CLI subprocess."""
 
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_passes_temp_cwd_to_subprocess(self, _mock_which, mock_run):
+    def test_passes_temp_cwd_to_subprocess(self, _mock_which, mock_run, _mock_cls):
         """generate() should pass a temp directory as cwd to subprocess.run."""
         captured = {}
 
@@ -40,7 +70,7 @@ class TestGenerateIsolation:
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
     def test_workspace_vars_removed_from_env(
-        self, _mock_which, mock_run, monkeypatch
+        self, _mock_which, mock_run, _mock_cls, monkeypatch
     ):
         """WORKSPACE and UAS_WORKSPACE must not leak to the CLI."""
         monkeypatch.setenv("WORKSPACE", "/ws")
@@ -55,7 +85,7 @@ class TestGenerateIsolation:
 
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_claude_config_dir_inside_isolation(self, _mock_which, mock_run):
+    def test_claude_config_dir_inside_isolation(self, _mock_which, mock_run, _mock_cls):
         """CLAUDE_CONFIG_DIR should be a subdirectory of the isolation dir."""
         captured = {}
 
@@ -73,7 +103,7 @@ class TestGenerateIsolation:
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
     def test_credentials_copied_to_isolation_dir(
-        self, _mock_which, mock_run, tmp_path, monkeypatch
+        self, _mock_which, mock_run, _mock_cls, tmp_path, monkeypatch
     ):
         """Credential files from the original config dir should be copied."""
         # Create a fake config dir with credentials
@@ -101,7 +131,7 @@ class TestGenerateIsolation:
 
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_isolation_dir_cleaned_up_on_success(self, _mock_which, mock_run):
+    def test_isolation_dir_cleaned_up_on_success(self, _mock_which, mock_run, _mock_cls):
         """Temp dir must be removed after a successful generation."""
         captured = {}
 
@@ -117,7 +147,7 @@ class TestGenerateIsolation:
 
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_isolation_dir_cleaned_up_on_error(self, _mock_which, mock_run):
+    def test_isolation_dir_cleaned_up_on_error(self, _mock_which, mock_run, _mock_cls):
         """Temp dir must be removed even when the CLI fails."""
         captured = {}
 
@@ -135,7 +165,7 @@ class TestGenerateIsolation:
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_same_dir_reused_across_retries(self, _mock_which, mock_run, _sleep):
+    def test_same_dir_reused_across_retries(self, _mock_which, mock_run, _sleep, _mock_cls):
         """All retry attempts must share the same isolation directory."""
         cwds = []
 

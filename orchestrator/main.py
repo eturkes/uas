@@ -15,6 +15,11 @@ from datetime import datetime, timezone
 
 import config
 
+from pydantic import ValidationError
+
+from uas.fuzzy import fuzzy_function
+from uas.fuzzy_models import UASResult
+
 from .llm_client import get_llm_client
 from .parser import extract_code, extract_truncated_block
 from .sandbox import run_in_sandbox
@@ -96,6 +101,12 @@ logger = logging.getLogger(__name__)
 _UAS_RESULT_PATTERN = re.compile(
     r"^UAS_RESULT:\s*(\{.*\})\s*$", re.MULTILINE | re.IGNORECASE,
 )
+
+
+@fuzzy_function
+def parse_uas_output(stdout: str) -> UASResult:
+    """Extract the UAS_RESULT JSON from sandbox stdout. Return structured fields."""
+
 
 _INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
 
@@ -270,33 +281,35 @@ def collect_system_state() -> str:
     return "\n".join(lines)
 
 
-def parse_uas_result(stdout: str) -> dict | None:
+def parse_uas_result(stdout: str) -> UASResult | None:
     """Extract the UAS_RESULT JSON from stdout if present.
 
-    Looks for a line matching: UAS_RESULT: {"status": "ok", ...}
-    Uses the **last** match, since scripts are instructed to print
-    UAS_RESULT as the final line of stdout.  When a script runs
-    sub-scripts, their UAS_RESULT lines may also appear in stdout;
-    the last one is the authoritative result from the outer script.
-    Tolerates case variations, missing space after colon, and
-    single-quoted JSON as a fallback.
-    Returns the parsed dict or None if not found/invalid.
+    Uses a two-tier strategy:
+    1. **Fast path** — regex extraction + Pydantic validation (no API call).
+    2. **Fuzzy fallback** — LLM-backed ``parse_uas_output`` for malformed or
+       non-standard output that the regex cannot handle.
+
+    Returns a validated ``UASResult`` or ``None`` if no result is found.
     """
+    # Fast path: regex extraction, last match wins.
     matches = list(_UAS_RESULT_PATTERN.finditer(stdout))
-    if not matches:
-        return None
-    # Try matches from last to first, returning the first parseable one.
-    for match in reversed(matches):
-        raw = match.group(1)
+    if matches:
+        for match in reversed(matches):
+            raw = match.group(1)
+            for candidate in (raw, raw.replace("'", '"')):
+                try:
+                    data = json.loads(candidate)
+                    return UASResult.model_validate(data)
+                except (json.JSONDecodeError, ValueError, ValidationError):
+                    continue
+
+    # Fuzzy fallback: only attempt if stdout plausibly contains a UAS result.
+    if "uas_result" in stdout.lower():
         try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
-            pass
-        # Fallback: replace single quotes with double quotes
-        try:
-            return json.loads(raw.replace("'", '"'))
-        except (json.JSONDecodeError, ValueError):
-            continue
+            return parse_uas_output(stdout)
+        except Exception:
+            logger.debug("fuzzy parse_uas_output failed", exc_info=True)
+
     return None
 
 
@@ -1128,11 +1141,11 @@ def score_result(result: dict, task: str | None = None) -> int:
     uas = parse_uas_result(result.get("stdout", ""))
     if uas:
         score += 100  # has any UAS_RESULT
-        if uas.get("files_written"):
-            score += 50 + len(uas["files_written"]) * 10
-        if uas.get("summary"):
+        if uas.files_written:
+            score += 50 + len(uas.files_written) * 10
+        if uas.summary:
             score += 50
-        if uas.get("status") == "ok":
+        if uas.status == "ok":
             score += 50
 
     # Prefer runs with more stdout (more informative)
@@ -1144,8 +1157,8 @@ def score_result(result: dict, task: str | None = None) -> int:
         if priorities:
             bonus_weights = {priorities[i]: 3 - i for i in range(len(priorities))}
             files_bonus = 0
-            if uas and uas.get("files_written"):
-                files_bonus = len(uas["files_written"]) * 20
+            if uas and uas.files_written:
+                files_bonus = len(uas.files_written) * 20
             stdout_bonus = min(stdout_len // 50, 100)
             exit_bonus = 100 if result["exit_code"] == 0 else 0
 
@@ -1578,7 +1591,7 @@ def main():
         if result["exit_code"] == 0:
             uas_result = parse_uas_result(result["stdout"] or "")
             if uas_result:
-                logger.info("UAS_RESULT: %s", json.dumps(uas_result))
+                logger.info("UAS_RESULT: %s", uas_result.model_dump_json())
             logger.info("\nSUCCESS on attempt %d.", attempt)
             import json as _json
             logger.info("__UAS_ORCH_USAGE__:%s", _json.dumps(_orch_usage))

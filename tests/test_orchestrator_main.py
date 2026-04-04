@@ -148,8 +148,9 @@ class TestParseUasResult:
         stdout = 'some output\nUAS_RESULT: {"status": "ok", "files_written": ["a.txt"], "summary": "done"}\n'
         result = parse_uas_result(stdout)
         assert result is not None
-        assert result["status"] == "ok"
-        assert result["files_written"] == ["a.txt"]
+        assert result.status == "ok"
+        assert result.files_written == ["a.txt"]
+        assert result.summary == "done"
 
     def test_no_result_line(self):
         assert parse_uas_result("just regular output\n") is None
@@ -161,10 +162,11 @@ class TestParseUasResult:
         assert parse_uas_result("") is None
 
     def test_error_result(self):
-        stdout = 'UAS_RESULT: {"status": "error", "error": "file missing"}\n'
+        stdout = 'UAS_RESULT: {"status": "error", "error": "file missing", "summary": "failed"}\n'
         result = parse_uas_result(stdout)
         assert result is not None
-        assert result["status"] == "error"
+        assert result.status == "error"
+        assert result.error == "file missing"
 
 
 class TestGetTask:

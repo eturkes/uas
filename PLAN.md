@@ -78,7 +78,7 @@ brittle pattern maintenance and gives deterministic structured outputs.
         recommended_backoff: float, message: str)`
       - `CodeQuality(has_uas_result: bool, has_input_call: bool,
         is_file_modification: bool, missing_imports: list[str])`
-- [ ] **2.3** Replace `_UAS_RESULT_PATTERN` regex in `orchestrator/main.py`
+- [x] **2.3** Replace `_UAS_RESULT_PATTERN` regex in `orchestrator/main.py`
       (line 96) with a fuzzy function:
       `parse_uas_output(stdout: str) -> UASResult`. The function's docstring
       becomes the LLM prompt: "Extract the UAS_RESULT JSON from sandbox

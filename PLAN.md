@@ -31,7 +31,7 @@ is over-engineered for a system that only needs the final JSON result.
       `LLMResult(text, usage)`.
 - [x] **1.4** Simplify `_parse_json_output()` — it remains the sole output
       parser. Delete `_parse_stream_json_output()` entirely (lines 404-451).
-- [ ] **1.5** Update `run_orchestrator()` in `architect/executor.py`
+- [x] **1.5** Update `run_orchestrator()` in `architect/executor.py`
       (lines 145-190) to remove `progress_callback` plumbing and the
       `UAS_STREAM_PROGRESS` env var injection.
 - [ ] **1.6** In `architect/executor.py`, simplify `_run_streaming()` (lines

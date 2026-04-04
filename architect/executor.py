@@ -144,7 +144,6 @@ def ensure_claude_md(workspace: str, step_context: dict | None = None) -> None:
 
 def run_orchestrator(task: str, extra_env: dict | None = None,
                      output_callback=None,
-                     progress_callback=None,
                      step_context: dict | None = None) -> dict:
     """Run the Orchestrator with the given task.
 
@@ -153,10 +152,6 @@ def run_orchestrator(task: str, extra_env: dict | None = None,
         extra_env: Optional extra environment variables (e.g. UAS_STEP_ID).
         output_callback: Optional callable(line: str) invoked for each stderr
             line as it arrives, enabling real-time output in the dashboard.
-        progress_callback: Optional callable(dict) for structured LLM progress
-            events (Section 6).  When provided, the orchestrator subprocess
-            receives ``UAS_STREAM_PROGRESS=1`` so its LLM client uses
-            stream-json output format.
         step_context: Optional dict with step metadata for dynamic CLAUDE.md.
 
     Returns dict with exit_code, stdout, stderr.
@@ -166,12 +161,6 @@ def run_orchestrator(task: str, extra_env: dict | None = None,
         ensure_claude_md(workspace, step_context=step_context)
     except OSError as e:
         logger.warning("Could not write .claude/CLAUDE.md: %s", e)
-
-    # When a progress_callback is provided, signal the subprocess to use
-    # stream-json output format via an env var.
-    if progress_callback:
-        extra_env = dict(extra_env) if extra_env else {}
-        extra_env["UAS_STREAM_PROGRESS"] = "1"
 
     event_log = get_event_log()
     event_log.emit(EventType.SANDBOX_START, data={"mode": EXECUTION_MODE})

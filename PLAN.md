@@ -44,7 +44,7 @@ is over-engineered for a system that only needs the final JSON result.
 - [x] **1.8** Update all tests that mock `_run_streaming`, `Popen`, or
       `progress_callback` behavior. Grep `tests/` for these symbols and
       adapt assertions to the new `subprocess.run` interface.
-- [ ] **1.9** Smoke-test the full pipeline: `architect -> executor ->
+- [x] **1.9** Smoke-test the full pipeline: `architect -> executor ->
       orchestrator -> llm_client -> claude CLI` with a trivial goal to
       confirm the simplified subprocess chain works end to end.
 

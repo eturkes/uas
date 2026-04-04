@@ -4,5 +4,9 @@ rich>=13.0
 # HTML report templating
 jinja2>=3.1
 
+# LLM-backed fuzzy functions (Phase 2)
+anthropic>=0.39.0
+pydantic>=2.0
+
 # Testing
 pytest>=7.0

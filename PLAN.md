@@ -58,7 +58,7 @@ brittle pattern maintenance and gives deterministic structured outputs.
 
 ### Tasks
 
-- [ ] **2.1** Create `uas/fuzzy.py` (new module at project root). Implement:
+- [x] **2.1** Create `uas/fuzzy.py` (new module at project root). Implement:
       - `@fuzzy_function` decorator that accepts a Pydantic `BaseModel` as
         the return type annotation.
       - Internally calls `anthropic.Anthropic().messages.create()` (or a

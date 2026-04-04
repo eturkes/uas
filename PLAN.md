@@ -29,7 +29,7 @@ is over-engineered for a system that only needs the final JSON result.
       `generate()` and `_dispatch_progress()`. UAS does not need real-time
       token streaming; the Orchestrator only consumes the final
       `LLMResult(text, usage)`.
-- [ ] **1.4** Simplify `_parse_json_output()` — it remains the sole output
+- [x] **1.4** Simplify `_parse_json_output()` — it remains the sole output
       parser. Delete `_parse_stream_json_output()` entirely (lines 404-451).
 - [ ] **1.5** Update `run_orchestrator()` in `architect/executor.py`
       (lines 145-190) to remove `progress_callback` plumbing and the

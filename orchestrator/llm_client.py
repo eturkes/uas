@@ -286,56 +286,6 @@ class ClaudeCodeClient:
         except (_json.JSONDecodeError, TypeError, AttributeError):
             return LLMResult(text=stdout.strip(), usage={"input": 0, "output": 0})
 
-    @staticmethod
-    def _parse_stream_json_output(stdout: str, model: str) -> LLMResult:
-        """Parse stream-json CLI output (newline-delimited JSON events).
-
-        Falls back to empty result if no valid events found, allowing
-        the caller to retry with ``_parse_json_output``.
-        """
-        result_text = ""
-        usage = {"input": 0, "output": 0}
-        text_parts: list[str] = []
-
-        for line in stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = _json.loads(line)
-            except (_json.JSONDecodeError, ValueError):
-                continue
-            if not isinstance(event, dict):
-                continue
-
-            etype = event.get("type", "")
-
-            if etype == "result":
-                result_text = event.get("result", "")
-                raw_usage = event.get("usage") or {}
-                usage = {
-                    "input": raw_usage.get("input_tokens", 0),
-                    "output": raw_usage.get("output_tokens", 0),
-                }
-            elif etype == "content_block_delta":
-                delta = event.get("delta", {})
-                if delta.get("type") == "text_delta":
-                    text_parts.append(delta.get("text", ""))
-            elif etype == "message_start":
-                msg = event.get("message", {})
-                raw_usage = msg.get("usage") or {}
-                if raw_usage:
-                    usage["input"] = raw_usage.get("input_tokens", usage["input"])
-            elif etype == "message_delta":
-                raw_usage = event.get("usage") or {}
-                if raw_usage:
-                    usage["output"] = raw_usage.get("output_tokens", usage["output"])
-
-        if not result_text and text_parts:
-            result_text = "".join(text_parts)
-
-        return LLMResult(text=result_text, usage=usage)
-
     def generate(self, prompt: str) -> LLMResult:
         """Send a prompt to Claude Code CLI and return text + token usage.
 

@@ -14,7 +14,7 @@ from orchestrator.main import (
     build_prompt, get_task, main, parse_uas_result, pre_execution_check,
     MAX_RETRIES,
 )
-from uas.fuzzy_models import CodeQuality
+from uas.fuzzy_models import CodeQuality, ExecutionResult
 
 
 class TestBuildPrompt:
@@ -214,13 +214,25 @@ def _mock_quality(code: str, task: str) -> CodeQuality:
     )
 
 
+def _mock_evaluate_sandbox(stdout: str, stderr: str, exit_code: int) -> ExecutionResult:
+    """Deterministic sandbox evaluation for tests — mirrors exit code logic."""
+    success = exit_code == 0
+    return ExecutionResult(
+        success=success,
+        revert_needed=not success and bool(stdout),
+        error_category=None if success else "runtime_error",
+        summary="ok" if success else (stderr or stdout or "Non-zero exit code"),
+    )
+
+
+@patch("orchestrator.main.evaluate_sandbox", side_effect=_mock_evaluate_sandbox)
 @patch("orchestrator.main.assess_code_quality", side_effect=_mock_quality)
 class TestMainLoop:
     @patch("orchestrator.main.MINIMAL_MODE", True)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_success_on_first_attempt(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq):
+    def test_success_on_first_attempt(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -239,7 +251,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_retry_on_sandbox_failure(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq):
+    def test_retry_on_sandbox_failure(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -261,7 +273,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_failure_after_all_retries(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq):
+    def test_failure_after_all_retries(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -281,7 +293,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_empty_code_extraction(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq):
+    def test_empty_code_extraction(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         # LLM returns text with no code block
@@ -298,7 +310,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_no_task_exits_1(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, monkeypatch):
+    def test_no_task_exits_1(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, _mock_eval, monkeypatch):
         monkeypatch.delenv("UAS_TASK", raising=False)
         mock_args.return_value = argparse.Namespace(task=[], verbose=False)
         fake_stdin = io.StringIO("")
@@ -311,7 +323,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_uas_result_parsed_on_success(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq):
+    def test_uas_result_parsed_on_success(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -330,7 +342,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq):
+    def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         _u = {"input": 0, "output": 0}
@@ -355,7 +367,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq):
+    def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         _u = {"input": 0, "output": 0}

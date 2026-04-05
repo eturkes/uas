@@ -18,7 +18,7 @@ import config
 from pydantic import ValidationError
 
 from uas.fuzzy import fuzzy_function
-from uas.fuzzy_models import CodeQuality, UASResult
+from uas.fuzzy_models import CodeQuality, ExecutionResult, UASResult
 
 from .llm_client import get_llm_client
 from .parser import extract_code, extract_truncated_block
@@ -123,6 +123,27 @@ def assess_code_quality(code: str, task: str) -> CodeQuality:
       referenced but missing an import statement.
 
     Either code or task may be empty when only one aspect is being checked.
+    """
+
+
+@fuzzy_function
+def evaluate_sandbox(stdout: str, stderr: str, exit_code: int) -> ExecutionResult:
+    """Evaluate the result of a sandbox code execution attempt.
+
+    Analyze the stdout, stderr, and exit_code to produce a structured verdict:
+    - success: True if the execution completed its task successfully. An exit_code
+      of 0 with a valid UAS_RESULT line reporting status "ok" is the primary
+      indicator. An exit_code of 0 without errors is also considered success.
+    - revert_needed: True if the execution produced partial or corrupted output
+      that could leave the workspace in a broken state (e.g. partially written
+      files, import errors after file creation, syntax errors in generated code).
+      False if execution either fully succeeded or cleanly failed without side
+      effects.
+    - error_category: A short label for the failure type if not successful, e.g.
+      "syntax_error", "import_error", "runtime_error", "timeout", "test_failure",
+      "missing_dependency", or None if successful.
+    - summary: A concise one-sentence description of what happened during
+      execution, suitable for logging and retry context.
     """
 
 
@@ -1607,7 +1628,15 @@ def main():
         if result["stderr"]:
             logger.info("%s\n%s\n%s", STDERR_START, result["stderr"], STDERR_END)
 
-        if result["exit_code"] == 0:
+        # Evaluate sandbox outcome via structured ExecutionResult.
+        exec_result = evaluate_sandbox(
+            stdout=result["stdout"] or "",
+            stderr=result["stderr"] or "",
+            exit_code=result["exit_code"],
+        )
+        logger.info("ExecutionResult: %s", exec_result.model_dump_json())
+
+        if exec_result.success:
             uas_result = parse_uas_result(result["stdout"] or "")
             if uas_result:
                 logger.info("UAS_RESULT: %s", uas_result.model_dump_json())
@@ -1617,14 +1646,19 @@ def main():
             sys.exit(0)
 
         previous_code = code
-        previous_error = (
+        previous_error = exec_result.summary or (
             result["stderr"] or result["stdout"] or "Non-zero exit code"
         )
+        if exec_result.error_category:
+            previous_error = (
+                f"[{exec_result.error_category}] {previous_error}"
+            )
         # Section 11: Accumulate attempt history for retry context.
         attempt_history.append({
             "attempt": attempt,
             "error": previous_error,
             "code_snippet": code or "",
+            "revert_needed": exec_result.revert_needed,
         })
         logger.error("FAILED on attempt %d.", attempt)
 

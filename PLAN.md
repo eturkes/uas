@@ -98,7 +98,7 @@ brittle pattern maintenance and gives deterministic structured outputs.
       stderr: str, uas_result: dict | None)`. Keep the delimiter-based
       extraction as the fast path; only invoke the fuzzy function on
       delimiter absence.
-- [ ] **2.7** Create `evaluate_sandbox(stdout: str, stderr: str, exit_code:
+- [x] **2.7** Create `evaluate_sandbox(stdout: str, stderr: str, exit_code:
       int) -> ExecutionResult` fuzzy function. Wire it into the Orchestrator
       main loop (after `run_in_sandbox()` returns) so the DAG's next-step
       decision is driven by the structured `ExecutionResult`, not raw

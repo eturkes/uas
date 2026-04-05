@@ -17,6 +17,7 @@ from orchestrator.main import (
     score_result,
     MAX_RETRIES,
 )
+from uas.fuzzy_models import ExecutionResult
 
 
 class TestGetBestOfN:
@@ -269,6 +270,18 @@ class TestGenerateAndVote:
 
 
 
+def _mock_evaluate_sandbox(stdout: str, stderr: str, exit_code: int) -> ExecutionResult:
+    """Deterministic sandbox evaluation for tests."""
+    success = exit_code == 0
+    return ExecutionResult(
+        success=success,
+        revert_needed=not success and bool(stdout),
+        error_category=None if success else "runtime_error",
+        summary="ok" if success else (stderr or stdout or "Non-zero exit code"),
+    )
+
+
+@patch("orchestrator.main.evaluate_sandbox", side_effect=_mock_evaluate_sandbox)
 class TestMainLoopWithBestOfN:
     """Integration tests: main() loop with best-of-N enabled."""
 
@@ -277,7 +290,7 @@ class TestMainLoopWithBestOfN:
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
     def test_disabled_by_default_first_attempt_success(
-        self, mock_client_factory, mock_sandbox, mock_args, monkeypatch
+        self, mock_client_factory, mock_sandbox, mock_args, _mock_eval, monkeypatch
     ):
         """With UAS_BEST_OF_N unset, behavior matches original single-sample."""
         monkeypatch.delenv("UAS_BEST_OF_N", raising=False)
@@ -299,7 +312,7 @@ class TestMainLoopWithBestOfN:
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
     def test_best_of_n_on_retry(
-        self, mock_client_factory, mock_sandbox, mock_vote, mock_args, monkeypatch
+        self, mock_client_factory, mock_sandbox, mock_vote, mock_args, _mock_eval, monkeypatch
     ):
         """On retry with UAS_BEST_OF_N=3, best-of-N is used."""
         monkeypatch.setenv("UAS_BEST_OF_N", "3")
@@ -329,7 +342,7 @@ class TestMainLoopWithBestOfN:
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
     def test_best_of_n_extraction_failure_continues(
-        self, mock_client_factory, mock_sandbox, mock_vote, mock_args, monkeypatch
+        self, mock_client_factory, mock_sandbox, mock_vote, mock_args, _mock_eval, monkeypatch
     ):
         """If generate_and_vote returns None, the loop continues to next attempt."""
         monkeypatch.setenv("UAS_BEST_OF_N", "2")
@@ -358,7 +371,7 @@ class TestMainLoopWithBestOfN:
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
     def test_best_of_n_all_fail(
-        self, mock_client_factory, mock_sandbox, mock_args, monkeypatch
+        self, mock_client_factory, mock_sandbox, mock_args, _mock_eval, monkeypatch
     ):
         """When all attempts fail including best-of-N, exit code 1."""
         monkeypatch.setenv("UAS_BEST_OF_N", "2")

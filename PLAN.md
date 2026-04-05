@@ -138,7 +138,7 @@ attempts are hard-reset to restore a clean filesystem.
 - [x] **3.3** Wire `create_attempt_branch()` into the Orchestrator retry
       loop in `orchestrator/main.py` (line 1455, top of `for attempt`). Each
       attempt starts on a clean branch forked from the last checkpoint.
-- [ ] **3.4** Wire `rollback_to_checkpoint()` into the Orchestrator failure
+- [x] **3.4** Wire `rollback_to_checkpoint()` into the Orchestrator failure
       path (line 1587, `previous_code = code` block). When an attempt fails,
       hard-reset the workspace before the next attempt begins.
 - [ ] **3.5** Add the 3-strike rollback rule: in `architect/main.py`'s

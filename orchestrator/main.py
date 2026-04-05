@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from uas.fuzzy import fuzzy_function
 from uas.fuzzy_models import CodeQuality, ExecutionResult, UASResult
 
-from architect.git_state import create_attempt_branch
+from architect.git_state import create_attempt_branch, rollback_to_checkpoint
 
 from .llm_client import get_llm_client
 from .parser import extract_code, extract_truncated_block
@@ -1687,6 +1687,12 @@ def main():
             "revert_needed": exec_result.revert_needed,
         })
         logger.error("FAILED on attempt %d.", attempt)
+
+        # Phase 3.4: Roll back the workspace to the last uas-wip checkpoint
+        # so the next attempt starts from a clean filesystem state.
+        if exec_result.revert_needed and _workspace and _step_id is not None:
+            rollback_to_checkpoint(_workspace, _step_id)
+            logger.info("Rolled back workspace to uas-wip checkpoint.")
 
     logger.error("FAILED after %d attempts.", MAX_RETRIES)
     import json as _json

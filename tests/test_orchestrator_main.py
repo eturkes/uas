@@ -10,9 +10,11 @@ import pytest
 from orchestrator.main import (
     _contains_tool_calls,
     _task_mentions_file_modification,
+    assess_code_quality,
     build_prompt, get_task, main, parse_uas_result, pre_execution_check,
     MAX_RETRIES,
 )
+from uas.fuzzy_models import CodeQuality
 
 
 class TestBuildPrompt:
@@ -194,12 +196,31 @@ class TestGetTask:
         assert get_task(args) == "cli task"
 
 
+def _mock_quality(code: str, task: str) -> CodeQuality:
+    """Deterministic code quality assessment for tests — mimics LLM behaviour."""
+    import re
+    has_input = bool(re.search(r"\binput\s*\(", code))
+    has_uas = "UAS_RESULT" in code
+    is_mod = bool(re.search(
+        r"\b(?:modify|update|insert|extend|edit|change|add\s+(?:\w+\s+)*to)\b"
+        r".*?\b\w+\.\w{1,5}\b",
+        task, re.IGNORECASE | re.DOTALL,
+    ))
+    return CodeQuality(
+        has_uas_result=has_uas,
+        has_input_call=has_input,
+        is_file_modification=is_mod,
+        missing_imports=[],
+    )
+
+
+@patch("orchestrator.main.assess_code_quality", side_effect=_mock_quality)
 class TestMainLoop:
     @patch("orchestrator.main.MINIMAL_MODE", True)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_success_on_first_attempt(self, mock_client_factory, mock_sandbox, mock_args):
+    def test_success_on_first_attempt(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -218,7 +239,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_retry_on_sandbox_failure(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
+    def test_retry_on_sandbox_failure(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -240,7 +261,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_failure_after_all_retries(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
+    def test_failure_after_all_retries(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -260,7 +281,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_empty_code_extraction(self, mock_client_factory, mock_sandbox, mock_args):
+    def test_empty_code_extraction(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         # LLM returns text with no code block
@@ -277,7 +298,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_no_task_exits_1(self, mock_client_factory, mock_sandbox, mock_args, monkeypatch):
+    def test_no_task_exits_1(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, monkeypatch):
         monkeypatch.delenv("UAS_TASK", raising=False)
         mock_args.return_value = argparse.Namespace(task=[], verbose=False)
         fake_stdin = io.StringIO("")
@@ -290,7 +311,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_uas_result_parsed_on_success(self, mock_client_factory, mock_sandbox, mock_args):
+    def test_uas_result_parsed_on_success(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -309,7 +330,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
+    def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         _u = {"input": 0, "output": 0}
@@ -334,7 +355,7 @@ class TestMainLoop:
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry):
+    def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         _u = {"input": 0, "output": 0}
@@ -356,45 +377,52 @@ class TestMainLoop:
         assert mock_sandbox.call_count == 2
 
 
+@patch("orchestrator.main.assess_code_quality", side_effect=_mock_quality)
 class TestPreExecutionCheck:
-    def test_valid_code_no_errors(self):
+    def test_valid_code_no_errors(self, _mock_cq):
         code = 'print("UAS_RESULT: ok")'
         errors, warnings = pre_execution_check(code)
         assert errors == []
         assert warnings == []
 
-    def test_syntax_error_is_critical(self):
+    def test_syntax_error_is_critical(self, _mock_cq):
         code = "def foo(\n"
         errors, warnings = pre_execution_check(code)
         assert len(errors) == 1
         assert "Syntax error" in errors[0]
 
-    def test_input_call_is_critical(self):
+    def test_input_call_is_critical(self, _mock_cq):
         code = 'name = input("Enter name: ")\nprint(f"UAS_RESULT: {name}")'
         errors, warnings = pre_execution_check(code)
         assert len(errors) == 1
         assert "input()" in errors[0]
 
-    def test_missing_uas_result_is_warning(self):
+    def test_missing_uas_result_is_warning(self, _mock_cq):
         code = 'print("hello world")'
         errors, warnings = pre_execution_check(code)
         assert errors == []
         assert len(warnings) == 1
         assert "UAS_RESULT" in warnings[0]
 
-    def test_multiple_critical_errors(self):
+    def test_multiple_critical_errors(self, _mock_cq):
         code = "name = input(\n"
         errors, warnings = pre_execution_check(code)
         # Syntax error catches the incomplete input( call too
         assert len(errors) >= 1
 
-    def test_input_in_string_literal_is_caught(self):
-        # The regex will match input( even inside strings — this is acceptable
-        # because it's a simple heuristic and false positives are rare in practice
+    def test_input_in_string_literal_is_caught(self, _mock_cq):
+        # The mock uses a simple regex that matches input( in strings — acceptable
         code = 'x = "input()"\nprint(f"UAS_RESULT: {x}")'
         errors, _warnings = pre_execution_check(code)
-        # Regex matches inside strings — this is a known limitation but acceptable
         assert len(errors) <= 1
+
+    def test_fuzzy_failure_returns_only_syntax_errors(self, _mock_cq):
+        """When assess_code_quality raises, only syntax errors are returned."""
+        _mock_cq.side_effect = RuntimeError("API down")
+        code = 'print("UAS_RESULT: ok")'
+        errors, warnings = pre_execution_check(code)
+        assert errors == []
+        assert warnings == []
 
 
 class TestRetryStrategy:
@@ -519,39 +547,45 @@ class TestWorkspacePathGuidance:
         assert "NEVER create synonyms" in prompt
 
 
+@patch("orchestrator.main.assess_code_quality", side_effect=_mock_quality)
 class TestFileModificationDetection:
     """Section 3: Detect file modification tasks and inject guidance."""
 
-    def test_detects_modify_keyword(self):
+    def test_detects_modify_keyword(self, _mock_cq):
         assert _task_mentions_file_modification("modify analysis.py to add MCID") is True
 
-    def test_detects_update_keyword(self):
+    def test_detects_update_keyword(self, _mock_cq):
         assert _task_mentions_file_modification("update config.json with new settings") is True
 
-    def test_detects_add_to_keyword(self):
+    def test_detects_add_to_keyword(self, _mock_cq):
         assert _task_mentions_file_modification("add to utils.py a helper function") is True
 
-    def test_detects_insert_keyword(self):
+    def test_detects_insert_keyword(self, _mock_cq):
         assert _task_mentions_file_modification("insert validation into forms.html") is True
 
-    def test_detects_extend_keyword(self):
+    def test_detects_extend_keyword(self, _mock_cq):
         assert _task_mentions_file_modification("extend models.py with a new class") is True
 
-    def test_detects_add_something_to(self):
+    def test_detects_add_something_to(self, _mock_cq):
         assert _task_mentions_file_modification("add MCID scoring code to analysis.py") is True
 
-    def test_no_match_for_creation_task(self):
+    def test_no_match_for_creation_task(self, _mock_cq):
         assert _task_mentions_file_modification("create a new Flask web application") is False
 
-    def test_no_match_for_plain_text(self):
+    def test_no_match_for_plain_text(self, _mock_cq):
         assert _task_mentions_file_modification("build a REST API") is False
 
-    def test_guidance_appears_for_modification_task(self):
+    def test_guidance_appears_for_modification_task(self, _mock_cq):
         prompt = build_prompt("modify analysis.py to add MCID scoring", attempt=1)
         assert "<file_modification_guidance>" in prompt
         assert "Write the COMPLETE modified file" in prompt
         assert "Never use string insertion by line number" in prompt
 
-    def test_guidance_absent_for_creation_task(self):
+    def test_guidance_absent_for_creation_task(self, _mock_cq):
         prompt = build_prompt("create a new REST API project", attempt=1)
         assert "<file_modification_guidance>" not in prompt
+
+    def test_fuzzy_failure_returns_false(self, _mock_cq):
+        """When assess_code_quality raises, _task_mentions_file_modification returns False."""
+        _mock_cq.side_effect = RuntimeError("API down")
+        assert _task_mentions_file_modification("modify analysis.py") is False

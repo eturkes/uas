@@ -18,7 +18,7 @@ import config
 from pydantic import ValidationError
 
 from uas.fuzzy import fuzzy_function
-from uas.fuzzy_models import UASResult
+from uas.fuzzy_models import CodeQuality, UASResult
 
 from .llm_client import get_llm_client
 from .parser import extract_code, extract_truncated_block
@@ -108,20 +108,33 @@ def parse_uas_output(stdout: str) -> UASResult:
     """Extract the UAS_RESULT JSON from sandbox stdout. Return structured fields."""
 
 
-_INPUT_CALL_PATTERN = re.compile(r"\binput\s*\(")
+@fuzzy_function
+def assess_code_quality(code: str, task: str) -> CodeQuality:
+    """Assess generated Python code quality before sandbox execution.
 
-# Section 3: Detect tasks that involve modifying existing files.
-# Matches modification verbs near a filename (word.ext pattern).
-_FILE_MODIFICATION_PATTERN = re.compile(
-    r"\b(?:modify|update|insert|extend|edit|change|add\s+(?:\w+\s+)*to)\b"
-    r".*?\b\w+\.\w{1,5}\b",
-    re.IGNORECASE | re.DOTALL,
-)
+    Analyze the code and task description to determine:
+    - has_uas_result: True if the code contains or constructs a 'UAS_RESULT' output line.
+    - has_input_call: True if the code calls input() which would block in a
+      non-interactive sandbox. Ignore input() appearing only inside string literals.
+    - is_file_modification: True if the task description involves modifying, updating,
+      inserting into, or editing an existing file (as opposed to creating new files).
+    - missing_imports: list of Python module names used in the code but not imported.
+      Only include standard library or well-known third-party modules that are clearly
+      referenced but missing an import statement.
+
+    Either code or task may be empty when only one aspect is being checked.
+    """
 
 
 def _task_mentions_file_modification(task: str) -> bool:
     """Return True if the task description mentions modifying an existing file."""
-    return bool(_FILE_MODIFICATION_PATTERN.search(task))
+    try:
+        quality = assess_code_quality("", task)
+        return quality.is_file_modification
+    except Exception:
+        logger.debug("assess_code_quality failed for file modification check",
+                     exc_info=True)
+        return False
 
 # Section 17: Module-level cache for resolved PyPI versions.
 _pypi_version_cache: dict[str, str] = {}
@@ -183,7 +196,7 @@ def resolve_versions(packages: list[str]) -> dict[str, str]:
     return result
 
 
-def pre_execution_check(code: str) -> tuple[list[str], list[str]]:
+def pre_execution_check(code: str, task: str = "") -> tuple[list[str], list[str]]:
     """Check generated code for guaranteed failures before sandbox execution.
 
     Returns (critical_errors, warnings). Critical errors mean the code should
@@ -192,21 +205,27 @@ def pre_execution_check(code: str) -> tuple[list[str], list[str]]:
     critical_errors: list[str] = []
     warnings: list[str] = []
 
-    # Syntax check
+    # Syntax check (deterministic — always runs)
     try:
         compile(code, "<generated>", "exec")
     except SyntaxError as exc:
         critical_errors.append(f"Syntax error: {exc}")
 
-    # Interactive input check (sandbox has no stdin)
-    if _INPUT_CALL_PATTERN.search(code):
+    # Fuzzy quality assessment
+    try:
+        quality = assess_code_quality(code, task)
+    except Exception:
+        logger.debug("assess_code_quality failed, skipping fuzzy checks",
+                     exc_info=True)
+        return critical_errors, warnings
+
+    if quality.has_input_call:
         critical_errors.append(
             "Code uses input() which requires interactive stdin. "
             "The sandbox has no stdin — this will hang or crash."
         )
 
-    # UAS_RESULT presence check (warning only — code might construct it dynamically)
-    if "UAS_RESULT" not in code:
+    if not quality.has_uas_result:
         warnings.append(
             "Code does not contain 'UAS_RESULT'. "
             "The output may lack the required machine-readable summary line."
@@ -216,7 +235,7 @@ def pre_execution_check(code: str) -> tuple[list[str], list[str]]:
 
 
 def pre_execution_check_llm(code: str, task: str) -> tuple[list[str], list[str]]:
-    critical_errors, warnings = pre_execution_check(code)
+    critical_errors, warnings = pre_execution_check(code, task)
     if critical_errors:
         return critical_errors, warnings
 
@@ -1552,7 +1571,7 @@ def main():
             if not MINIMAL_MODE:
                 critical_errors, warnings = pre_execution_check_llm(code, task)
             else:
-                critical_errors, warnings = pre_execution_check(code)
+                critical_errors, warnings = pre_execution_check(code, task)
             for w in warnings:
                 logger.warning("Pre-execution warning: %s", w)
             if critical_errors:

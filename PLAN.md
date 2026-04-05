@@ -88,7 +88,7 @@ brittle pattern maintenance and gives deterministic structured outputs.
       `_RATE_LIMIT_PATTERNS`, etc.) with a fuzzy function:
       `classify_llm_error(returncode: int, stdout: str, stderr: str)
       -> ErrorClassification`.
-- [ ] **2.5** Replace `_INPUT_CALL_PATTERN` and `_FILE_MODIFICATION_PATTERN`
+- [x] **2.5** Replace `_INPUT_CALL_PATTERN` and `_FILE_MODIFICATION_PATTERN`
       in `orchestrator/main.py` (lines 100-108) with a fuzzy function:
       `assess_code_quality(code: str, task: str) -> CodeQuality`.
       This subsumes the existing `pre_execution_check()` regex checks.

@@ -35,6 +35,11 @@ import config
 
 logger = logging.getLogger(__name__)
 
+
+class FuzzyDisabledError(RuntimeError):
+    """Raised when a fuzzy function is called but fuzzy mode is disabled."""
+
+
 # Default model for fuzzy calls — overridable via UAS_FUZZY_MODEL or config.
 _DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
@@ -101,6 +106,12 @@ def fuzzy_function(fn: typing.Callable) -> typing.Callable:
 
     @functools.wraps(fn)
     def wrapper(*args: object, **kwargs: object) -> BaseModel:
+        if not config.get("fuzzy_enabled", True):
+            raise FuzzyDisabledError(
+                f"Fuzzy function {fn.__qualname__} skipped: "
+                "UAS_FUZZY_ENABLED is false"
+            )
+
         bound = sig.bind(*args, **kwargs)
         bound.apply_defaults()
 

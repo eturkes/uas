@@ -1629,11 +1629,22 @@ def main():
             logger.info("%s\n%s\n%s", STDERR_START, result["stderr"], STDERR_END)
 
         # Evaluate sandbox outcome via structured ExecutionResult.
-        exec_result = evaluate_sandbox(
-            stdout=result["stdout"] or "",
-            stderr=result["stderr"] or "",
-            exit_code=result["exit_code"],
-        )
+        try:
+            exec_result = evaluate_sandbox(
+                stdout=result["stdout"] or "",
+                stderr=result["stderr"] or "",
+                exit_code=result["exit_code"],
+            )
+        except Exception:
+            logger.debug("evaluate_sandbox fuzzy call failed, using exit-code fallback",
+                         exc_info=True)
+            _success = result["exit_code"] == 0
+            exec_result = ExecutionResult(
+                success=_success,
+                revert_needed=not _success,
+                error_category=None if _success else "unknown",
+                summary="exit code 0" if _success else f"exit code {result['exit_code']}",
+            )
         logger.info("ExecutionResult: %s", exec_result.model_dump_json())
 
         if exec_result.success:

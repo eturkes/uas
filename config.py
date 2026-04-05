@@ -52,6 +52,9 @@ DEFAULTS: dict = {
     "keep_last_runs": 10,
     "max_run_age_days": 30,
 
+    # Fuzzy functions
+    "fuzzy_enabled": True,
+
     # Flags
     "minimal": False,
     "verbose": False,

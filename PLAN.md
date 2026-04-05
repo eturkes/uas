@@ -103,7 +103,7 @@ brittle pattern maintenance and gives deterministic structured outputs.
       main loop (after `run_in_sandbox()` returns) so the DAG's next-step
       decision is driven by the structured `ExecutionResult`, not raw
       exit codes.
-- [ ] **2.8** Add a `UAS_FUZZY_ENABLED=true` env var / config toggle so
+- [x] **2.8** Add a `UAS_FUZZY_ENABLED=true` env var / config toggle so
       fuzzy functions can be disabled (falling back to current regex) for
       cost-sensitive or offline runs.
 - [ ] **2.9** Write unit tests for every fuzzy function using mocked

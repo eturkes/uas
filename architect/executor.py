@@ -14,6 +14,8 @@ import time as _time
 
 import config
 
+from uas.fuzzy import fuzzy_function
+from uas.fuzzy_models import SandboxOutput
 from orchestrator.claude_config import get_claude_md_content
 from .events import EventType, get_event_log
 from .provenance import get_provenance_graph
@@ -546,6 +548,23 @@ _UAS_RESULT_PATTERN = re.compile(
 )
 
 
+@fuzzy_function
+def parse_sandbox_output(raw: str) -> SandboxOutput:
+    """Parse raw orchestrator output into structured stdout, stderr, and UAS_RESULT.
+
+    The raw text is the combined output from running the orchestrator subprocess.
+    Extract:
+    - stdout: the sandbox script's standard output content
+    - stderr: the sandbox script's standard error content
+    - uas_result: if a UAS_RESULT JSON line exists, parse it into a dict
+
+    Look for sections labelled "stdout:" and "stderr:" and extract the text
+    that follows each label until the next section or end of output.
+    For uas_result, look for a line starting with "UAS_RESULT:" followed by
+    a JSON object.
+    """
+
+
 def truncate_output(text: str, max_length: int = MAX_CONTEXT_LENGTH) -> str:
     """Truncate text to max_length, appending a note if truncated."""
     if max_length <= 0 or len(text) <= max_length:
@@ -553,48 +572,53 @@ def truncate_output(text: str, max_length: int = MAX_CONTEXT_LENGTH) -> str:
     return text[:max_length] + f"\n... [truncated, {len(text)} chars total]"
 
 
+def _fuzzy_extract(orchestrator_output: str) -> SandboxOutput:
+    """Invoke the fuzzy function to parse orchestrator output.
+
+    Returns the parsed ``SandboxOutput`` or a default empty instance on
+    any error (API failure, malformed response, etc.).
+    """
+    try:
+        return parse_sandbox_output(raw=orchestrator_output)
+    except Exception:
+        logger.debug("parse_sandbox_output fuzzy call failed; returning empty")
+        return SandboxOutput()
+
+
 def extract_sandbox_stdout(orchestrator_output: str) -> str:
     """Extract the sandbox script's stdout from orchestrator log.
 
     Prefers Section 5d delimited markers (``===STDOUT_START===`` /
-    ``===STDOUT_END===``).  Falls back to regex-based extraction for
-    backwards compatibility.  If multiple blocks exist (from retries),
-    returns the last one.
+    ``===STDOUT_END===``).  Falls back to the ``parse_sandbox_output``
+    fuzzy function when delimiters are absent.
     """
-    # Section 5d: Try delimited extraction first
+    # Fast path: delimited extraction
     delimited = list(_DELIMITED_STDOUT.finditer(orchestrator_output))
     if delimited:
         result = delimited[-1].group(1).strip()
         return truncate_output(result)
 
-    # Fallback to regex
-    matches = list(_STDOUT_PATTERN.finditer(orchestrator_output))
-    if not matches:
-        return ""
-    result = matches[-1].group(1).strip()
-    return truncate_output(result)
+    # Fallback: fuzzy function
+    parsed = _fuzzy_extract(orchestrator_output)
+    return truncate_output(parsed.stdout)
 
 
 def extract_sandbox_stderr(orchestrator_output: str) -> str:
     """Extract the sandbox script's stderr from orchestrator log.
 
     Prefers Section 5d delimited markers (``===STDERR_START===`` /
-    ``===STDERR_END===``).  Falls back to regex-based extraction for
-    backwards compatibility.  If multiple blocks exist (from retries),
-    returns the last one.
+    ``===STDERR_END===``).  Falls back to the ``parse_sandbox_output``
+    fuzzy function when delimiters are absent.
     """
-    # Section 5d: Try delimited extraction first
+    # Fast path: delimited extraction
     delimited = list(_DELIMITED_STDERR.finditer(orchestrator_output))
     if delimited:
         result = delimited[-1].group(1).strip()
         return truncate_output(result)
 
-    # Fallback to regex
-    matches = list(_STDERR_PATTERN.finditer(orchestrator_output))
-    if not matches:
-        return ""
-    result = matches[-1].group(1).strip()
-    return truncate_output(result)
+    # Fallback: fuzzy function
+    parsed = _fuzzy_extract(orchestrator_output)
+    return truncate_output(parsed.stderr)
 
 
 TEXT_EXTENSIONS = {

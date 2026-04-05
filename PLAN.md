@@ -92,7 +92,7 @@ brittle pattern maintenance and gives deterministic structured outputs.
       in `orchestrator/main.py` (lines 100-108) with a fuzzy function:
       `assess_code_quality(code: str, task: str) -> CodeQuality`.
       This subsumes the existing `pre_execution_check()` regex checks.
-- [ ] **2.6** Replace `extract_sandbox_stdout()` / `extract_sandbox_stderr()`
+- [x] **2.6** Replace `extract_sandbox_stdout()` / `extract_sandbox_stderr()`
       regex fallbacks in `architect/executor.py` with a fuzzy function:
       `parse_sandbox_output(raw: str) -> SandboxOutput(stdout: str,
       stderr: str, uas_result: dict | None)`. Keep the delimiter-based

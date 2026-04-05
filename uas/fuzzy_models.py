@@ -55,3 +55,11 @@ class CodeQuality(BaseModel):
     has_input_call: bool
     is_file_modification: bool
     missing_imports: list[str] = Field(default_factory=list)
+
+
+class SandboxOutput(BaseModel):
+    """Parsed stdout/stderr/UAS_RESULT from raw orchestrator output."""
+
+    stdout: str = ""
+    stderr: str = ""
+    uas_result: dict | None = None

@@ -14,8 +14,21 @@ from architect.executor import (
     truncate_output,
     find_engine,
     RUN_TIMEOUT,
+    _STDOUT_PATTERN,
+    _STDERR_PATTERN,
 )
 from architect.main import _sanitize_files_written
+from uas.fuzzy_models import SandboxOutput
+
+
+def _mock_fuzzy_extract(raw: str) -> SandboxOutput:
+    """Test helper: mimic fuzzy extraction using the old regex patterns."""
+    stdout_m = list(_STDOUT_PATTERN.finditer(raw))
+    stderr_m = list(_STDERR_PATTERN.finditer(raw))
+    return SandboxOutput(
+        stdout=stdout_m[-1].group(1).strip() if stdout_m else "",
+        stderr=stderr_m[-1].group(1).strip() if stderr_m else "",
+    )
 
 
 class TestRunOrchestratorLocal:
@@ -49,43 +62,44 @@ class TestRunOrchestratorLocal:
         assert env["IS_SANDBOX"] == "1"
 
 
+@patch("architect.executor._fuzzy_extract", side_effect=_mock_fuzzy_extract)
 class TestExtractSandboxStdout:
-    def test_basic_stdout(self):
+    def test_basic_stdout(self, _mock):
         log = "stdout:\nhello world\nExit code: 0"
         assert extract_sandbox_stdout(log) == "hello world"
 
-    def test_inline_stdout(self):
+    def test_inline_stdout(self, _mock):
         log = "stdout: hello\nExit code: 0"
         assert extract_sandbox_stdout(log) == "hello"
 
-    def test_multiline_stdout(self):
+    def test_multiline_stdout(self, _mock):
         log = "stdout:\nline1\nline2\nline3\nExit code: 0"
         assert extract_sandbox_stdout(log) == "line1\nline2\nline3"
 
-    def test_stdout_terminated_by_stderr(self):
+    def test_stdout_terminated_by_stderr(self, _mock):
         log = "stdout:\nresult\nstderr:\nwarning"
         assert extract_sandbox_stdout(log) == "result"
 
-    def test_stdout_terminated_by_success(self):
+    def test_stdout_terminated_by_success(self, _mock):
         log = "stdout:\nresult\nSUCCESS on attempt 1."
         assert extract_sandbox_stdout(log) == "result"
 
-    def test_stdout_terminated_by_failed(self):
+    def test_stdout_terminated_by_failed(self, _mock):
         log = "stdout:\nresult\nFAILED on attempt 1."
         assert extract_sandbox_stdout(log) == "result"
 
-    def test_stdout_terminated_by_attempt(self):
+    def test_stdout_terminated_by_attempt(self, _mock):
         log = "stdout:\nresult\n--- Attempt 2/3 ---"
         assert extract_sandbox_stdout(log) == "result"
 
-    def test_no_stdout_returns_empty(self):
+    def test_no_stdout_returns_empty(self, _mock):
         log = "stderr:\nsome error\nExit code: 1"
         assert extract_sandbox_stdout(log) == ""
 
-    def test_empty_string(self):
+    def test_empty_string(self, _mock):
         assert extract_sandbox_stdout("") == ""
 
-    def test_realistic_orchestrator_output(self):
+    def test_realistic_orchestrator_output(self, _mock):
         log = (
             "Task: do something\n"
             "Verifying sandbox...\n"
@@ -122,31 +136,32 @@ class TestFindEngine:
         assert find_engine() is None
 
 
+@patch("architect.executor._fuzzy_extract", side_effect=_mock_fuzzy_extract)
 class TestExtractSandboxStderr:
-    def test_basic_stderr(self):
+    def test_basic_stderr(self, _mock):
         log = "stderr:\nsome warning\nExit code: 0"
         assert extract_sandbox_stderr(log) == "some warning"
 
-    def test_inline_stderr(self):
+    def test_inline_stderr(self, _mock):
         log = "stderr: warning msg\nExit code: 0"
         assert extract_sandbox_stderr(log) == "warning msg"
 
-    def test_multiline_stderr(self):
+    def test_multiline_stderr(self, _mock):
         log = "stderr:\nwarn1\nwarn2\nExit code: 0"
         assert extract_sandbox_stderr(log) == "warn1\nwarn2"
 
-    def test_stderr_terminated_by_stdout(self):
+    def test_stderr_terminated_by_stdout(self, _mock):
         log = "stderr:\nwarn\nstdout:\nresult"
         assert extract_sandbox_stderr(log) == "warn"
 
-    def test_no_stderr_returns_empty(self):
+    def test_no_stderr_returns_empty(self, _mock):
         log = "stdout:\nresult\nExit code: 0"
         assert extract_sandbox_stderr(log) == ""
 
-    def test_empty_string(self):
+    def test_empty_string(self, _mock):
         assert extract_sandbox_stderr("") == ""
 
-    def test_realistic_output_with_both(self):
+    def test_realistic_output_with_both(self, _mock):
         log = (
             "--- Attempt 1/3 ---\n"
             "Querying LLM...\n"
@@ -158,7 +173,7 @@ class TestExtractSandboxStderr:
         )
         assert extract_sandbox_stderr(log) == "DeprecationWarning: use new API"
 
-    def test_last_stderr_block_on_retry(self):
+    def test_last_stderr_block_on_retry(self, _mock):
         log = (
             "--- Attempt 1/3 ---\n"
             "stderr:\nfirst error\n"
@@ -317,14 +332,15 @@ class TestParseUasResult:
         assert result["status"] == "ok"
 
 
+@patch("architect.executor._fuzzy_extract", side_effect=_mock_fuzzy_extract)
 class TestStdoutNoTruncationByDefault:
-    def test_long_stdout_not_truncated(self):
+    def test_long_stdout_not_truncated(self, _mock):
         content = "x" * 10000
         log = f"stdout:\n{content}\nExit code: 0"
         result = extract_sandbox_stdout(log)
         assert result == content
 
-    def test_long_stderr_not_truncated(self):
+    def test_long_stderr_not_truncated(self, _mock):
         content = "y" * 10000
         log = f"stderr:\n{content}\nExit code: 0"
         result = extract_sandbox_stderr(log)

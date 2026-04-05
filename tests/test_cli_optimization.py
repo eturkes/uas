@@ -23,7 +23,20 @@ from orchestrator.main import (
 from architect.executor import (
     extract_sandbox_stdout,
     extract_sandbox_stderr,
+    _STDOUT_PATTERN,
+    _STDERR_PATTERN,
 )
+from uas.fuzzy_models import SandboxOutput
+
+
+def _mock_fuzzy_extract(raw: str) -> SandboxOutput:
+    """Test helper: mimic fuzzy extraction using the old regex patterns."""
+    stdout_m = list(_STDOUT_PATTERN.finditer(raw))
+    stderr_m = list(_STDERR_PATTERN.finditer(raw))
+    return SandboxOutput(
+        stdout=stdout_m[-1].group(1).strip() if stdout_m else "",
+        stderr=stderr_m[-1].group(1).strip() if stderr_m else "",
+    )
 
 
 # ── Section 5a: Streaming + code extraction ──────────────────────────────
@@ -201,7 +214,8 @@ class TestDelimitedStdoutExtraction:
         )
         assert extract_sandbox_stdout(log) == "second attempt"
 
-    def test_falls_back_to_regex_when_no_delimiters(self):
+    @patch("architect.executor._fuzzy_extract", side_effect=_mock_fuzzy_extract)
+    def test_falls_back_to_fuzzy_when_no_delimiters(self, _mock):
         log = "stdout:\nhello world\nExit code: 0"
         assert extract_sandbox_stdout(log) == "hello world"
 
@@ -222,7 +236,8 @@ class TestDelimitedStderrExtraction:
         )
         assert extract_sandbox_stderr(log) == "second err"
 
-    def test_falls_back_to_regex_when_no_delimiters(self):
+    @patch("architect.executor._fuzzy_extract", side_effect=_mock_fuzzy_extract)
+    def test_falls_back_to_fuzzy_when_no_delimiters(self, _mock):
         log = "stderr:\nsome error\nExit code: 1"
         assert extract_sandbox_stderr(log) == "some error"
 

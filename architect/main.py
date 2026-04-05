@@ -637,6 +637,22 @@ def finalize_git(workspace: str, goal: str) -> None:
             check=True,
         )
 
+        # Clean up leftover attempt branches before squash merge
+        attempt_result = subprocess.run(
+            ["git", "branch", "--list", "uas/step-*/attempt-*"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+        )
+        for line in (attempt_result.stdout or "").splitlines():
+            branch_name = line.strip()
+            if branch_name:
+                subprocess.run(
+                    ["git", "branch", "-D", branch_name],
+                    cwd=workspace,
+                    capture_output=True,
+                )
+
         # Squash merge uas-wip into main
         merge_result = subprocess.run(
             ["git", "merge", "--squash", "uas-wip"],

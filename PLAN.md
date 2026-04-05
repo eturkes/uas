@@ -148,7 +148,7 @@ attempts are hard-reset to restore a clean filesystem.
 - [x] **3.6** Refactor `git_checkpoint()` (line 406) to commit on the
       current attempt branch (not directly on `uas-wip`). Only
       `promote_attempt()` advances `uas-wip`.
-- [ ] **3.7** Update `finalize_git()` (line 559) to clean up all leftover
+- [x] **3.7** Update `finalize_git()` (line 559) to clean up all leftover
       `uas/step-*/attempt-*` branches before the final squash merge.
 - [ ] **3.8** Add a `git log --oneline uas-wip` provenance dump to the
       run's `output.json` so the full attempt history is auditable.

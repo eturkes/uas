@@ -228,6 +228,53 @@ class TestEnsureGitignoreDataPatterns:
         assert content.count("*.csv") == 1
 
 
+class TestFinalizeGitCleansAttemptBranches:
+    """finalize_git removes leftover uas/step-*/attempt-* branches."""
+
+    def test_attempt_branches_deleted_after_finalize(self, tmp_path):
+        ws = str(tmp_path)
+        (tmp_path / "app.py").write_text("print('hi')", encoding="utf-8")
+        ensure_git_repo(ws)
+
+        # Make a change on uas-wip so squash merge has something to commit
+        (tmp_path / "result.py").write_text("x = 1", encoding="utf-8")
+        git_checkpoint(ws, 1, "Step one")
+
+        # Create leftover attempt branches (simulating incomplete cleanup)
+        _git(ws, "branch", "uas/step-1/attempt-1", "uas-wip")
+        _git(ws, "branch", "uas/step-1/attempt-2", "uas-wip")
+        _git(ws, "branch", "uas/step-2/attempt-1", "uas-wip")
+
+        # Verify they exist
+        branches_before = _git(ws, "branch")
+        assert "uas/step-1/attempt-1" in branches_before
+        assert "uas/step-2/attempt-1" in branches_before
+
+        finalize_git(ws, "Clean up test")
+
+        branches_after = _git(ws, "branch")
+        assert "uas/step-1/attempt-1" not in branches_after
+        assert "uas/step-1/attempt-2" not in branches_after
+        assert "uas/step-2/attempt-1" not in branches_after
+        assert "uas-wip" not in branches_after
+        assert "main" in branches_after
+
+    def test_no_attempt_branches_is_fine(self, tmp_path):
+        """finalize_git works when there are no attempt branches to clean up."""
+        ws = str(tmp_path)
+        (tmp_path / "app.py").write_text("print('hi')", encoding="utf-8")
+        ensure_git_repo(ws)
+
+        (tmp_path / "result.py").write_text("x = 1", encoding="utf-8")
+        git_checkpoint(ws, 1, "Step one")
+
+        finalize_git(ws, "No attempt branches")
+
+        assert _current_branch(ws) == "main"
+        branches = _git(ws, "branch")
+        assert "uas-wip" not in branches
+
+
 class TestFinalizeGitCleanRepo:
     """finalize_git leaves a clean repo when data files are covered by gitignore."""
 

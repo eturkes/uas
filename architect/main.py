@@ -579,6 +579,32 @@ def _build_commit_message(goal: str) -> str:
     return subject
 
 
+def capture_git_provenance(workspace: str) -> list[str]:
+    """Capture ``git log --oneline uas-wip`` for auditable provenance.
+
+    Returns the log lines as a list of strings, or an empty list if the
+    ``uas-wip`` branch does not exist or the workspace has no git repo.
+    Must be called **before** ``finalize_git()`` which deletes the branch.
+    """
+    git_dir = os.path.join(workspace, ".git")
+    if not os.path.isdir(git_dir):
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "log", "--oneline", "uas-wip"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return []
+        return [line for line in result.stdout.splitlines() if line.strip()]
+    except Exception:
+        logger.debug("Failed to capture git provenance", exc_info=True)
+        return []
+
+
 def finalize_git(workspace: str, goal: str) -> None:
     """Squash all ``uas-wip`` checkpoint commits into a single commit on ``main``.
 
@@ -1902,6 +1928,9 @@ def write_json_output(state: dict, output_path: str):
         ],
         "total_elapsed": state.get("total_elapsed", 0.0),
     }
+    git_provenance = state.get("git_provenance")
+    if git_provenance:
+        summary["git_provenance"] = git_provenance
     parent = os.path.dirname(output_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -6351,6 +6380,10 @@ def main():
 
     if not MINIMAL_MODE:
         post_run_meta_learning(state)
+
+    # Capture git provenance before finalize_git deletes uas-wip
+    if not MINIMAL_MODE:
+        state["git_provenance"] = capture_git_provenance(WORKSPACE)
 
     # Squash wip checkpoint commits into a single commit on main
     if not MINIMAL_MODE:

@@ -150,7 +150,7 @@ attempts are hard-reset to restore a clean filesystem.
       `promote_attempt()` advances `uas-wip`.
 - [x] **3.7** Update `finalize_git()` (line 559) to clean up all leftover
       `uas/step-*/attempt-*` branches before the final squash merge.
-- [ ] **3.8** Add a `git log --oneline uas-wip` provenance dump to the
+- [x] **3.8** Add a `git log --oneline uas-wip` provenance dump to the
       run's `output.json` so the full attempt history is auditable.
 - [ ] **3.9** Write integration tests: simulate a 3-attempt failure sequence,
       verify the workspace filesystem is byte-identical to the pre-step

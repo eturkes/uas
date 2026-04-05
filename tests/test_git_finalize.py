@@ -6,9 +6,11 @@ import subprocess
 import pytest
 
 from architect.main import (
+    capture_git_provenance,
     ensure_git_repo,
     finalize_git,
     git_checkpoint,
+    write_json_output,
     _ensure_gitignore_data_patterns,
 )
 
@@ -315,3 +317,74 @@ class TestFinalizeGitCleanRepo:
         assert porcelain.stdout.strip() == "", (
             f"Repo not clean after finalize:\n{porcelain.stdout}"
         )
+
+
+class TestCaptureGitProvenance:
+    """capture_git_provenance returns the uas-wip commit history."""
+
+    def test_returns_log_lines(self, tmp_path):
+        ws = str(tmp_path)
+        (tmp_path / "app.py").write_text("print('hi')", encoding="utf-8")
+        ensure_git_repo(ws)
+
+        # Make a couple of checkpoints on uas-wip
+        (tmp_path / "step1.py").write_text("x = 1", encoding="utf-8")
+        git_checkpoint(ws, 1, "Step one")
+        (tmp_path / "step2.py").write_text("y = 2", encoding="utf-8")
+        git_checkpoint(ws, 2, "Step two")
+
+        log = capture_git_provenance(ws)
+        assert len(log) >= 2
+        # Each line should be a short hash + message
+        for line in log:
+            assert len(line.split()) >= 2
+
+    def test_no_git_repo_returns_empty(self, tmp_path):
+        assert capture_git_provenance(str(tmp_path)) == []
+
+    def test_no_wip_branch_returns_empty(self, tmp_path):
+        ws = str(tmp_path)
+        (tmp_path / "f.txt").write_text("x", encoding="utf-8")
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=ws, capture_output=True, check=True,
+        )
+        subprocess.run(["git", "add", "-A"], cwd=ws, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Init"],
+            cwd=ws, capture_output=True, check=True,
+        )
+        assert capture_git_provenance(ws) == []
+
+
+class TestWriteJsonOutputProvenance:
+    """write_json_output includes git_provenance when present."""
+
+    def test_provenance_included(self, tmp_path):
+        out = str(tmp_path / "output.json")
+        state = {
+            "goal": "test",
+            "status": "ok",
+            "steps": [],
+            "total_elapsed": 1.0,
+            "git_provenance": ["abc1234 Step two", "def5678 Step one"],
+        }
+        write_json_output(state, out)
+
+        import json
+        data = json.loads((tmp_path / "output.json").read_text())
+        assert data["git_provenance"] == ["abc1234 Step two", "def5678 Step one"]
+
+    def test_provenance_omitted_when_empty(self, tmp_path):
+        out = str(tmp_path / "output.json")
+        state = {
+            "goal": "test",
+            "status": "ok",
+            "steps": [],
+            "total_elapsed": 1.0,
+        }
+        write_json_output(state, out)
+
+        import json
+        data = json.loads((tmp_path / "output.json").read_text())
+        assert "git_provenance" not in data

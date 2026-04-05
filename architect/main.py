@@ -293,10 +293,11 @@ data/
 def ensure_git_repo(workspace: str) -> None:
     """Initialize a git repo in the workspace if it doesn't exist yet.
 
-    After initialization, creates and checks out a ``uas-wip`` branch so
-    that per-step checkpoint commits stay off ``main``.  The wip branch
-    is squash-merged back into ``main`` by :func:`finalize_git` at the
-    end of a successful run.
+    After initialization, tags the initial commit as ``uas-main`` to mark
+    the immutable pre-execution filesystem state, then creates and checks
+    out a ``uas-wip`` branch so that per-step checkpoint commits stay off
+    ``main``.  The wip branch is squash-merged back into ``main`` by
+    :func:`finalize_git` at the end of a successful run.
 
     Initializes when the workspace has at least one non-dot entry, or
     when any subdirectory contains ``.py`` files.  Logs a warning if
@@ -343,6 +344,13 @@ def ensure_git_repo(workspace: str) -> None:
         )
         subprocess.run(
             ["git", "commit", "-m", "Initial workspace state"],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+        )
+        # Tag the initial commit as the immutable baseline for the run
+        subprocess.run(
+            ["git", "tag", "-f", "uas-main"],
             cwd=workspace,
             capture_output=True,
             check=True,

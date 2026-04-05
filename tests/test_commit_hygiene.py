@@ -59,6 +59,15 @@ class TestEnsureGitRepoCreatesWipBranch:
         msgs = _commit_messages(str(tmp_path), "main")
         assert msgs == ["Initial workspace state"]
 
+    def test_uas_main_tag_created(self, tmp_path):
+        _init_workspace(tmp_path)
+        ensure_git_repo(str(tmp_path))
+
+        # uas-main tag should point to the initial commit on main
+        tag_commit = _git(str(tmp_path), "rev-parse", "uas-main")
+        main_commit = _git(str(tmp_path), "rev-parse", "main")
+        assert tag_commit == main_commit
+
     def test_existing_repo_not_modified(self, tmp_path):
         """ensure_git_repo returns early if .git already exists."""
         _init_workspace(tmp_path)

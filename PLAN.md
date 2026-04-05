@@ -120,7 +120,7 @@ attempts are hard-reset to restore a clean filesystem.
 
 ### Tasks
 
-- [ ] **3.1** In `architect/main.py`, refactor `ensure_git_repo()` (line 293)
+- [x] **3.1** In `architect/main.py`, refactor `ensure_git_repo()` (line 293)
       to create a `uas-main` baseline tag after the initial commit. This
       immutable tag marks the pre-execution filesystem state for the entire
       run.

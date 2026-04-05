@@ -388,6 +388,48 @@ class TestMainLoop:
         # Sandbox: 1 verify + 1 execute (input() code skipped sandbox)
         assert mock_sandbox.call_count == 2
 
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.create_attempt_branch", return_value="uas/step-1/attempt-1")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_attempt_branch_created_when_step_id_set(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_create_branch, _mock_cq, _mock_eval, monkeypatch,
+    ):
+        monkeypatch.setenv("UAS_STEP_ID", "1")
+        monkeypatch.setenv("UAS_WORKSPACE", "/tmp/ws")
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "hello", "stderr": ""}
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        mock_create_branch.assert_called_once_with("/tmp/ws", 1, 1)
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.create_attempt_branch", return_value="")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_attempt_branch_skipped_when_no_step_id(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_create_branch, _mock_cq, _mock_eval,
+    ):
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "hello", "stderr": ""}
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        mock_create_branch.assert_not_called()
+
 
 @patch("orchestrator.main.assess_code_quality", side_effect=_mock_quality)
 class TestPreExecutionCheck:

@@ -135,7 +135,7 @@ attempts are hard-reset to restore a clean filesystem.
         to the last successful checkpoint. Deletes failed attempt branches.
       - `promote_attempt(workspace: str, branch: str)`: fast-forward merges
         the successful attempt branch into `uas-wip`.
-- [ ] **3.3** Wire `create_attempt_branch()` into the Orchestrator retry
+- [x] **3.3** Wire `create_attempt_branch()` into the Orchestrator retry
       loop in `orchestrator/main.py` (line 1455, top of `for attempt`). Each
       attempt starts on a clean branch forked from the last checkpoint.
 - [ ] **3.4** Wire `rollback_to_checkpoint()` into the Orchestrator failure

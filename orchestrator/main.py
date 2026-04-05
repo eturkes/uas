@@ -20,6 +20,8 @@ from pydantic import ValidationError
 from uas.fuzzy import fuzzy_function
 from uas.fuzzy_models import CodeQuality, ExecutionResult, UASResult
 
+from architect.git_state import create_attempt_branch
+
 from .llm_client import get_llm_client
 from .parser import extract_code, extract_truncated_block
 from .sandbox import run_in_sandbox
@@ -1505,8 +1507,21 @@ def main():
         if workspace_path:
             workspace_files = scan_workspace(workspace_path) or None
 
+    # Resolve workspace path once for git branch management.
+    _workspace = config.get("workspace") or os.environ.get("WORKSPACE")
+
     for attempt in range(1, MAX_RETRIES + 1):
         logger.info("\n--- Attempt %d/%d ---", attempt, MAX_RETRIES)
+
+        # Phase 3.3: Each attempt starts on its own git branch forked from
+        # the last uas-wip checkpoint.
+        _attempt_branch = ""
+        if _workspace and _step_id is not None:
+            _attempt_branch = create_attempt_branch(
+                _workspace, _step_id, attempt,
+            )
+            if _attempt_branch:
+                logger.info("On branch %s", _attempt_branch)
 
         prompt = build_prompt(task, attempt, previous_error, previous_code,
                               environment=environment,

@@ -63,7 +63,7 @@ from .executor import (
     format_workspace_scan,
     MAX_CONTEXT_LENGTH,
 )
-from .git_state import rollback_to_checkpoint
+from .git_state import promote_attempt, rollback_to_checkpoint
 from .events import EventType, get_event_log, reset_event_log
 from .provenance import get_provenance_graph, reset_provenance_graph
 from .code_tracker import get_code_tracker, reset_code_tracker
@@ -413,11 +413,27 @@ def _ensure_wip_branch(workspace: str) -> bool:
         return False
 
 
-def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
-    """Commit current workspace state as a checkpoint on the ``uas-wip`` branch.
+def _get_current_git_branch(workspace: str) -> str:
+    """Return the current git branch name, or empty string on failure."""
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
 
-    Checkpoint commits are kept off ``main`` so they can be squashed into
-    a single commit by :func:`finalize_git` at the end of a successful run.
+
+def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
+    """Commit current workspace state on the current branch.
+
+    In the normal flow the current branch is an attempt branch created by
+    :func:`architect.git_state.create_attempt_branch`.  Only
+    :func:`architect.git_state.promote_attempt` advances ``uas-wip``.
 
     Silently skips if the workspace is not a git repo, there are no changes,
     or any git operation fails.
@@ -426,9 +442,6 @@ def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
         git_dir = os.path.join(workspace, ".git")
         if not os.path.isdir(git_dir):
             return
-
-        # Ensure we're on the wip branch
-        _ensure_wip_branch(workspace)
 
         subprocess.run(
             ["git", "add", "-A"],
@@ -454,7 +467,7 @@ def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
             capture_output=True,
             check=True,
         )
-        logger.debug("Git checkpoint (uas-wip): %s", msg)
+        logger.debug("Git checkpoint: %s", msg)
     except Exception:
         logger.debug(
             "Git checkpoint skipped/failed for step %s", step_id,
@@ -4954,7 +4967,12 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 # Section 15: Git checkpoint after successful step
                 # Section 18: Skip in minimal mode.
                 if not MINIMAL_MODE:
+                    # Determine current branch before committing so we can
+                    # promote it into uas-wip afterwards.
+                    _cur_branch = _get_current_git_branch(WORKSPACE)
                     git_checkpoint(WORKSPACE, step["id"], step["title"])
+                    if _cur_branch.startswith("uas/step-"):
+                        promote_attempt(WORKSPACE, _cur_branch)
 
                 # Section 8: POST_STEP hook
                 if _hooks:

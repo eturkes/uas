@@ -145,7 +145,7 @@ attempts are hard-reset to restore a clean filesystem.
       step execution loop, if a step fails 3 consecutive attempts, call
       `rollback_to_checkpoint()` to reset to the pre-step filesystem state,
       mark the step as `failed`, and continue to the next independent step.
-- [ ] **3.6** Refactor `git_checkpoint()` (line 406) to commit on the
+- [x] **3.6** Refactor `git_checkpoint()` (line 406) to commit on the
       current attempt branch (not directly on `uas-wip`). Only
       `promote_attempt()` advances `uas-wip`.
 - [ ] **3.7** Update `finalize_git()` (line 559) to clean up all leftover

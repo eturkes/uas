@@ -80,12 +80,13 @@ class TestEnsureGitRepoCreatesWipBranch:
         assert _current_branch(str(tmp_path)) == "main"
 
 
-class TestGitCheckpointOnWipBranch:
-    def test_checkpoint_commits_on_wip(self, tmp_path):
+class TestGitCheckpointOnCurrentBranch:
+    def test_checkpoint_commits_on_current_branch(self, tmp_path):
+        """git_checkpoint commits on whatever branch is checked out."""
         _init_workspace(tmp_path)
         ensure_git_repo(str(tmp_path))
 
-        # Add a file and checkpoint
+        # Add a file and checkpoint — after ensure_git_repo we're on uas-wip
         (tmp_path / "step1.py").write_text("print(1)", encoding="utf-8")
         git_checkpoint(str(tmp_path), 1, "Create script")
 
@@ -97,29 +98,25 @@ class TestGitCheckpointOnWipBranch:
         main_msgs = _commit_messages(str(tmp_path), "main")
         assert main_msgs == ["Initial workspace state"]
 
-    def test_checkpoint_creates_wip_if_missing(self, tmp_path):
-        """If we're on main with no uas-wip, checkpoint creates it."""
+    def test_checkpoint_on_attempt_branch(self, tmp_path):
+        """git_checkpoint commits on an attempt branch, not uas-wip."""
         _init_workspace(tmp_path)
-        # Manually init on main without creating uas-wip
-        subprocess.run(
-            ["git", "init", "-b", "main"],
-            cwd=str(tmp_path), capture_output=True, check=True,
-        )
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=str(tmp_path), capture_output=True, check=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "Init"],
-            cwd=str(tmp_path), capture_output=True, check=True,
-        )
+        ensure_git_repo(str(tmp_path))
+
+        # Create an attempt branch (simulating orchestrator flow)
+        _git(str(tmp_path), "checkout", "-b", "uas/step-1/attempt-1")
 
         (tmp_path / "new.py").write_text("x = 1", encoding="utf-8")
         git_checkpoint(str(tmp_path), 1, "Add new file")
 
-        assert _current_branch(str(tmp_path)) == "uas-wip"
+        # Should stay on the attempt branch
+        assert _current_branch(str(tmp_path)) == "uas/step-1/attempt-1"
+        attempt_msgs = _commit_messages(str(tmp_path), "uas/step-1/attempt-1")
+        assert "Step 1: Add new file" in attempt_msgs
+
+        # uas-wip should NOT have the new commit
         wip_msgs = _commit_messages(str(tmp_path), "uas-wip")
-        assert "Step 1: Add new file" in wip_msgs
+        assert "Step 1: Add new file" not in wip_msgs
 
     def test_no_changes_no_commit(self, tmp_path):
         _init_workspace(tmp_path)

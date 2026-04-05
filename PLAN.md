@@ -106,7 +106,7 @@ brittle pattern maintenance and gives deterministic structured outputs.
 - [x] **2.8** Add a `UAS_FUZZY_ENABLED=true` env var / config toggle so
       fuzzy functions can be disabled (falling back to current regex) for
       cost-sensitive or offline runs.
-- [ ] **2.9** Write unit tests for every fuzzy function using mocked
+- [x] **2.9** Write unit tests for every fuzzy function using mocked
       Anthropic responses. Test both the happy path (valid JSON returned)
       and the fallback (malformed response, timeout, API error).
 

@@ -152,7 +152,7 @@ attempts are hard-reset to restore a clean filesystem.
       `uas/step-*/attempt-*` branches before the final squash merge.
 - [x] **3.8** Add a `git log --oneline uas-wip` provenance dump to the
       run's `output.json` so the full attempt history is auditable.
-- [ ] **3.9** Write integration tests: simulate a 3-attempt failure sequence,
+- [x] **3.9** Write integration tests: simulate a 3-attempt failure sequence,
       verify the workspace filesystem is byte-identical to the pre-step
       state after rollback.
 

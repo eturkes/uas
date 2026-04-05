@@ -165,7 +165,7 @@ The Orchestrator's success criteria becomes binary: `pytest` exit code 0.
 
 ### Tasks
 
-- [ ] **4.1** In `architect/planner.py`, modify `decompose_goal_with_voting()`
+- [x] **4.1** In `architect/planner.py`, modify `decompose_goal_with_voting()`
       (the decomposition prompt, lines 190-302) to enforce a mandatory
       pattern: for every implementation step, a preceding `test:` step must
       exist in the DAG with the implementation step in its `depends_on`.

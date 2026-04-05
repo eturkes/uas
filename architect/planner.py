@@ -231,7 +231,25 @@ Failure modes: network timeout, malformed CSV, empty dataset after cleaning.
   {{"title": "Summary statistics", "description": "Read cleaned_data.csv, compute summary statistics (mean, median, std, min, max for numeric columns), and save results to summary.json and summary.txt. Print the summary table to stdout.", "depends_on": [2], "verify": "summary.json contains keys for each numeric column with mean/median/std/min/max values; summary.txt is human-readable; stdout shows the statistics table", "environment": ["pandas"], "outputs": ["summary.json", "summary.txt"]}}
 ]
 
-Example 3 — Complex with parallelism:
+Example 3 — Medium with TDD pattern:
+Goal: "Build a CSV parser library that handles quoted fields and custom delimiters"
+<analysis>
+Complexity: medium. Requires a reusable module with edge cases (quoted fields, custom \
+delimiters, escaping). TDD is essential — write tests first to define the contract, \
+then implement to satisfy them.
+Sub-problems: parsing logic, quoting/escaping, delimiter configuration.
+Risk areas: edge cases in quoting (nested quotes, multiline fields).
+Parallelization: none — tests must precede implementation.
+Failure modes: incorrect quote handling, delimiter conflicts.
+</analysis>
+<complexity_assessment>medium — 1 test step + 1 implementation step + 1 integration step</complexity_assessment>
+[
+  {{"title": "test: Write tests for CSV parser", "description": "Write pytest tests for a csv_parser module that will be implemented in the next step. Tests should cover: (1) basic comma-separated parsing, (2) custom delimiter (tab, pipe), (3) quoted fields containing delimiters, (4) escaped quotes within quoted fields, (5) empty fields, (6) single-row and multi-row inputs. Save as test_csv_parser.py in the workspace. The tests should import from csv_parser and test a parse(text, delimiter=',') function that returns a list of lists of strings.", "depends_on": [], "verify": "test_csv_parser.py exists, contains at least 5 test functions, imports from csv_parser", "environment": ["pytest"], "outputs": ["test_csv_parser.py"]}},
+  {{"title": "Implement CSV parser", "description": "Implement the csv_parser.py module with a parse(text, delimiter=',') function that handles quoted fields, escaped quotes, custom delimiters, and empty fields. All tests in test_csv_parser.py must pass. Run pytest test_csv_parser.py as final validation.", "depends_on": [1], "verify": "pytest test_csv_parser.py passes with exit code 0, all tests green", "environment": ["pytest"], "outputs": ["csv_parser.py"]}},
+  {{"title": "CLI integration", "description": "Add a __main__.py entry point that reads a CSV file path from sys.argv, parses it using csv_parser.parse(), and prints the parsed rows as JSON to stdout. This is a thin wrapper — no test step needed.", "depends_on": [2], "verify": "python -m csv_parser sample.csv produces valid JSON output", "environment": [], "outputs": ["__main__.py"]}}
+]
+
+Example 4 — Complex with parallelism:
 Goal: "Scrape product info from two websites and compare prices"
 <analysis>
 Complexity: medium. Two independent scraping tasks plus a comparison.
@@ -247,7 +265,7 @@ Failure modes: blocked by site, empty results, no matching products.
   {{"title": "Compare prices", "description": "Read site_a_products.json and site_b_products.json from the workspace. Match products by name and compare prices. Save comparison to price_comparison.csv and print a summary of which site is cheaper on average.", "depends_on": [1, 2], "verify": "price_comparison.csv exists and contains matched products", "environment": ["pandas"], "outputs": ["price_comparison.csv"]}}
 ]
 
-Example 4 — Complex multi-phase project:
+Example 5 — Complex multi-phase project:
 Goal: "Build an e-commerce analytics platform with data ingestion, predictive modeling, \
 explainability, customer segmentation, and a multi-tab interactive dashboard with \
 bilingual support"
@@ -318,6 +336,10 @@ rewrite failures.
 interfaces, or data formats are current — they may have changed. \
 BAD: "Use the Twitter API v2 endpoint /tweets/search/recent" (may be outdated) \
 GOOD: "Query the Twitter/X API documentation to find the current search endpoint, then implement"
+- Missing test steps for implementation code: every step that produces a reusable code \
+module MUST have a preceding "test:" step. \
+BAD: [{{"title": "Build parser", ...}}] (no test step) \
+GOOD: [{{"title": "test: Write tests for parser", ...}}, {{"title": "Build parser", "depends_on": [1], ...}}]
 - Data leakage in predictive modeling: when a step trains a model to predict \
 an outcome (e.g., churn, final score), it must ONLY use features available at \
 prediction time (e.g., baseline features). Using outcome-time measurements \
@@ -393,11 +415,13 @@ Then, in <complexity_assessment> tags, explicitly estimate:
 - Complexity category: trivial (1 step), simple (2-3), medium (4-7), complex (8+)
 - Justification for the number of steps chosen
 
-When planning steps that produce code, consider what tools and quality
-checks would improve the result. You don't need to add separate "lint" or
-"test" steps — instead, instruct each code-producing step to install and
-run relevant quality tools as part of its workflow. The execution
-environment has full network access and can install anything.
+When planning steps that produce code, follow a strict Test-Driven \
+Development (TDD) pattern: for every implementation step that produces a \
+reusable code module, you MUST emit a preceding "test:" step that writes \
+pytest tests defining the expected behavior. The implementation step must \
+depend on its test step and its description must instruct the code generator \
+to make all tests pass. This ensures every piece of code has automated \
+verification before it is considered complete.
 
 Then produce the step DAG as a JSON array.
 </instructions>
@@ -451,6 +475,15 @@ generator uses the same path. Prefer a single well-named directory for each purp
 workspace) that the step creates or modifies. Use glob patterns for dynamic filenames \
 (e.g., "data/*.csv"). Steps without depends_on edges but with overlapping outputs will \
 be serialized to prevent data races, so declaring outputs accurately is important.
+16. TDD enforcement: for every step that produces implementation code, there MUST be a \
+preceding step that writes pytest tests for that implementation. The test step's title \
+MUST start with "test:" (e.g., "test: Write tests for CSV parser"). The implementation \
+step MUST list the test step's number in its depends_on. The test step's outputs MUST \
+include the test file path (e.g., "test_parser.py" or "tests/test_parser.py"). The \
+implementation step's description MUST instruct the code generator to make all tests \
+in the test file pass. Steps that are purely data-processing (downloading, cleaning), \
+configuration, or integration checkpoints do NOT require preceding test steps — only \
+steps that produce reusable code modules or libraries do.
 </rules>
 
 <output_format>

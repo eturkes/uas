@@ -141,7 +141,7 @@ attempts are hard-reset to restore a clean filesystem.
 - [x] **3.4** Wire `rollback_to_checkpoint()` into the Orchestrator failure
       path (line 1587, `previous_code = code` block). When an attempt fails,
       hard-reset the workspace before the next attempt begins.
-- [ ] **3.5** Add the 3-strike rollback rule: in `architect/main.py`'s
+- [x] **3.5** Add the 3-strike rollback rule: in `architect/main.py`'s
       step execution loop, if a step fails 3 consecutive attempts, call
       `rollback_to_checkpoint()` to reset to the pre-step filesystem state,
       mark the step as `failed`, and continue to the next independent step.

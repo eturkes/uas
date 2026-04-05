@@ -63,6 +63,7 @@ from .executor import (
     format_workspace_scan,
     MAX_CONTEXT_LENGTH,
 )
+from .git_state import rollback_to_checkpoint
 from .events import EventType, get_event_log, reset_event_log
 from .provenance import get_provenance_graph, reset_provenance_graph
 from .code_tracker import get_code_tracker, reset_code_tracker
@@ -81,6 +82,7 @@ from orchestrator.llm_client import (
 )
 
 MAX_SPEC_REWRITES = 4
+MAX_CONSECUTIVE_FAILURES = 3
 MAX_PARALLEL = config.get("max_parallel")
 WORKSPACE = config.get("workspace")
 PROJECT_DIR = WORKSPACE
@@ -4425,6 +4427,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                    data={"title": step["title"]})
     prev_error_entity = None
     attempt_history = []  # Track prior attempts for reflection (Section 1c)
+    consecutive_failures = 0  # 3-strike rollback counter (Phase 3.5)
 
     for spec_attempt in range(1 + MAX_SPEC_REWRITES):
         if dashboard:
@@ -5062,6 +5065,20 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             "strategy": f"attempt {spec_attempt + 1}",
             "is_validation_failure": is_validation_failure,
         })
+
+        # Phase 3.5: 3-strike rollback rule
+        consecutive_failures += 1
+        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+            logger.info(
+                "  Step %s hit %d consecutive failures. "
+                "Rolling back to pre-step checkpoint.",
+                step["id"], consecutive_failures,
+            )
+            rollback_to_checkpoint(WORKSPACE, step["id"])
+            event_log.emit(EventType.STEP_FAILED, step_id=step["id"],
+                           data={"error": "3-strike rollback",
+                                 "consecutive_failures": consecutive_failures})
+            break
 
         if spec_attempt < MAX_SPEC_REWRITES:
             # Section 3c: Root cause tracing and backtracking
@@ -5894,6 +5911,7 @@ def main():
             dashboard.update(state)
         return earliest_pending_level
 
+    failed_step_ids = set()  # Phase 3.5: track irrecoverably failed steps
     level_idx = 0
     while level_idx < len(levels):
         # Wait if user has paused execution via the dashboard
@@ -5914,6 +5932,16 @@ def main():
                     "stderr": step.get("stderr_output", ""),
                     "files": step.get("files_written", []),
                 }
+            elif any(d in failed_step_ids
+                     for d in step.get("depends_on", [])):
+                step["status"] = "failed"
+                step["error"] = "Skipped: dependency failed"
+                failed_step_ids.add(step["id"])
+                progress_counts["failed"] += 1
+                logger.warning(
+                    "  Skipping step %s (%s): dependency failed.",
+                    step["id"], step["title"],
+                )
             else:
                 pending.append(step)
 
@@ -5929,22 +5957,14 @@ def main():
                                    hooks=_hooks)
             if not success:
                 progress_counts["failed"] += 1
-                state["total_elapsed"] = time.monotonic() - run_start
-                state["status"] = "blocked"
+                failed_step_ids.add(step["id"])
+                logger.warning(
+                    "  Step %s failed; continuing to next independent step.",
+                    step["id"],
+                )
                 save_state(state)
-                create_blocker(state, step)
-                if output_path:
-                    write_json_output(state, output_path)
-                event_log.emit(EventType.RUN_COMPLETE, data={
-                    "status": "blocked",
-                    "total_elapsed": state["total_elapsed"],
-                })
-                _finalize_code_tracking(run_id=state.get("run_id", ""))
-                prov.save()
-
-                dashboard.finish(state)
-                logger.error("HALTED: Step %s failed irrecoverably.", step["id"])
-                sys.exit(1)
+                level_idx += 1
+                continue
             progress_counts["completed"] += 1
             completed_outputs[step["id"]] = {
                 "stdout": step.get("output", ""),
@@ -5980,13 +6000,10 @@ def main():
                     },
                 )
 
-            failed_step = None
+            failed_in_level = []
             completed_in_level = []
 
             for batch_idx, batch in enumerate(batches):
-                if failed_step is not None:
-                    break
-
                 if len(batch) == 1:
                     # Single step in batch — no threading overhead
                     step = batch[0]
@@ -6005,7 +6022,7 @@ def main():
                         completed_in_level.append(step)
                     else:
                         progress_counts["failed"] += 1
-                        failed_step = step
+                        failed_in_level.append(step)
                     continue
 
                 workers = min(len(batch), MAX_PARALLEL) if MAX_PARALLEL else len(batch)
@@ -6055,28 +6072,18 @@ def main():
                                 "files": step.get("files_written", []),
                             }
                             completed_in_level.append(step)
-                        elif failed_step is None:
+                        else:
                             progress_counts["failed"] += 1
-                            failed_step = step
+                            failed_in_level.append(step)
 
-            if failed_step is not None:
-                state["total_elapsed"] = time.monotonic() - run_start
-                state["status"] = "blocked"
+            for fstep in failed_in_level:
+                failed_step_ids.add(fstep["id"])
+                logger.warning(
+                    "  Step %s failed; continuing to next independent step.",
+                    fstep["id"],
+                )
+            if failed_in_level:
                 save_state(state)
-                create_blocker(state, failed_step)
-                if output_path:
-                    write_json_output(state, output_path)
-                event_log.emit(EventType.RUN_COMPLETE, data={
-                    "status": "blocked",
-                    "total_elapsed": state["total_elapsed"],
-                })
-                _finalize_code_tracking(run_id=state.get("run_id", ""))
-                prov.save()
-
-                dashboard.finish(state)
-                logger.error("HALTED: Step %s failed irrecoverably.",
-                             failed_step["id"])
-                sys.exit(1)
 
             # Section 6: Post-level re-planning and enrichment
             did_replan = False

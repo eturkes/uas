@@ -124,7 +124,7 @@ attempts are hard-reset to restore a clean filesystem.
       to create a `uas-main` baseline tag after the initial commit. This
       immutable tag marks the pre-execution filesystem state for the entire
       run.
-- [ ] **3.2** Create `architect/git_state.py` (new module) with:
+- [x] **3.2** Create `architect/git_state.py` (new module) with:
       - `create_attempt_branch(workspace: str, step_id: int, attempt: int)
         -> str`: creates branch `uas/step-{id}/attempt-{n}` from the
         latest checkpoint on `uas-wip`.

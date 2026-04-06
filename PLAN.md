@@ -233,7 +233,7 @@ before it enters the next context window.
         build step in `architect/executor.py`.
 - [x] **5.6** Add config option `context_janitor.formatter` with values
       `"ruff"` (default), `"black"`, or `"none"` to allow user override.
-- [ ] **5.7** Write tests: generate intentionally messy code, run the
+- [x] **5.7** Write tests: generate intentionally messy code, run the
       janitor, verify the output is `ruff format`-compliant.
 
 ---

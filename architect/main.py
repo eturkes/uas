@@ -67,6 +67,7 @@ from .executor import (
     MAX_CONTEXT_LENGTH,
 )
 from .git_state import promote_attempt, rollback_to_checkpoint
+from uas.janitor import format_workspace
 from .events import EventType, get_event_log, reset_event_log
 from .provenance import get_provenance_graph, reset_provenance_graph
 from .code_tracker import get_code_tracker, reset_code_tracker
@@ -445,6 +446,9 @@ def git_checkpoint(workspace: str, step_id: int, step_title: str) -> None:
         git_dir = os.path.join(workspace, ".git")
         if not os.path.isdir(git_dir):
             return
+
+        # Format all Python files before committing so every checkpoint is clean.
+        format_workspace(workspace)
 
         subprocess.run(
             ["git", "add", "-A"],

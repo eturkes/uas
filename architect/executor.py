@@ -87,6 +87,11 @@ def ensure_image(engine: str):
         "&& apt-get install -y --no-install-recommends nodejs "
         "&& rm -rf /var/lib/apt/lists/*\n"
         "RUN npm install -g @anthropic-ai/claude-code\n"
+        # Install uv for fast package management, then ruff for the
+        # Context Janitor (Phase 5) post-edit formatting and linting.
+        "RUN curl -LsSf https://astral.sh/uv/install.sh | sh "
+        "&& ln -sf /root/.local/bin/uv /usr/local/bin/uv\n"
+        "RUN uv pip install --system --no-cache ruff\n"
         "WORKDIR /uas\n"
         "COPY orchestrator/ ./orchestrator/\n"
         "VOLUME /workspace\n"

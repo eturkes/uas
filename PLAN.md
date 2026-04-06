@@ -227,7 +227,7 @@ before it enters the next context window.
       fuzzy function) as a pre-check. If the linter finds fatal errors
       (e.g., `NameError`-class issues), mark `revert_needed=True` in the
       `ExecutionResult` without burning an LLM call.
-- [ ] **5.5** Ensure `ruff` is available in both sandbox modes:
+- [x] **5.5** Ensure `ruff` is available in both sandbox modes:
       - Local mode: add `ruff` to UAS's own `pyproject.toml` dependencies.
       - Container mode: add `uv pip install ruff` to the container image
         build step in `architect/executor.py`.

@@ -8,5 +8,8 @@ jinja2>=3.1
 anthropic>=0.39.0
 pydantic>=2.0
 
+# Context Janitor (Phase 5): post-edit formatting and Pyflakes-only linting
+ruff>=0.1.0
+
 # Testing
 pytest>=7.0

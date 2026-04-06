@@ -179,7 +179,7 @@ The Orchestrator's success criteria becomes binary: `pytest` exit code 0.
       matching `test_*.py` or `*_test.py` in the workspace. The step
       description must include "Write pytest tests for..." and the
       `outputs` field must list the test file paths.
-- [ ] **4.4** Modify the implementation step's prompt injection (in
+- [x] **4.4** Modify the implementation step's prompt injection (in
       `build_prompt()` at `orchestrator/main.py` line 651) to include:
       - The test file content (read from workspace after the test step runs).
       - An explicit constraint: "All tests in `{test_file}` must pass.

@@ -78,6 +78,7 @@ DEFAULTS: dict = {
     "step_environment": "",
     "host_workspace": "",
     "truncation_detected": "",
+    "test_files": "",
 }
 
 # ---------------------------------------------------------------------------

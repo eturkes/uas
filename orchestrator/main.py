@@ -709,7 +709,8 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  workspace_files: str | None = None,
                  system_state: str | None = None,
                  knowledge: dict | None = None,
-                 attempt_history: list[dict] | None = None) -> str:
+                 attempt_history: list[dict] | None = None,
+                 test_files: dict[str, str] | None = None) -> str:
     """Build the structured prompt for code generation.
 
     Uses XML tags with data sections (environment, task, workspace state)
@@ -861,6 +862,27 @@ When modifying existing files:
 3. Use a write-then-verify pattern: write the file, then compile-check it
 4. Never use string insertion by line number — it's fragile
 </file_modification_guidance>"""
+
+    # Phase 4.4: TDD constraint injection — include test file content and
+    # require pytest validation when a preceding test step produced test files.
+    if test_files:
+        tdd_parts = []
+        for tpath, tcontent in sorted(test_files.items()):
+            tdd_parts.append(f"<test_file path=\"{tpath}\">\n{tcontent}\n</test_file>")
+        test_file_list = " ".join(test_files.keys())
+        tdd_block = "\n".join(tdd_parts)
+        prompt += f"""
+
+<tdd_constraint>
+A preceding test step has already written the following test files for this task.
+Your implementation MUST make all of these tests pass.
+
+{tdd_block}
+
+MANDATORY: After writing your implementation, run `pytest {test_file_list} --tb=short -q`
+as your final validation. All tests in the above files must pass. If any test fails,
+fix your implementation until they pass. Do NOT modify the test files.
+</tdd_constraint>"""
 
     # Section 19: Truncation-aware code length guidance.
     # When prior attempts for this step produced code that was truncated,
@@ -1500,6 +1522,17 @@ def main():
         except (json.JSONDecodeError, ValueError):
             pass
 
+    # Phase 4.4: Read test file content passed by the architect for TDD.
+    test_files: dict[str, str] | None = None
+    test_files_str = config.get("test_files")
+    if test_files_str:
+        try:
+            parsed = json.loads(test_files_str)
+            if isinstance(parsed, dict):
+                test_files = parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
     # Section 5b: If workspace files aren't provided by the architect,
     # scan the workspace directly so the LLM knows what already exists.
     if not workspace_files:
@@ -1528,7 +1561,8 @@ def main():
                               workspace_files=workspace_files,
                               system_state=system_state,
                               knowledge=knowledge,
-                              attempt_history=attempt_history or None)
+                              attempt_history=attempt_history or None,
+                              test_files=test_files)
 
         # Section 7c: Determine N for this attempt (budget-aware gating).
         if not MINIMAL_MODE and previous_error:

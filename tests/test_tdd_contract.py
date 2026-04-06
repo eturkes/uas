@@ -1,4 +1,6 @@
-"""Tests for TDD test-step contract enforcement (Task 4.3)."""
+"""Tests for TDD test-step contract enforcement (Tasks 4.3, 4.4)."""
+
+import os
 
 import pytest
 
@@ -7,6 +9,7 @@ from architect.planner import (
     validate_test_step_contract,
     validate_tdd_coverage,
 )
+from architect.main import _collect_test_files_for_step
 
 
 class TestIsTestFile:
@@ -253,3 +256,165 @@ class TestValidateTddCoverageWithContract:
         violations = validate_tdd_coverage(steps)
         # Contract violations for step 1 + dependency violation for step 3
         assert len(violations) >= 3
+
+
+class TestCollectTestFilesForStep:
+    """Phase 4.4: Test that _collect_test_files_for_step finds test file content."""
+
+    def test_collects_from_completed_test_dependency(self, tmp_path):
+        # Create a test file in the workspace.
+        test_file = tmp_path / "test_math.py"
+        test_file.write_text("def test_add():\n    assert 1 + 1 == 2\n",
+                             encoding="utf-8")
+        state = {
+            "steps": [
+                {
+                    "id": 1,
+                    "title": "test: Write tests for math",
+                    "status": "completed",
+                    "depends_on": [],
+                    "outputs": ["test_math.py"],
+                    "files_written": ["test_math.py"],
+                },
+                {
+                    "id": 2,
+                    "title": "Implement math utils",
+                    "status": "pending",
+                    "depends_on": [1],
+                    "outputs": ["math_utils.py"],
+                },
+            ],
+        }
+        import architect.main as am
+        orig = am.PROJECT_DIR
+        am.PROJECT_DIR = str(tmp_path)
+        try:
+            result = _collect_test_files_for_step(state["steps"][1], state)
+        finally:
+            am.PROJECT_DIR = orig
+        assert "test_math.py" in result
+        assert "def test_add():" in result["test_math.py"]
+
+    def test_skips_non_test_dependency(self, tmp_path):
+        state = {
+            "steps": [
+                {
+                    "id": 1,
+                    "title": "Setup environment",
+                    "status": "completed",
+                    "depends_on": [],
+                    "outputs": ["setup.py"],
+                },
+                {
+                    "id": 2,
+                    "title": "Build it",
+                    "status": "pending",
+                    "depends_on": [1],
+                    "outputs": ["main.py"],
+                },
+            ],
+        }
+        import architect.main as am
+        orig = am.PROJECT_DIR
+        am.PROJECT_DIR = str(tmp_path)
+        try:
+            result = _collect_test_files_for_step(state["steps"][1], state)
+        finally:
+            am.PROJECT_DIR = orig
+        assert result == {}
+
+    def test_skips_if_step_is_test_step_itself(self, tmp_path):
+        state = {
+            "steps": [
+                {
+                    "id": 1,
+                    "title": "test: Write tests",
+                    "status": "pending",
+                    "depends_on": [],
+                    "outputs": ["test_foo.py"],
+                },
+            ],
+        }
+        import architect.main as am
+        orig = am.PROJECT_DIR
+        am.PROJECT_DIR = str(tmp_path)
+        try:
+            result = _collect_test_files_for_step(state["steps"][0], state)
+        finally:
+            am.PROJECT_DIR = orig
+        assert result == {}
+
+    def test_no_dependencies_returns_empty(self, tmp_path):
+        state = {
+            "steps": [
+                {
+                    "id": 1,
+                    "title": "Build it",
+                    "status": "pending",
+                    "depends_on": [],
+                    "outputs": ["main.py"],
+                },
+            ],
+        }
+        result = _collect_test_files_for_step(state["steps"][0], state)
+        assert result == {}
+
+    def test_skips_incomplete_test_step(self, tmp_path):
+        state = {
+            "steps": [
+                {
+                    "id": 1,
+                    "title": "test: Tests for parser",
+                    "status": "pending",
+                    "depends_on": [],
+                    "outputs": ["test_parser.py"],
+                },
+                {
+                    "id": 2,
+                    "title": "Build parser",
+                    "status": "pending",
+                    "depends_on": [1],
+                    "outputs": ["parser.py"],
+                },
+            ],
+        }
+        import architect.main as am
+        orig = am.PROJECT_DIR
+        am.PROJECT_DIR = str(tmp_path)
+        try:
+            result = _collect_test_files_for_step(state["steps"][1], state)
+        finally:
+            am.PROJECT_DIR = orig
+        assert result == {}
+
+    def test_collects_from_files_written_field(self, tmp_path):
+        """Test files in files_written but not outputs are also collected."""
+        test_file = tmp_path / "test_utils.py"
+        test_file.write_text("def test_helper(): pass\n", encoding="utf-8")
+        state = {
+            "steps": [
+                {
+                    "id": 1,
+                    "title": "test: Write tests for utils",
+                    "status": "completed",
+                    "depends_on": [],
+                    "outputs": [],
+                    "files_written": ["test_utils.py"],
+                },
+                {
+                    "id": 2,
+                    "title": "Implement utils",
+                    "status": "pending",
+                    "depends_on": [1],
+                    "outputs": ["utils.py"],
+                },
+            ],
+        }
+        import architect.main as am
+        orig = am.PROJECT_DIR
+        am.PROJECT_DIR = str(tmp_path)
+        try:
+            result = _collect_test_files_for_step(state["steps"][1], state)
+        finally:
+            am.PROJECT_DIR = orig
+        assert "test_utils.py" in result

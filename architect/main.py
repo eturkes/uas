@@ -4402,6 +4402,50 @@ def _finalize_code_tracking(run_id: str = ""):
             prev_entity_id = entity_id
 
 
+def _collect_test_files_for_step(step: dict, state: dict) -> dict[str, str]:
+    """Return {filepath: content} for test files produced by dependency test steps.
+
+    If this step depends on a completed test step (title starts with "test:"),
+    read each test file from the workspace and return its content so the
+    orchestrator can inject it into the prompt (Phase 4.4).
+    """
+    test_files: dict[str, str] = {}
+    dep_ids = set(step.get("depends_on", []))
+    if not dep_ids:
+        return test_files
+    # Skip if this step is itself a test step.
+    if step.get("title", "").strip().lower().startswith("test:"):
+        return test_files
+    for s in state.get("steps", []):
+        if s["id"] not in dep_ids:
+            continue
+        if s.get("status") != "completed":
+            continue
+        if not s.get("title", "").strip().lower().startswith("test:"):
+            continue
+        # Collect test file paths from the step's outputs and files_written.
+        candidate_paths: list[str] = []
+        for p in s.get("outputs", []):
+            candidate_paths.append(p)
+        for p in s.get("files_written", []):
+            candidate_paths.append(p)
+        for rel_path in candidate_paths:
+            basename = os.path.basename(rel_path)
+            is_test = (basename.startswith("test_") and basename.endswith(".py")) or \
+                      basename.endswith("_test.py")
+            if not is_test:
+                continue
+            abs_path = os.path.join(PROJECT_DIR, rel_path)
+            if not os.path.isfile(abs_path):
+                continue
+            try:
+                with open(abs_path, encoding="utf-8") as f:
+                    test_files[rel_path] = f.read()
+            except OSError:
+                pass
+    return test_files
+
+
 def execute_step(step: dict, state: dict, completed_outputs: dict,
                  progress_counts: dict | None = None,
                  dashboard: Dashboard | None = None,
@@ -4565,6 +4609,11 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                 for fname, info in sorted(ws_files.items())
             )
             extra_env["UAS_WORKSPACE_FILES"] = ws_listing
+        # Phase 4.4: Pass test file content to the orchestrator for
+        # implementation steps that depend on a preceding test step.
+        _test_files_map = _collect_test_files_for_step(step, state)
+        if _test_files_map:
+            extra_env["UAS_TEST_FILES"] = json.dumps(_test_files_map)
         output_cb = None
         if dashboard and dashboard.use_rich:
             output_cb = lambda line: dashboard.add_output_line(line)

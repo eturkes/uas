@@ -643,3 +643,46 @@ class TestFileModificationDetection:
         """When assess_code_quality raises, _task_mentions_file_modification returns False."""
         _mock_cq.side_effect = RuntimeError("API down")
         assert _task_mentions_file_modification("modify analysis.py") is False
+
+
+class TestTDDPromptInjection:
+    """Phase 4.4: Test that build_prompt injects TDD constraints from test_files."""
+
+    def test_test_files_injected_into_prompt(self):
+        test_files = {"test_math.py": "def test_add():\n    assert add(1, 2) == 3\n"}
+        prompt = build_prompt("Implement math utils", attempt=1,
+                              test_files=test_files)
+        assert "<tdd_constraint>" in prompt
+        assert "test_math.py" in prompt
+        assert "def test_add():" in prompt
+        assert "assert add(1, 2) == 3" in prompt
+        assert "pytest test_math.py --tb=short -q" in prompt
+        assert "Do NOT modify the test files" in prompt
+
+    def test_multiple_test_files(self):
+        test_files = {
+            "test_add.py": "def test_add(): pass\n",
+            "test_sub.py": "def test_sub(): pass\n",
+        }
+        prompt = build_prompt("Implement math", attempt=1, test_files=test_files)
+        assert "<tdd_constraint>" in prompt
+        assert "test_add.py" in prompt
+        assert "test_sub.py" in prompt
+        assert "def test_add(): pass" in prompt
+        assert "def test_sub(): pass" in prompt
+
+    def test_no_test_files_no_tdd_block(self):
+        prompt = build_prompt("Build something", attempt=1, test_files=None)
+        assert "<tdd_constraint>" not in prompt
+
+    def test_empty_test_files_no_tdd_block(self):
+        prompt = build_prompt("Build something", attempt=1, test_files={})
+        assert "<tdd_constraint>" not in prompt
+
+    def test_tdd_block_on_retry_attempt(self):
+        test_files = {"test_core.py": "def test_it(): assert True\n"}
+        prompt = build_prompt("Implement core", attempt=2,
+                              previous_error="NameError",
+                              test_files=test_files)
+        assert "<tdd_constraint>" in prompt
+        assert "pytest test_core.py --tb=short -q" in prompt

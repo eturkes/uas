@@ -184,7 +184,7 @@ The Orchestrator's success criteria becomes binary: `pytest` exit code 0.
       - The test file content (read from workspace after the test step runs).
       - An explicit constraint: "All tests in `{test_file}` must pass.
         Run `pytest {test_file}` as your final validation."
-- [ ] **4.5** Replace the current UAS_RESULT success check in the
+- [x] **4.5** Replace the current UAS_RESULT success check in the
       Orchestrator main loop (line 1578) with a binary `pytest` gate:
       - After sandbox execution, if the step has an associated test file,
         run `pytest {test_file} --tb=short -q` in the sandbox.

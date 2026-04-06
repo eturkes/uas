@@ -24,7 +24,7 @@ from architect.git_state import create_attempt_branch, rollback_to_checkpoint
 
 from .llm_client import get_llm_client
 from .parser import extract_code, extract_truncated_block
-from .sandbox import run_in_sandbox
+from .sandbox import run_in_sandbox, run_pytest_in_sandbox
 
 # Section 5d: Delimited output markers for reliable parsing by the architect.
 STDOUT_START = "===STDOUT_START==="
@@ -1697,6 +1697,40 @@ def main():
         logger.info("ExecutionResult: %s", exec_result.model_dump_json())
 
         if exec_result.success:
+            # Phase 4.5: Binary pytest gate — when test files are present,
+            # run pytest as the authoritative success criterion.
+            if test_files:
+                logger.info("Running pytest gate on %d test file(s)...",
+                            len(test_files))
+                pytest_result = run_pytest_in_sandbox(list(test_files.keys()))
+                logger.info("Pytest exit code: %s", pytest_result["exit_code"])
+                if pytest_result["stdout"]:
+                    logger.info("Pytest stdout:\n%s", pytest_result["stdout"])
+                if pytest_result["stderr"]:
+                    logger.info("Pytest stderr:\n%s", pytest_result["stderr"])
+                if pytest_result["exit_code"] != 0:
+                    pytest_output = (
+                        (pytest_result["stdout"] or "")
+                        + "\n"
+                        + (pytest_result["stderr"] or "")
+                    ).strip()
+                    previous_code = code
+                    previous_error = (
+                        "Your code ran successfully but the pytest test suite FAILED.\n"
+                        f"pytest output:\n{pytest_output}\n\n"
+                        "Fix your implementation to make all tests pass. "
+                        "Do NOT modify the test files."
+                    )
+                    attempt_history.append({
+                        "attempt": attempt,
+                        "error": previous_error,
+                        "code_snippet": code or "",
+                        "revert_needed": False,
+                    })
+                    logger.error("Pytest gate FAILED on attempt %d.", attempt)
+                    continue
+                logger.info("Pytest gate PASSED.")
+
             uas_result = parse_uas_result(result["stdout"] or "")
             if uas_result:
                 logger.info("UAS_RESULT: %s", uas_result.model_dump_json())

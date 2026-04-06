@@ -686,3 +686,206 @@ class TestTDDPromptInjection:
                               test_files=test_files)
         assert "<tdd_constraint>" in prompt
         assert "pytest test_core.py --tb=short -q" in prompt
+
+
+class TestRunPytestInSandbox:
+    """Phase 4.5: run_pytest_in_sandbox generates correct script and delegates."""
+
+    @patch("orchestrator.sandbox.run_in_sandbox")
+    def test_generates_pytest_invocation(self, mock_sandbox):
+        from orchestrator.sandbox import run_pytest_in_sandbox
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "1 passed", "stderr": ""}
+        result = run_pytest_in_sandbox(["test_math.py"])
+        assert result["exit_code"] == 0
+        mock_sandbox.assert_called_once()
+        generated_code = mock_sandbox.call_args[0][0]
+        assert "pytest" in generated_code
+        assert "test_math.py" in generated_code
+        assert "--tb=short" in generated_code
+        assert "-q" in generated_code
+
+    @patch("orchestrator.sandbox.run_in_sandbox")
+    def test_multiple_test_files(self, mock_sandbox):
+        from orchestrator.sandbox import run_pytest_in_sandbox
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "3 passed", "stderr": ""}
+        run_pytest_in_sandbox(["test_a.py", "test_b.py"])
+        generated_code = mock_sandbox.call_args[0][0]
+        assert "test_a.py" in generated_code
+        assert "test_b.py" in generated_code
+
+    @patch("orchestrator.sandbox.run_in_sandbox")
+    def test_passes_timeout(self, mock_sandbox):
+        from orchestrator.sandbox import run_pytest_in_sandbox
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "", "stderr": ""}
+        run_pytest_in_sandbox(["test_x.py"], timeout=120)
+        assert mock_sandbox.call_args[1]["timeout"] == 120
+
+    @patch("orchestrator.sandbox.run_in_sandbox")
+    def test_returns_failure_exit_code(self, mock_sandbox):
+        from orchestrator.sandbox import run_pytest_in_sandbox
+        mock_sandbox.return_value = {"exit_code": 1, "stdout": "1 failed", "stderr": ""}
+        result = run_pytest_in_sandbox(["test_fail.py"])
+        assert result["exit_code"] == 1
+        assert "1 failed" in result["stdout"]
+
+    @patch("orchestrator.sandbox.run_in_sandbox")
+    def test_installs_pytest_before_running(self, mock_sandbox):
+        from orchestrator.sandbox import run_pytest_in_sandbox
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "", "stderr": ""}
+        run_pytest_in_sandbox(["test_x.py"])
+        generated_code = mock_sandbox.call_args[0][0]
+        assert "pip" in generated_code
+        assert "install" in generated_code
+        # pip install line appears before the pytest run line
+        pip_line_pos = generated_code.index("pip\", \"install")
+        pytest_run_pos = generated_code.index('"-m", "pytest"')
+        assert pip_line_pos < pytest_run_pos
+
+
+@patch("orchestrator.main.evaluate_sandbox", side_effect=_mock_evaluate_sandbox)
+@patch("orchestrator.main.assess_code_quality", side_effect=_mock_quality)
+class TestPytestGate:
+    """Phase 4.5: Binary pytest gate in the orchestrator main loop."""
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.run_pytest_in_sandbox")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_pytest_pass_succeeds(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_pytest, _mock_cq, _mock_eval, monkeypatch,
+    ):
+        """When test files exist and pytest passes, the step succeeds."""
+        monkeypatch.setenv("UAS_TEST_FILES",
+                           '{"test_math.py": "def test_add(): assert True"}')
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```', {"input": 0, "output": 0})
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "hello", "stderr": ""}
+        mock_pytest.return_value = {"exit_code": 0, "stdout": "1 passed", "stderr": ""}
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        mock_pytest.assert_called_once_with(["test_math.py"])
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
+    @patch("orchestrator.main.run_pytest_in_sandbox")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_pytest_fail_triggers_retry(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_pytest, _mock_llm_retry, _mock_cq, _mock_eval, monkeypatch,
+    ):
+        """When pytest fails, the step retries with pytest output as the error."""
+        monkeypatch.setenv("UAS_TEST_FILES",
+                           '{"test_math.py": "def test_add(): assert True"}')
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```', {"input": 0, "output": 0})
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "hello", "stderr": ""}
+        # Pytest fails first, then passes on retry
+        mock_pytest.side_effect = [
+            {"exit_code": 1, "stdout": "FAILED test_add", "stderr": ""},
+            {"exit_code": 0, "stdout": "1 passed", "stderr": ""},
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        assert mock_client.generate.call_count == 2
+        assert mock_pytest.call_count == 2
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
+    @patch("orchestrator.main.run_pytest_in_sandbox")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_pytest_fail_all_retries_exits_1(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_pytest, _mock_llm_retry, _mock_cq, _mock_eval, monkeypatch,
+    ):
+        """When pytest fails on all attempts, exit code is 1."""
+        monkeypatch.setenv("UAS_TEST_FILES",
+                           '{"test_x.py": "def test_x(): assert False"}')
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```', {"input": 0, "output": 0})
+        mock_client_factory.return_value = mock_client
+        # Sandbox always succeeds, but pytest always fails
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},  # verify
+        ] + [
+            {"exit_code": 0, "stdout": "ok", "stderr": ""}
+            for _ in range(MAX_RETRIES)
+        ]
+        mock_pytest.return_value = {"exit_code": 1, "stdout": "1 failed", "stderr": ""}
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert mock_pytest.call_count == MAX_RETRIES
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_no_test_files_skips_pytest(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        _mock_cq, _mock_eval,
+    ):
+        """Without test files, the pytest gate is skipped entirely."""
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```', {"input": 0, "output": 0})
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "hello", "stderr": ""}
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
+    @patch("orchestrator.main.run_pytest_in_sandbox")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_pytest_error_message_includes_output(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_pytest, _mock_llm_retry, _mock_cq, _mock_eval, monkeypatch,
+    ):
+        """Pytest failure error message includes stdout and stderr."""
+        monkeypatch.setenv("UAS_TEST_FILES",
+                           '{"test_z.py": "def test_z(): pass"}')
+        mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
+        mock_client = MagicMock()
+        _u = {"input": 0, "output": 0}
+        mock_client.generate.side_effect = [
+            ('```python\nprint("v1")\n```', _u),
+            ('```python\nprint("v2")\n```', _u),
+        ]
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.return_value = {"exit_code": 0, "stdout": "ok", "stderr": ""}
+        mock_pytest.side_effect = [
+            {"exit_code": 1, "stdout": "FAILED test_z::test_z", "stderr": "AssertionError"},
+            {"exit_code": 0, "stdout": "1 passed", "stderr": ""},
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        # Second generate() call should receive a prompt mentioning pytest failure
+        second_prompt = mock_client.generate.call_args_list[1][0][0]
+        assert "pytest test suite FAILED" in second_prompt
+        assert "FAILED test_z" in second_prompt

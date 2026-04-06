@@ -23,6 +23,44 @@ WORKSPACE_PATH = (
 )
 
 
+def run_pytest_in_sandbox(
+    test_files: list[str], timeout: int | None = None
+) -> dict:
+    """Run pytest on specified test files inside the sandbox.
+
+    Generates a Python script that installs pytest (if needed) and executes it
+    against the given test file paths (relative to the workspace).
+
+    Returns dict with keys: exit_code, stdout, stderr.
+    """
+    files_repr = repr(test_files)
+    code = f"""\
+import subprocess
+import sys
+import os
+
+workspace = os.environ.get("WORKSPACE", "/workspace")
+os.chdir(workspace)
+
+# Ensure pytest is available.
+subprocess.run(
+    [sys.executable, "-m", "pip", "install", "-q", "pytest"],
+    capture_output=True, timeout=60,
+)
+
+result = subprocess.run(
+    [sys.executable, "-m", "pytest"] + {files_repr} + ["--tb=short", "-q"],
+    capture_output=True,
+    text=True,
+    cwd=workspace,
+)
+sys.stdout.write(result.stdout)
+sys.stderr.write(result.stderr)
+sys.exit(result.returncode)
+"""
+    return run_in_sandbox(code, timeout=timeout)
+
+
 def run_in_sandbox(code: str, timeout: int | None = None) -> dict:
     """Execute Python code in the configured sandbox mode.
 

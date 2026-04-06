@@ -58,6 +58,11 @@ DEFAULTS: dict = {
     # TDD enforcement
     "tdd_enforce": True,
 
+    # Context janitor (post-edit formatting)
+    "context_janitor": {
+        "formatter": "ruff",  # "ruff" | "black" | "none"
+    },
+
     # Flags
     "minimal": False,
     "verbose": False,
@@ -96,6 +101,16 @@ _loaded: bool = False
 # ---------------------------------------------------------------------------
 
 _SENTINEL = object()
+
+
+def _resolve_dotted(d: dict, key: str) -> object:
+    """Resolve a dotted key path against *d*; return ``_SENTINEL`` if missing."""
+    val: object = d
+    for part in key.split("."):
+        if not isinstance(val, dict) or part not in val:
+            return _SENTINEL
+        val = val[part]
+    return val
 
 
 def _coerce(value: str, reference: object) -> object:
@@ -163,18 +178,35 @@ def get(key: str, default: object = _SENTINEL) -> object:
 
     Priority: ``UAS_<KEY>`` env var > project TOML > user TOML > built-in
     default.  Env vars are checked at call time (not cached).
+
+    Dotted keys (e.g. ``"context_janitor.formatter"``) walk nested TOML
+    tables; the env-var equivalent uses underscores
+    (``UAS_CONTEXT_JANITOR_FORMATTER``).
     """
     if not _loaded:
         load_config()
 
     # Layer 4: env var (always live)
-    env_key = f"UAS_{key.upper()}"
+    env_key = f"UAS_{key.upper().replace('.', '_')}"
     env_val = os.environ.get(env_key)
     if env_val is not None:
-        ref = _config.get(key, DEFAULTS.get(key))
+        ref = _resolve_dotted(_config, key)
+        if ref is _SENTINEL:
+            ref = _resolve_dotted(DEFAULTS, key)
+        if ref is _SENTINEL:
+            ref = ""
         return _coerce(env_val, ref)
 
     # Layers 1-3 (merged at load time)
+    if "." in key:
+        val = _resolve_dotted(_config, key)
+        if val is not _SENTINEL:
+            return val
+        if default is not _SENTINEL:
+            return default
+        fallback = _resolve_dotted(DEFAULTS, key)
+        return None if fallback is _SENTINEL else fallback
+
     if key in _config:
         return _config[key]
 

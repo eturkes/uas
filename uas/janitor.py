@@ -4,6 +4,10 @@ Provides two functions:
 
 - ``format_workspace``: runs ``ruff format`` (or ``black``) on workspace files.
 - ``lint_workspace``: runs ``ruff check --select=F`` and returns fatal errors.
+
+The formatter is selected by the ``context_janitor.formatter`` config key
+(``"ruff"`` default, ``"black"``, or ``"none"``);
+``UAS_CONTEXT_JANITOR_FORMATTER`` overrides at runtime.
 """
 
 import glob
@@ -11,11 +15,25 @@ import logging
 import shutil
 import subprocess
 
+import config
+
 logger = logging.getLogger(__name__)
 
 
 def _find_formatter() -> str | None:
-    """Return the name of the first available formatter, or None."""
+    """Return the configured formatter, or None when disabled/unavailable.
+
+    - ``"none"``: formatting is disabled.
+    - ``"black"``: use ``black`` only (no fallback).
+    - ``"ruff"`` (default): prefer ``ruff``, fall back to ``black`` if ruff
+      is not installed.
+    """
+    configured = str(config.get("context_janitor.formatter", "ruff")).lower()
+    if configured == "none":
+        return None
+    if configured == "black":
+        return "black" if shutil.which("black") else None
+    # Default "ruff": prefer ruff, fall back to black for resilience.
     for tool in ("ruff", "black"):
         if shutil.which(tool):
             return tool

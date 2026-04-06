@@ -193,9 +193,9 @@ The Orchestrator's success criteria becomes binary: `pytest` exit code 0.
 - [x] **4.6** Update the Architect's post-step validation (the correction
       loop) to re-run `pytest` on the full test suite after corrections,
       not just the step's own tests.
-- [ ] **4.7** Add a `UAS_TDD_ENFORCE=true` config toggle (default true).
+- [x] **4.7** Add a `UAS_TDD_ENFORCE=true` config toggle (default true).
       When false, revert to the current behavior for legacy compatibility.
-- [ ] **4.8** Write tests for the TDD enforcement: mock a decomposition that
+- [x] **4.8** Write tests for the TDD enforcement: mock a decomposition that
       lacks test steps, verify it is rejected and re-prompted.
 
 ---

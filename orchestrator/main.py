@@ -865,7 +865,7 @@ When modifying existing files:
 
     # Phase 4.4: TDD constraint injection — include test file content and
     # require pytest validation when a preceding test step produced test files.
-    if test_files:
+    if test_files and config.get("tdd_enforce"):
         tdd_parts = []
         for tpath, tcontent in sorted(test_files.items()):
             tdd_parts.append(f"<test_file path=\"{tpath}\">\n{tcontent}\n</test_file>")
@@ -1524,14 +1524,15 @@ def main():
 
     # Phase 4.4: Read test file content passed by the architect for TDD.
     test_files: dict[str, str] | None = None
-    test_files_str = config.get("test_files")
-    if test_files_str:
-        try:
-            parsed = json.loads(test_files_str)
-            if isinstance(parsed, dict):
-                test_files = parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
+    if config.get("tdd_enforce"):
+        test_files_str = config.get("test_files")
+        if test_files_str:
+            try:
+                parsed = json.loads(test_files_str)
+                if isinstance(parsed, dict):
+                    test_files = parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
 
     # Section 5b: If workspace files aren't provided by the architect,
     # scan the workspace directly so the LLM knows what already exists.

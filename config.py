@@ -55,6 +55,9 @@ DEFAULTS: dict = {
     # Fuzzy functions
     "fuzzy_enabled": True,
 
+    # TDD enforcement
+    "tdd_enforce": True,
+
     # Flags
     "minimal": False,
     "verbose": False,

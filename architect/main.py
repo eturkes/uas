@@ -4675,9 +4675,10 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             extra_env["UAS_WORKSPACE_FILES"] = ws_listing
         # Phase 4.4: Pass test file content to the orchestrator for
         # implementation steps that depend on a preceding test step.
-        _test_files_map = _collect_test_files_for_step(step, state)
-        if _test_files_map:
-            extra_env["UAS_TEST_FILES"] = json.dumps(_test_files_map)
+        if config.get("tdd_enforce"):
+            _test_files_map = _collect_test_files_for_step(step, state)
+            if _test_files_map:
+                extra_env["UAS_TEST_FILES"] = json.dumps(_test_files_map)
         output_cb = None
         if dashboard and dashboard.use_rich:
             output_cb = lambda line: dashboard.add_output_line(line)
@@ -5007,7 +5008,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
 
             # Phase 4.6: Run full test suite after corrections.
             # Only for non-test steps — test steps just write tests.
-            if failure_reason is None and not step.get(
+            if config.get("tdd_enforce") and failure_reason is None and not step.get(
                 "title", ""
             ).strip().lower().startswith("test:"):
                 logger.info("  Running full pytest suite...")
@@ -5854,26 +5855,27 @@ def main():
         steps = insert_integration_checkpoints(steps)
 
         # TDD enforcement: reject plans where implementation steps lack test steps
-        _MAX_TDD_FIX_ATTEMPTS = 2
-        tdd_violations = validate_tdd_coverage(steps)
-        for _tdd_attempt in range(_MAX_TDD_FIX_ATTEMPTS):
-            if not tdd_violations:
-                break
-            logger.warning(
-                "  TDD violations found (%d), re-prompting planner...",
-                len(tdd_violations),
-            )
-            for v in tdd_violations:
-                logger.warning("    %s", v)
-            steps = fix_tdd_violations(goal, steps, tdd_violations, spec=spec)
+        if config.get("tdd_enforce"):
+            _MAX_TDD_FIX_ATTEMPTS = 2
             tdd_violations = validate_tdd_coverage(steps)
-        if tdd_violations:
-            logger.warning(
-                "  TDD violations remain after %d fix attempts, proceeding anyway.",
-                _MAX_TDD_FIX_ATTEMPTS,
-            )
-            for v in tdd_violations:
-                logger.warning("    %s", v)
+            for _tdd_attempt in range(_MAX_TDD_FIX_ATTEMPTS):
+                if not tdd_violations:
+                    break
+                logger.warning(
+                    "  TDD violations found (%d), re-prompting planner...",
+                    len(tdd_violations),
+                )
+                for v in tdd_violations:
+                    logger.warning("    %s", v)
+                steps = fix_tdd_violations(goal, steps, tdd_violations, spec=spec)
+                tdd_violations = validate_tdd_coverage(steps)
+            if tdd_violations:
+                logger.warning(
+                    "  TDD violations remain after %d fix attempts, proceeding anyway.",
+                    _MAX_TDD_FIX_ATTEMPTS,
+                )
+                for v in tdd_violations:
+                    logger.warning("    %s", v)
 
         state = add_steps(state, steps)
         logger.info("  Decomposed into %d step(s):", len(steps))

@@ -1,6 +1,7 @@
-"""Tests for TDD test-step contract enforcement (Tasks 4.3, 4.4)."""
+"""Tests for TDD test-step contract enforcement (Tasks 4.3, 4.4, 4.6)."""
 
 import os
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -418,3 +419,89 @@ class TestCollectTestFilesForStep:
         finally:
             am.PROJECT_DIR = orig
         assert "test_utils.py" in result
+
+
+class TestDiscoverAllTestFiles:
+    """Phase 4.6: Test discovery of all test files in the workspace."""
+
+    def test_discovers_root_test_files(self, tmp_path):
+        (tmp_path / "test_foo.py").write_text("pass\n")
+        (tmp_path / "bar_test.py").write_text("pass\n")
+        (tmp_path / "helpers.py").write_text("pass\n")
+        from architect.main import _discover_all_test_files
+        result = _discover_all_test_files(str(tmp_path))
+        assert sorted(result) == ["bar_test.py", "test_foo.py"]
+
+    def test_discovers_nested_test_files(self, tmp_path):
+        sub = tmp_path / "tests"
+        sub.mkdir()
+        (sub / "test_core.py").write_text("pass\n")
+        (tmp_path / "main.py").write_text("pass\n")
+        from architect.main import _discover_all_test_files
+        result = _discover_all_test_files(str(tmp_path))
+        assert result == [os.path.join("tests", "test_core.py")]
+
+    def test_skips_hidden_and_venv_dirs(self, tmp_path):
+        for d in [".git", "__pycache__", ".venv", "node_modules"]:
+            skip = tmp_path / d
+            skip.mkdir()
+            (skip / "test_hidden.py").write_text("pass\n")
+        (tmp_path / "test_real.py").write_text("pass\n")
+        from architect.main import _discover_all_test_files
+        result = _discover_all_test_files(str(tmp_path))
+        assert result == ["test_real.py"]
+
+    def test_empty_workspace(self, tmp_path):
+        from architect.main import _discover_all_test_files
+        result = _discover_all_test_files(str(tmp_path))
+        assert result == []
+
+    def test_non_python_test_files_ignored(self, tmp_path):
+        (tmp_path / "test_something.txt").write_text("pass\n")
+        (tmp_path / "test_something.js").write_text("pass\n")
+        from architect.main import _discover_all_test_files
+        result = _discover_all_test_files(str(tmp_path))
+        assert result == []
+
+
+class TestRunFullPytestSuite:
+    """Phase 4.6: Test full test suite execution."""
+
+    def test_no_test_files_returns_none(self, tmp_path):
+        from architect.main import _run_full_pytest_suite
+        assert _run_full_pytest_suite(str(tmp_path)) is None
+
+    @patch("architect.main.subprocess.run")
+    @patch("architect.main._discover_all_test_files", return_value=["test_a.py"])
+    def test_all_pass_returns_none(self, _mock_discover, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="1 passed", stderr="")
+        from architect.main import _run_full_pytest_suite
+        assert _run_full_pytest_suite("/fake/workspace") is None
+
+    @patch("architect.main.subprocess.run")
+    @patch("architect.main._discover_all_test_files",
+           return_value=["test_a.py", "test_b.py"])
+    def test_failure_returns_error_string(self, _mock_discover, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="FAILED test_a.py::test_x", stderr=""
+        )
+        from architect.main import _run_full_pytest_suite
+        result = _run_full_pytest_suite("/fake/workspace")
+        assert result is not None
+        assert "Full test suite FAILED" in result
+        assert "FAILED test_a.py::test_x" in result
+
+    @patch("architect.main.subprocess.run", side_effect=FileNotFoundError("no pytest"))
+    @patch("architect.main._discover_all_test_files", return_value=["test_a.py"])
+    def test_pytest_not_found_returns_none(self, _mock_discover, _mock_run):
+        from architect.main import _run_full_pytest_suite
+        assert _run_full_pytest_suite("/fake/workspace") is None
+
+    @patch("architect.main.subprocess.run",
+           side_effect=__import__("subprocess").TimeoutExpired(cmd="pytest", timeout=300))
+    @patch("architect.main._discover_all_test_files", return_value=["test_a.py"])
+    def test_timeout_returns_error(self, _mock_discover, _mock_run):
+        from architect.main import _run_full_pytest_suite
+        result = _run_full_pytest_suite("/fake/workspace")
+        assert result is not None
+        assert "timed out" in result

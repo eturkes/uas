@@ -190,7 +190,7 @@ The Orchestrator's success criteria becomes binary: `pytest` exit code 0.
         run `pytest {test_file} --tb=short -q` in the sandbox.
       - Success = pytest exit code 0. Failure = retry with the pytest
         output as the error.
-- [ ] **4.6** Update the Architect's post-step validation (the correction
+- [x] **4.6** Update the Architect's post-step validation (the correction
       loop) to re-run `pytest` on the full test suite after corrections,
       not just the step's own tests.
 - [ ] **4.7** Add a `UAS_TDD_ENFORCE=true` config toggle (default true).

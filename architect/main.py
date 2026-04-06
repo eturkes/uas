@@ -4402,6 +4402,70 @@ def _finalize_code_tracking(run_id: str = ""):
             prev_entity_id = entity_id
 
 
+def _discover_all_test_files(workspace: str) -> list[str]:
+    """Find all test files (test_*.py / *_test.py) in the workspace.
+
+    Walks the workspace tree, skipping hidden dirs and common non-source dirs.
+    Returns a sorted list of paths relative to *workspace*.
+    """
+    _skip = {
+        ".uas_state", ".git", "__pycache__", "node_modules", ".venv",
+        "venv", ".tox", ".eggs", ".uas_auth", ".claude",
+    }
+    test_files: list[str] = []
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in sorted(dirs) if d not in _skip and not d.startswith(".")]
+        for fname in sorted(files):
+            if not fname.endswith(".py"):
+                continue
+            is_test = (
+                (fname.startswith("test_") and fname.endswith(".py"))
+                or fname.endswith("_test.py")
+            )
+            if is_test:
+                rel = os.path.relpath(os.path.join(root, fname), workspace)
+                test_files.append(rel)
+    return test_files
+
+
+def _run_full_pytest_suite(workspace: str) -> str | None:
+    """Run pytest on the full test suite in the workspace.
+
+    Returns None if all tests pass (or no test files exist),
+    or an error string describing the failures.
+    """
+    test_files = _discover_all_test_files(workspace)
+    if not test_files:
+        return None
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest"] + test_files + ["--tb=short", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=workspace,
+        )
+    except FileNotFoundError:
+        logger.debug("pytest not available, skipping full test suite check")
+        return None
+    except subprocess.TimeoutExpired:
+        return "Full test suite timed out after 300 seconds."
+
+    if result.returncode == 0:
+        return None
+
+    # Trim output to avoid overwhelming the correction prompt.
+    stdout_tail = result.stdout[-3000:] if result.stdout else ""
+    stderr_tail = result.stderr[-1000:] if result.stderr else ""
+    return (
+        "Full test suite FAILED after this step's corrections.\n"
+        f"pytest exit code: {result.returncode}\n"
+        f"stdout (last 3000 chars):\n{stdout_tail}\n"
+        f"stderr (last 1000 chars):\n{stderr_tail}"
+    )
+
+
 def _collect_test_files_for_step(step: dict, state: dict) -> dict[str, str]:
     """Return {filepath: content} for test files produced by dependency test steps.
 
@@ -4940,6 +5004,23 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
                             )
                 except Exception as exc:
                     logger.debug("Orphaned module check failed: %s", exc)
+
+            # Phase 4.6: Run full test suite after corrections.
+            # Only for non-test steps — test steps just write tests.
+            if failure_reason is None and not step.get(
+                "title", ""
+            ).strip().lower().startswith("test:"):
+                logger.info("  Running full pytest suite...")
+                if dashboard:
+                    dashboard.set_step_activity(
+                        step["id"], "Running full test suite..."
+                    )
+                full_suite_err = _run_full_pytest_suite(PROJECT_DIR)
+                if full_suite_err:
+                    logger.error(
+                        "  Full test suite failed after step %s.", step["id"]
+                    )
+                    failure_reason = full_suite_err
 
             if failure_reason is None:
                 # All validation passed

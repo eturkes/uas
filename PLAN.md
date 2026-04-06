@@ -223,7 +223,7 @@ before it enters the next context window.
 - [x] **5.3** Wire `format_workspace()` into `git_checkpoint()` in
       `architect/main.py` (line 406). Format before committing so every
       checkpoint is clean.
-- [ ] **5.4** Wire `lint_workspace()` into `evaluate_sandbox()` (Phase 2's
+- [x] **5.4** Wire `lint_workspace()` into `evaluate_sandbox()` (Phase 2's
       fuzzy function) as a pre-check. If the linter finds fatal errors
       (e.g., `NameError`-class issues), mark `revert_needed=True` in the
       `ExecutionResult` without burning an LLM call.

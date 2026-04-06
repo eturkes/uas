@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from uas.fuzzy import fuzzy_function
 from uas.fuzzy_models import CodeQuality, ExecutionResult, UASResult
-from uas.janitor import format_workspace
+from uas.janitor import format_workspace, lint_workspace
 
 from architect.git_state import create_attempt_branch, rollback_to_checkpoint
 
@@ -1679,23 +1679,41 @@ def main():
         if result["stderr"]:
             logger.info("%s\n%s\n%s", STDERR_START, result["stderr"], STDERR_END)
 
-        # Evaluate sandbox outcome via structured ExecutionResult.
-        try:
-            exec_result = evaluate_sandbox(
-                stdout=result["stdout"] or "",
-                stderr=result["stderr"] or "",
-                exit_code=result["exit_code"],
-            )
-        except Exception:
-            logger.debug("evaluate_sandbox fuzzy call failed, using exit-code fallback",
-                         exc_info=True)
-            _success = result["exit_code"] == 0
+        # Phase 5.4: Lint pre-check — if the linter finds fatal errors
+        # (e.g. undefined names), short-circuit with revert_needed=True
+        # without burning an LLM call on evaluate_sandbox.
+        lint_errors: list[str] = []
+        if _workspace:
+            lint_errors = lint_workspace(_workspace)
+
+        if lint_errors:
+            logger.warning("Lint pre-check found %d fatal error(s):", len(lint_errors))
+            for err in lint_errors[:10]:
+                logger.warning("  %s", err)
             exec_result = ExecutionResult(
-                success=_success,
-                revert_needed=not _success,
-                error_category=None if _success else "unknown",
-                summary="exit code 0" if _success else f"exit code {result['exit_code']}",
+                success=False,
+                revert_needed=True,
+                error_category="lint_fatal",
+                summary=f"Linter found {len(lint_errors)} fatal error(s): {lint_errors[0]}",
             )
+        else:
+            # Evaluate sandbox outcome via structured ExecutionResult.
+            try:
+                exec_result = evaluate_sandbox(
+                    stdout=result["stdout"] or "",
+                    stderr=result["stderr"] or "",
+                    exit_code=result["exit_code"],
+                )
+            except Exception:
+                logger.debug("evaluate_sandbox fuzzy call failed, using exit-code fallback",
+                             exc_info=True)
+                _success = result["exit_code"] == 0
+                exec_result = ExecutionResult(
+                    success=_success,
+                    revert_needed=not _success,
+                    error_category=None if _success else "unknown",
+                    summary="exit code 0" if _success else f"exit code {result['exit_code']}",
+                )
         logger.info("ExecutionResult: %s", exec_result.model_dump_json())
 
         if exec_result.success:

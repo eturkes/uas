@@ -171,7 +171,7 @@ The Orchestrator's success criteria becomes binary: `pytest` exit code 0.
       exist in the DAG with the implementation step in its `depends_on`.
       Add this as a hard constraint in the decomposition prompt and the
       JSON schema examples.
-- [ ] **4.2** Add a post-decomposition validation pass in `architect/main.py`
+- [x] **4.2** Add a post-decomposition validation pass in `architect/main.py`
       (after line 5639, end of Phase 1) that scans the step DAG and rejects
       any plan where an implementation step lacks a preceding test step.
       If invalid, re-prompt the planner with the specific violation.

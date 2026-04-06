@@ -584,6 +584,148 @@ def validate_depends_on(steps: list[dict]) -> None:
             dfs(node)
 
 
+# ---------------------------------------------------------------------------
+# TDD enforcement validation
+# ---------------------------------------------------------------------------
+
+# Step titles containing these keywords are exempt from TDD (not implementation code).
+_TDD_EXEMPT_KEYWORDS = (
+    "download", "fetch", "clean", "preprocess", "configure", "setup",
+    "install", "checkpoint", "integration", "verify", "validate",
+    "deploy", "package", "bundle", "copy", "move", "migrate",
+)
+
+
+def _is_exempt_from_tdd(title: str) -> bool:
+    """Return True if the step title indicates a non-implementation category."""
+    lower = title.strip().lower()
+    if lower.startswith("test:"):
+        return True
+    return any(kw in lower for kw in _TDD_EXEMPT_KEYWORDS)
+
+
+def validate_tdd_coverage(steps: list[dict]) -> list[str]:
+    """Check that every implementation step depends on a preceding test step.
+
+    Returns a list of violation messages (empty = valid plan).
+
+    Exempt categories (no test step required):
+    - Test steps themselves (title starts with "test:")
+    - Data-processing (download, fetch, clean, preprocess)
+    - Configuration (configure, setup, install)
+    - Integration checkpoints (checkpoint, verify, validate)
+    - Deployment / packaging (deploy, package, bundle)
+    """
+    # Collect 1-based IDs of test steps.
+    test_step_ids: set[int] = set()
+    for i, step in enumerate(steps):
+        if step.get("title", "").strip().lower().startswith("test:"):
+            test_step_ids.add(i + 1)
+
+    violations: list[str] = []
+    for i, step in enumerate(steps):
+        step_id = i + 1
+        title = step.get("title", "")
+
+        if _is_exempt_from_tdd(title):
+            continue
+
+        # Implementation step — must depend on at least one test step.
+        deps = set(step.get("depends_on", []))
+        if not deps & test_step_ids:
+            violations.append(
+                f"Step {step_id} (\"{title}\") is an implementation step "
+                f"but has no preceding test step in its depends_on."
+            )
+
+    return violations
+
+
+_TDD_FIX_PROMPT = """\
+<goal>{goal}</goal>
+{spec}
+<current_plan>
+{plan_json}
+</current_plan>
+
+<violations>
+{violations}
+</violations>
+
+The plan above violates the TDD enforcement rule: every implementation step \
+must have a preceding "test:" step in its depends_on. The specific violations \
+are listed above.
+
+Fix the plan by adding test steps where needed:
+1. For each violating step, insert a new "test: Write tests for ..." step \
+that precedes it.
+2. The test step title MUST start with "test:".
+3. The test step outputs MUST include the test file path (e.g. "test_foo.py").
+4. The implementation step MUST list the test step in its depends_on.
+5. Keep all other steps and their dependencies intact.
+6. Re-number all steps sequentially starting from 1 after insertions.
+7. Update all depends_on references to match the new numbering.
+
+Steps that are purely data-processing, configuration, or integration \
+checkpoints do NOT need test steps — only implementation code steps do.
+
+Respond with ONLY a JSON array of the corrected steps. Each element:
+{{"title": "short name", \
+"description": "detailed task for a code-generating LLM", \
+"depends_on": [step_numbers], \
+"verify": "how to verify this step succeeded", \
+"environment": ["packages needed"], \
+"outputs": ["file paths this step creates"]}}
+"""
+
+
+def fix_tdd_violations(
+    goal: str,
+    steps: list[dict],
+    violations: list[str],
+    spec: str = "",
+) -> list[dict]:
+    """Re-prompt the planner to fix TDD coverage violations."""
+    client = get_llm_client(role="planner")
+
+    prompt = _TDD_FIX_PROMPT.format(
+        goal=goal,
+        spec=_format_spec(spec),
+        plan_json=json.dumps(steps, indent=2),
+        violations="\n".join(f"- {v}" for v in violations),
+    )
+
+    event_log = get_event_log()
+    event_log.emit(EventType.LLM_CALL_START, data={"purpose": "fix_tdd_violations"})
+    response, _usage = client.generate(prompt)
+    event_log.emit(
+        EventType.LLM_CALL_COMPLETE, data={"purpose": "fix_tdd_violations"},
+    )
+
+    fixed_steps = parse_steps_json(response)
+    if not fixed_steps:
+        logger.warning("TDD fix re-prompt returned empty steps, keeping original.")
+        return steps
+
+    for step in fixed_steps:
+        if "title" not in step or "description" not in step:
+            logger.warning("TDD fix returned step missing required fields, keeping original.")
+            return steps
+        step.setdefault("depends_on", [])
+        step.setdefault("verify", "")
+        step.setdefault("environment", [])
+        step.setdefault("outputs", [])
+
+    # Normalize 0-indexed depends_on.
+    has_zero_ref = any(0 in s.get("depends_on", []) for s in fixed_steps)
+    if has_zero_ref:
+        for step in fixed_steps:
+            step["depends_on"] = [d + 1 for d in step["depends_on"]]
+
+    validate_depends_on(fixed_steps)
+    return fixed_steps
+
+
 def topological_sort(steps: list[dict]) -> list[list[int]]:
     """Sort steps into execution levels using Kahn's algorithm.
 

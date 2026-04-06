@@ -48,6 +48,8 @@ from .planner import (
     insert_integration_checkpoints,
     generate_corrective_steps,
     enforce_minimum_steps,
+    validate_tdd_coverage,
+    fix_tdd_violations,
     MAX_CORRECTIVE_STEPS_PER_ROUND,
     MAX_CORRECTION_ROUNDS,
 )
@@ -5719,6 +5721,28 @@ def main():
 
         # Section 5: Insert integration checkpoints at phase boundaries
         steps = insert_integration_checkpoints(steps)
+
+        # TDD enforcement: reject plans where implementation steps lack test steps
+        _MAX_TDD_FIX_ATTEMPTS = 2
+        tdd_violations = validate_tdd_coverage(steps)
+        for _tdd_attempt in range(_MAX_TDD_FIX_ATTEMPTS):
+            if not tdd_violations:
+                break
+            logger.warning(
+                "  TDD violations found (%d), re-prompting planner...",
+                len(tdd_violations),
+            )
+            for v in tdd_violations:
+                logger.warning("    %s", v)
+            steps = fix_tdd_violations(goal, steps, tdd_violations, spec=spec)
+            tdd_violations = validate_tdd_coverage(steps)
+        if tdd_violations:
+            logger.warning(
+                "  TDD violations remain after %d fix attempts, proceeding anyway.",
+                _MAX_TDD_FIX_ATTEMPTS,
+            )
+            for v in tdd_violations:
+                logger.warning("    %s", v)
 
         state = add_steps(state, steps)
         logger.info("  Decomposed into %d step(s):", len(steps))

@@ -208,7 +208,7 @@ before it enters the next context window.
 
 ### Tasks
 
-- [ ] **5.1** Create `uas/janitor.py` (new module) with:
+- [x] **5.1** Create `uas/janitor.py` (new module) with:
       - `format_workspace(workspace: str, files: list[str] | None = None)`:
         Runs `ruff format` on specified files (or all `.py` files if None).
         Falls back to `black` if `ruff` is not installed. Falls back to

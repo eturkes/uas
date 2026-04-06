@@ -217,7 +217,7 @@ before it enters the next context window.
         -> list[str]`: Runs `ruff check --select=F` (Pyflakes only) and
         returns any fatal errors (undefined names, unused imports that
         shadow builtins).
-- [ ] **5.2** Wire `format_workspace()` into the Orchestrator success path
+- [x] **5.2** Wire `format_workspace()` into the Orchestrator success path
       in `orchestrator/main.py` (after line 1578, `exit_code == 0` block).
       Before exiting, format all files listed in `UAS_RESULT.files_written`.
 - [ ] **5.3** Wire `format_workspace()` into `git_checkpoint()` in

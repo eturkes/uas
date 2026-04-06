@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from uas.fuzzy import fuzzy_function
 from uas.fuzzy_models import CodeQuality, ExecutionResult, UASResult
+from uas.janitor import format_workspace
 
 from architect.git_state import create_attempt_branch, rollback_to_checkpoint
 
@@ -1735,6 +1736,11 @@ def main():
             uas_result = parse_uas_result(result["stdout"] or "")
             if uas_result:
                 logger.info("UAS_RESULT: %s", uas_result.model_dump_json())
+
+            # Phase 5.2: Format all files listed in UAS_RESULT before exiting.
+            if uas_result and uas_result.files_written and _workspace:
+                format_workspace(_workspace, uas_result.files_written)
+
             logger.info("\nSUCCESS on attempt %d.", attempt)
             import json as _json
             logger.info("__UAS_ORCH_USAGE__:%s", _json.dumps(_orch_usage))

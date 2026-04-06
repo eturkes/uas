@@ -423,6 +423,13 @@ depend on its test step and its description must instruct the code generator \
 to make all tests pass. This ensures every piece of code has automated \
 verification before it is considered complete.
 
+Test step contract (all three are mandatory):
+1. The title MUST start with "test:" (e.g. "test: Write tests for parser").
+2. The description MUST include "Write pytest tests for ..." explaining \
+what the tests cover.
+3. The "outputs" list MUST include at least one file matching the pytest \
+naming convention: test_*.py or *_test.py (e.g. ["test_parser.py"]).
+
 Then produce the step DAG as a JSON array.
 </instructions>
 
@@ -604,8 +611,58 @@ def _is_exempt_from_tdd(title: str) -> bool:
     return any(kw in lower for kw in _TDD_EXEMPT_KEYWORDS)
 
 
+def _is_test_file(path: str) -> bool:
+    """Return True if *path* matches the pytest naming convention.
+
+    Accepted patterns: ``test_*.py`` or ``*_test.py``.
+    """
+    basename = os.path.basename(path)
+    return (basename.startswith("test_") and basename.endswith(".py")) or (
+        basename.endswith("_test.py")
+    )
+
+
+def validate_test_step_contract(steps: list[dict]) -> list[str]:
+    """Validate that test steps satisfy the TDD contract.
+
+    Each step whose title starts with ``test:`` must:
+    1. Have an ``outputs`` list containing at least one file matching
+       ``test_*.py`` or ``*_test.py``.
+    2. Include "write pytest tests" (case-insensitive) in its description.
+
+    Returns a list of violation messages (empty = all test steps valid).
+    """
+    violations: list[str] = []
+    for i, step in enumerate(steps):
+        step_id = i + 1
+        title = step.get("title", "").strip()
+        if not title.lower().startswith("test:"):
+            continue
+
+        # --- outputs contract ---
+        outputs = step.get("outputs", [])
+        test_files = [o for o in outputs if _is_test_file(o)]
+        if not test_files:
+            violations.append(
+                f'Step {step_id} ("{title}") is a test step but its '
+                f"outputs {outputs!r} contain no file matching "
+                f"test_*.py or *_test.py."
+            )
+
+        # --- description contract ---
+        desc = step.get("description", "").lower()
+        if "write pytest tests" not in desc:
+            violations.append(
+                f'Step {step_id} ("{title}") is a test step but its '
+                f'description does not include "Write pytest tests for...".'
+            )
+
+    return violations
+
+
 def validate_tdd_coverage(steps: list[dict]) -> list[str]:
-    """Check that every implementation step depends on a preceding test step.
+    """Check that every implementation step depends on a preceding test step
+    and that every test step satisfies the TDD contract.
 
     Returns a list of violation messages (empty = valid plan).
 
@@ -616,13 +673,15 @@ def validate_tdd_coverage(steps: list[dict]) -> list[str]:
     - Integration checkpoints (checkpoint, verify, validate)
     - Deployment / packaging (deploy, package, bundle)
     """
+    # First, validate that test steps themselves are well-formed.
+    violations = validate_test_step_contract(steps)
+
     # Collect 1-based IDs of test steps.
     test_step_ids: set[int] = set()
     for i, step in enumerate(steps):
         if step.get("title", "").strip().lower().startswith("test:"):
             test_step_ids.add(i + 1)
 
-    violations: list[str] = []
     for i, step in enumerate(steps):
         step_id = i + 1
         title = step.get("title", "")
@@ -656,15 +715,18 @@ The plan above violates the TDD enforcement rule: every implementation step \
 must have a preceding "test:" step in its depends_on. The specific violations \
 are listed above.
 
-Fix the plan by adding test steps where needed:
+Fix the plan by adding or correcting test steps where needed:
 1. For each violating step, insert a new "test: Write tests for ..." step \
-that precedes it.
+that precedes it (or fix the existing test step).
 2. The test step title MUST start with "test:".
-3. The test step outputs MUST include the test file path (e.g. "test_foo.py").
-4. The implementation step MUST list the test step in its depends_on.
-5. Keep all other steps and their dependencies intact.
-6. Re-number all steps sequentially starting from 1 after insertions.
-7. Update all depends_on references to match the new numbering.
+3. The test step description MUST include "Write pytest tests for ..." \
+explaining what the tests cover.
+4. The test step outputs MUST include at least one file matching test_*.py \
+or *_test.py (e.g. "test_foo.py").
+5. The implementation step MUST list the test step in its depends_on.
+6. Keep all other steps and their dependencies intact.
+7. Re-number all steps sequentially starting from 1 after insertions.
+8. Update all depends_on references to match the new numbering.
 
 Steps that are purely data-processing, configuration, or integration \
 checkpoints do NOT need test steps — only implementation code steps do.

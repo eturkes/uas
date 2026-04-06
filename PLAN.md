@@ -175,7 +175,7 @@ The Orchestrator's success criteria becomes binary: `pytest` exit code 0.
       (after line 5639, end of Phase 1) that scans the step DAG and rejects
       any plan where an implementation step lacks a preceding test step.
       If invalid, re-prompt the planner with the specific violation.
-- [ ] **4.3** Define the test step contract: test steps must output files
+- [x] **4.3** Define the test step contract: test steps must output files
       matching `test_*.py` or `*_test.py` in the workspace. The step
       description must include "Write pytest tests for..." and the
       `outputs` field must list the test file paths.

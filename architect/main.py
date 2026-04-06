@@ -49,6 +49,7 @@ from .planner import (
     generate_corrective_steps,
     enforce_minimum_steps,
     validate_tdd_coverage,
+    validate_test_step_contract,
     fix_tdd_violations,
     MAX_CORRECTIVE_STEPS_PER_ROUND,
     MAX_CORRECTION_ROUNDS,

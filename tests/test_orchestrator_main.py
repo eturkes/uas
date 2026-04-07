@@ -1121,3 +1121,168 @@ class TestPytestGate:
         # the retry path will inject pytest failures via retry_clean mode in
         # task 6.7. For now, just verify the retry attempt occurred.
         assert mock_client.generate.call_count == 2
+
+
+@patch("orchestrator.main.evaluate_sandbox", side_effect=_mock_evaluate_sandbox)
+@patch("orchestrator.main.assess_code_quality", side_effect=_mock_quality)
+class TestRetryCleanThreeAttemptSequence:
+    """Phase 6.9: Mock a 3-attempt sequence and verify the retry_clean prompts.
+
+    The retry_clean prompt (attempts 2+) must contain ZERO references to any
+    prior attempt's LLM-generated code, and must NOT carry forward error
+    messages from attempts older than the immediately prior one. They MUST
+    contain the Architect's immutable spec and the live filesystem state.
+    """
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.format_workspace")
+    @patch("orchestrator.main.lint_workspace", return_value=[])
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_three_attempts_strip_prior_context(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        _mock_lint, _mock_format, _mock_cq, _mock_eval,
+        tmp_path, monkeypatch,
+    ):
+        # Live workspace with a marker file the retry_clean prompt must
+        # surface in <current_code> via scan_workspace.
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        (tmp_path / "main.py").write_text("LIVE_WORKSPACE_MARKER = 1\n")
+
+        # Distinct, easy-to-grep tokens so any leakage between prompts shows up.
+        gen1 = '```python\nMEMORY_TOKEN_ATTEMPT_1 = 1\nprint("a1")\n```'
+        gen2 = '```python\nMEMORY_TOKEN_ATTEMPT_2 = 2\nprint("a2")\n```'
+        gen3 = '```python\nMEMORY_TOKEN_ATTEMPT_3 = 3\nprint("a3")\n```'
+        mock_client = MagicMock()
+        _u = {"input": 0, "output": 0}
+        mock_client.generate.side_effect = [
+            (gen1, _u),
+            (gen2, _u),
+            (gen3, _u),
+        ]
+        mock_client_factory.return_value = mock_client
+
+        # Verify call succeeds; the 3 attempt sandbox calls fail with distinct
+        # stderr/stdout tokens so we can detect cross-attempt leakage.
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},  # verify
+            {"exit_code": 1,
+             "stdout": "STDOUT_TOKEN_ATTEMPT_1 trace",
+             "stderr": "STDERR_TOKEN_ATTEMPT_1 boom"},
+            {"exit_code": 1,
+             "stdout": "STDOUT_TOKEN_ATTEMPT_2 trace",
+             "stderr": "STDERR_TOKEN_ATTEMPT_2 boom"},
+            {"exit_code": 1,
+             "stdout": "STDOUT_TOKEN_ATTEMPT_3 trace",
+             "stderr": "STDERR_TOKEN_ATTEMPT_3 boom"},
+        ]
+
+        # Recognisable task → becomes the immutable spec in the retry prompts.
+        task_text = "IMMUTABLE_SPEC_TOKEN: implement quicksort."
+        mock_args.return_value = argparse.Namespace(
+            task=[task_text], verbose=False,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert mock_client.generate.call_count == MAX_RETRIES
+
+        prompts = [c.args[0] for c in mock_client.generate.call_args_list]
+        attempt1, attempt2, attempt3 = prompts
+
+        # Sanity: attempt 1 is the rich "full" prompt.
+        assert "<role>" in attempt1
+        assert "<environment>" in attempt1
+        assert "IMMUTABLE_SPEC_TOKEN" in attempt1
+
+        # Attempts 2 and 3 are stripped retry_clean prompts.
+        for label, p in (("attempt2", attempt2), ("attempt3", attempt3)):
+            assert "<spec>" in p, f"{label} missing <spec>"
+            assert "</spec>" in p, f"{label} missing </spec>"
+            assert "<current_code>" in p, f"{label} missing <current_code>"
+            assert "</current_code>" in p, f"{label} missing </current_code>"
+            assert "<error>" in p, f"{label} missing <error>"
+            assert "</error>" in p, f"{label} missing </error>"
+            # None of the full-mode scaffolding may appear.
+            for marker in (
+                "<role>",
+                "<environment>",
+                "<constraints>",
+                "<output_contract>",
+                "<approach>",
+                "<previous_error",
+                "<attempt_history>",
+                "<workspace_state>",
+                "<prior_knowledge>",
+                "<tdd_constraint>",
+            ):
+                assert marker not in p, (
+                    f"{label} unexpectedly contains full-mode marker {marker}"
+                )
+
+            # The Architect's immutable spec is grounded in the prompt.
+            spec_start = p.index("<spec>")
+            spec_end = p.index("</spec>")
+            assert "IMMUTABLE_SPEC_TOKEN" in p[spec_start:spec_end], (
+                f"{label} <spec> missing immutable task token"
+            )
+
+            # Live workspace state is grounded in <current_code>, not memory.
+            cc_start = p.index("<current_code>")
+            cc_end = p.index("</current_code>")
+            cc_body = p[cc_start:cc_end]
+            assert "main.py" in cc_body, (
+                f"{label} <current_code> missing live workspace file"
+            )
+            assert "LIVE_WORKSPACE_MARKER" in cc_body, (
+                f"{label} <current_code> missing live workspace marker"
+            )
+
+        # ZERO references to ANY prior attempt's LLM-generated code anywhere
+        # in the retry_clean prompts — the LLM has no memory of prior attempts.
+        for label, p in (("attempt2", attempt2), ("attempt3", attempt3)):
+            assert "MEMORY_TOKEN_ATTEMPT_1" not in p, (
+                f"{label} leaked attempt 1 generated code"
+            )
+            assert "MEMORY_TOKEN_ATTEMPT_2" not in p, (
+                f"{label} leaked attempt 2 generated code"
+            )
+            assert "MEMORY_TOKEN_ATTEMPT_3" not in p, (
+                f"{label} leaked attempt 3 generated code"
+            )
+
+        # Attempt 2 sees ONLY attempt 1's raw sandbox error in <error>.
+        err2_start = attempt2.index("<error>")
+        err2_end = attempt2.index("</error>")
+        err2_body = attempt2[err2_start:err2_end]
+        assert "STDERR_TOKEN_ATTEMPT_1" in err2_body
+        assert "STDOUT_TOKEN_ATTEMPT_1" in err2_body
+        assert "STDERR_TOKEN_ATTEMPT_2" not in attempt2
+        assert "STDOUT_TOKEN_ATTEMPT_2" not in attempt2
+        assert "STDERR_TOKEN_ATTEMPT_3" not in attempt2
+
+        # Attempt 3 sees ONLY attempt 2's raw sandbox error — no attempt 1
+        # history may bleed through, since the retry loop has no
+        # attempt_history accumulator (Phase 6.5).
+        err3_start = attempt3.index("<error>")
+        err3_end = attempt3.index("</error>")
+        err3_body = attempt3[err3_start:err3_end]
+        assert "STDERR_TOKEN_ATTEMPT_2" in err3_body
+        assert "STDOUT_TOKEN_ATTEMPT_2" in err3_body
+        assert "STDERR_TOKEN_ATTEMPT_1" not in attempt3, (
+            "attempt 3 leaked attempt 1's stderr"
+        )
+        assert "STDOUT_TOKEN_ATTEMPT_1" not in attempt3, (
+            "attempt 3 leaked attempt 1's stdout"
+        )
+        assert "STDERR_TOKEN_ATTEMPT_3" not in attempt3
+        assert "STDOUT_TOKEN_ATTEMPT_3" not in attempt3
+
+        # The synthesized previous_error string built by the orchestrator
+        # main loop carries an "[runtime_error]" prefix in this scenario.
+        # The retry_clean <error> section must NOT show that opinionated
+        # synthesis when raw stderr/stdout is available (Phase 6.4).
+        assert "[runtime_error]" not in err2_body
+        assert "[runtime_error]" not in err3_body

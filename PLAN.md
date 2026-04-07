@@ -280,7 +280,7 @@ spec, (2) the current code state, and (3) the exact error stack trace.
       description + verify criteria + outputs) as a `step_spec` key in
       the env dict, so it is available to `build_prompt()` for the
       `<spec>` section.
-- [ ] **6.9** Write tests: mock a 3-attempt sequence, verify that attempt 2
+- [x] **6.9** Write tests: mock a 3-attempt sequence, verify that attempt 2
       and 3 prompts contain zero references to prior attempts' code or
       error messages, and that they do contain the spec and current
       filesystem state.

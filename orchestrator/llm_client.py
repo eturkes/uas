@@ -172,9 +172,15 @@ class ClaudeCodeClient:
                 "-p", "--dangerously-skip-permissions",
             ]
 
-        # All agents have full tool access — they can research APIs,
-        # install packages, modify their environment, and use any
-        # available tools and skills.
+        # File-modification tools are disabled so the LLM is forced to put
+        # the generated script in its text response (a fenced code block)
+        # instead of writing files directly via tools.  Read-only research
+        # tools (Read, Grep, Glob, WebSearch, WebFetch) and Bash remain
+        # available so the LLM can still verify package versions, read API
+        # docs, and run quick checks before generating code.
+        cmd.extend([
+            "--disallowed-tools", "Write", "Edit", "NotebookEdit",
+        ])
 
         model = self.model or "claude-opus-4-6"
         cmd.extend(["--model", model])

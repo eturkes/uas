@@ -162,6 +162,45 @@ class TestGenerateIsolation:
 
         assert not os.path.exists(captured["cwd"])
 
+    @patch("orchestrator.llm_client.subprocess.run")
+    @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
+    def test_disallowed_tools_flag_in_cmd(self, _mock_which, mock_run, _mock_cls):
+        """generate() must pass --disallowed-tools so the LLM cannot write files.
+
+        Section 2 of the bind-mount recovery PLAN: Write/Edit/NotebookEdit
+        must be disabled in the CLI subprocess so the orchestrator always
+        receives a fenced code block in the LLM's text response instead of
+        having the LLM perform the task with file-writing tools.
+        """
+        captured = {}
+
+        def capture(*args, **kwargs):
+            captured["cmd"] = list(args[0])
+            return subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="response", stderr="")
+
+        mock_run.side_effect = capture
+        ClaudeCodeClient().generate("hello")
+
+        cmd = captured["cmd"]
+        assert "--disallowed-tools" in cmd, (
+            f"--disallowed-tools flag missing from cmd: {cmd}"
+        )
+        flag_idx = cmd.index("--disallowed-tools")
+        # The three blocked tools must follow the flag.  They may be in any
+        # order but all three must be present in the args after the flag.
+        following = cmd[flag_idx + 1: flag_idx + 4]
+        for tool in ("Write", "Edit", "NotebookEdit"):
+            assert tool in following, (
+                f"{tool} not found in args after --disallowed-tools: "
+                f"{following}"
+            )
+        # Sanity: research tools must NOT be in the disallowed list.
+        for tool in ("Bash", "Read", "Grep", "Glob", "WebSearch", "WebFetch"):
+            assert tool not in following, (
+                f"research tool {tool} should not be disallowed"
+            )
+
     @patch("orchestrator.llm_client.time.sleep")
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
@@ -200,12 +239,32 @@ class TestClaudeMdIsolationGuidance:
     def test_no_file_creation_instruction(self):
         from orchestrator.claude_config import CLAUDE_MD_TEMPLATE
 
-        assert "Do NOT create any files or directories" in CLAUDE_MD_TEMPLATE
+        # The template must tell the LLM not to create files / directories.
+        assert "Do NOT" in CLAUDE_MD_TEMPLATE
+        assert "files or directories" in CLAUDE_MD_TEMPLATE
 
-    def test_no_write_tool_instruction(self):
+    def test_disabled_tools_called_out(self):
+        """Section 2 of the bind-mount recovery PLAN.
+
+        The template must explicitly tell the LLM that Write, Edit, and
+        NotebookEdit are DISABLED so it does not attempt to use them.
+        """
         from orchestrator.claude_config import CLAUDE_MD_TEMPLATE
 
-        assert (
-            "Do NOT use Write, Edit, or Bash tools to create files"
-            in CLAUDE_MD_TEMPLATE
-        )
+        for tool in ("Write", "Edit", "NotebookEdit"):
+            assert tool in CLAUDE_MD_TEMPLATE, (
+                f"{tool} should be mentioned as disabled in CLAUDE.md"
+            )
+        assert "DISABLED" in CLAUDE_MD_TEMPLATE
+
+    def test_no_all_tools_enabled_contradiction(self):
+        """Section 2 of the bind-mount recovery PLAN.
+
+        The template must NOT claim "ALL TOOLS ENABLED" because file
+        modification tools are in fact restricted by the orchestrator's
+        --disallowed-tools flag.  The contradiction was confusing the LLM
+        into trying to use Write/Edit instead of producing a code block.
+        """
+        from orchestrator.claude_config import CLAUDE_MD_TEMPLATE
+
+        assert "ALL TOOLS ENABLED" not in CLAUDE_MD_TEMPLATE

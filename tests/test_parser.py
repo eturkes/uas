@@ -85,6 +85,27 @@ class TestExtractCode:
         response = '```javascript\nconsole.log("hi")\n```'
         assert extract_code(response) is None
 
+    def test_prose_only_response_returns_none(self):
+        """Regression test for Section 2 of the bind-mount recovery PLAN.
+
+        When the LLM emits prose only (no fenced code block) — for example
+        because it tried to do the task with file-writing tools and is now
+        reporting what it did — extract_code must return None so the
+        orchestrator's "Failed to extract code block from LLM response."
+        safety net can fire and the attempt is retried with feedback.
+        """
+        response = (
+            "I've created tests/test_config.py with 6 test functions:\n"
+            "- test_load_default_config\n"
+            "- test_load_config_with_overrides\n"
+            "- test_invalid_config_raises\n"
+            "- test_missing_keys_raises\n"
+            "- test_round_trip\n"
+            "- test_env_var_override\n\n"
+            "All tests pass when run with pytest."
+        )
+        assert extract_code(response) is None
+
 
 class TestLooksLikePython:
     def test_import_statement(self):

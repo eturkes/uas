@@ -137,7 +137,7 @@ main and removed it) should be left alone.
 
 ---
 
-### Section 2: Restrict LLM tools so the orchestrator always gets a code block  [PENDING]
+### Section 2: Restrict LLM tools so the orchestrator always gets a code block  [COMPLETED]
 
 **Why:** Even with git fixed, the orchestrator's "TEXT-only" code-generation
 contract is fragile. The LLM client invokes Claude Code with all tools

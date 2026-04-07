@@ -4,26 +4,34 @@ CLAUDE_MD_TEMPLATE = """\
 # CLAUDE.md - Workspace Instructions for UAS Code Generation
 
 ## Autonomy
-You are in an isolated, disposable container with full autonomy and ALL TOOLS ENABLED:
-- Root access, unrestricted network, no firewalls, no permission boundaries
-- Full tool access — file operations, web search, web fetch, bash, all agent skills
-- Install any packages, run any commands, access any URLs, clone any repos
-- If you need a tool, install it. If you need a skill, add it. If you need information, fetch it.
-- If you're unsure about a library version or API, use your tools to check the docs or registry.
-- Modify your environment freely — install system packages, configure tooling, add capabilities.
-Act decisively. Use every tool at your disposal. Never hedge about permissions or capabilities.
+You are in an isolated, disposable container with research tools enabled:
+- Root access, unrestricted network, no firewalls
+- Read-only and research tools available — Read, Grep, Glob, WebSearch,
+  WebFetch, and Bash for quick verification commands
+- File-modification tools (Write, Edit, NotebookEdit) are DISABLED for this
+  generation step. You cannot create or modify files via tools.
+- If you're unsure about a library version or API, use WebFetch / WebSearch
+  to check the docs or registry, or run a Bash command to inspect the
+  environment.
+Act decisively. Research with the tools you have. Never hedge about
+permissions for the tools that ARE available.
 
 ## Role
 You are generating a self-contained Python script as TEXT output.
-You have all tools enabled and should use them to research and verify before coding.
-Do NOT use Write, Edit, or Bash tools to create files or directories.
-Output the complete script in a single fenced code block in your response.
-Your script will later run inside an isolated workspace directory.
+Use the available research tools (Read, Grep, Glob, WebSearch, WebFetch,
+Bash) to verify package versions, API signatures, and environment details
+before coding.
+The Write, Edit, and NotebookEdit tools are DISABLED — you cannot create
+files via tools. Output the complete script in a single fenced code block
+in your response. The framework will extract and execute the script later
+inside an isolated workspace directory.
 
 ## Output Mode — TEXT ONLY
-Do NOT create any files or directories. Your only job is to produce the Python
-script text in your response. The framework will extract and execute the script.
-Any files created by tools during generation will be discarded.
+Do NOT attempt to create any files or directories. The Write, Edit, and
+NotebookEdit tools are DISABLED in this session and any attempt to use
+them will fail. Your only job is to produce the Python script text in
+your response inside a single ```python fenced code block. The framework
+will extract and execute the script.
 
 ## Environment
 - Python 3.12 (full standard library available)

@@ -264,7 +264,7 @@ spec, (2) the current code state, and (3) the exact error stack trace.
       `result["stderr"]` and the last 50 lines of `result["stdout"]`.
       Strip ANSI escape codes. No attempt history, no prior code snippets,
       no retry guidance prose.
-- [ ] **6.5** Remove the `attempt_history` accumulation logic (lines
+- [x] **6.5** Remove the `attempt_history` accumulation logic (lines
       1433-1434, 1478-1483, 1494-1499, 1528-1533, 1591-1596). The retry
       loop variable `attempt_history` is deleted entirely.
 - [ ] **6.6** Remove `_llm_retry_guidance()` and the hardcoded fallback

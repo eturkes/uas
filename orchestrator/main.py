@@ -1710,8 +1710,6 @@ def main():
     client = get_llm_client(role="coder")
     previous_error = None
     previous_code = None
-    # Section 11: Accumulate full attempt history across retries.
-    attempt_history: list[dict] = []
     workspace_files = config.get("workspace_files")
 
     # Read step's package requirements from the architect
@@ -1765,7 +1763,6 @@ def main():
                               workspace_files=workspace_files,
                               system_state=system_state,
                               knowledge=knowledge,
-                              attempt_history=attempt_history or None,
                               test_files=test_files)
 
         # Section 7c: Determine N for this attempt (budget-aware gating).
@@ -1781,11 +1778,6 @@ def main():
                 previous_error = "Failed to extract code block from LLM response."
                 previous_code = None
                 logger.error("%s", previous_error)
-                attempt_history.append({
-                    "attempt": attempt,
-                    "error": previous_error,
-                    "code_snippet": "",
-                })
                 continue
         else:
             # Standard single-sample path.
@@ -1797,11 +1789,6 @@ def main():
                 previous_error = str(exc)
                 previous_code = None
                 logger.error("LLM generation failed: %s", exc)
-                attempt_history.append({
-                    "attempt": attempt,
-                    "error": previous_error,
-                    "code_snippet": "",
-                })
                 continue
 
             code = extract_code(response)
@@ -1831,11 +1818,6 @@ def main():
                 logger.error("%s", previous_error)
                 logger.debug("Raw LLM response (%d chars):\n%s",
                              len(response), response[:2000])
-                attempt_history.append({
-                    "attempt": attempt,
-                    "error": previous_error,
-                    "code_snippet": "",
-                })
                 continue
 
             logger.debug("Generated code (%d chars):\n---\n%s\n---",
@@ -1943,12 +1925,6 @@ def main():
                         "Fix your implementation to make all tests pass. "
                         "Do NOT modify the test files."
                     )
-                    attempt_history.append({
-                        "attempt": attempt,
-                        "error": previous_error,
-                        "code_snippet": code or "",
-                        "revert_needed": False,
-                    })
                     logger.error("Pytest gate FAILED on attempt %d.", attempt)
                     continue
                 logger.info("Pytest gate PASSED.")
@@ -1974,13 +1950,6 @@ def main():
             previous_error = (
                 f"[{exec_result.error_category}] {previous_error}"
             )
-        # Section 11: Accumulate attempt history for retry context.
-        attempt_history.append({
-            "attempt": attempt,
-            "error": previous_error,
-            "code_snippet": code or "",
-            "revert_needed": exec_result.revert_needed,
-        })
         logger.error("FAILED on attempt %d.", attempt)
 
         # Phase 3.4: Roll back the workspace to the last uas-wip checkpoint

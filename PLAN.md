@@ -338,6 +338,35 @@ workspace files." Until that section lands, Section 3 stays `[PENDING]`
 because it cannot meet its first acceptance criterion. Sections 1, 2,
 and 4 are conclusively complete.
 
+**Status note (2026-04-07, after re-verification and Section 5 capture):**
+The lint pre-check failure mode described above was re-verified and
+formally captured as Section 5 of this PLAN. Re-verification details:
+
+- The `rehab/.uas_state/runs/fa0d38fa9ef6/state.json` from the prior
+  attempt still records all 3 step-1 attempts failing with
+  `lint_fatal` against `tests/test_config.py:4` (`F401 [*] os imported
+  but unused`) and `tests/test_config.py:7`
+  (`F401 [*] pytest imported but unused`).
+- `git log -- orchestrator/main.py uas/janitor.py` shows the most
+  recent touch is commit `8169446` ("Force coder LLM to emit
+  extractable code blocks") from Section 4. No fix has landed for the
+  lint pre-check since the previous verification, so a fresh re-run
+  would deterministically reproduce the same failure.
+- Direct reproduction outside the container with
+  `ruff check --select=F --no-fix --no-cache --quiet -- tests/test_config.py`
+  (the same flags `uas/janitor.py:96` uses) prints both `F401` errors,
+  confirming the file alone is sufficient to trigger the failure.
+- `git ls-files` inside `rehab/` confirms `tests/test_config.py`,
+  `src/rehab/config.py`, and `run_tests.py` are all part of the
+  "Initial workspace state" commit on `uas-wip`, so every rollback
+  restores them and re-poisons the next attempt.
+
+Section 3 remains `[PENDING]` and is now formally blocked on Section 5.
+Once Section 5 lands, re-run `cd rehab && uas --resume --goal-file
+goal_001.txt` and confirm `progress.md` records at least one completed
+step before flipping Section 3 to `[COMPLETED]` with a final result
+paragraph.
+
 ---
 
 ### Section 4: Stop the LLM from creating files via Bash redirection  [COMPLETED]
@@ -602,6 +631,147 @@ extended with the `Bash`/`Task` blocked-tool assertions and CLAUDE.md
 template assertions for the throwaway/discarded language.
 `tests/test_parser.py` got `test_bash_tool_bypass_response_returns_none`.
 Total: 1581 tests pass, 0 failures (vs. 1575 before Section 4).
+
+---
+
+### Section 5: Stop the lint pre-check from rejecting pre-existing workspace files  [PENDING]
+
+**Why:** Sections 1, 2, and 4 fixed the original Background failure modes
+(half-initialized git, missing code-block extraction, Bash bypass). After
+those fixes landed, verification of Section 3 against `rehab/` revealed a
+**third, distinct** failure mode that still blocks Section 3's first
+acceptance criterion ("at least one completed step").
+
+The orchestrator's lint pre-check
+(`orchestrator/main.py:1880-1896` calling `lint_workspace` from
+`uas/janitor.py:79-114`) globs **every** `*.py` file in the workspace and
+fails the entire attempt if any of them has a fatal Pyflakes error
+(`F401`, `F811`, etc.). This is wrong for two related reasons:
+
+1. The current attempt's LLM-generated script may not have touched the
+   offending file at all. The script is blamed for errors it did not
+   cause and the attempt is reverted.
+2. Files committed to `uas-wip` from a prior failed run (or from the
+   user's pre-uas working tree) get restored on every rollback. They
+   therefore re-poison every subsequent attempt forever — there is no
+   self-healing path; the orchestrator will loop until it exhausts the
+   attempt budget no matter what the LLM does.
+
+Concrete failure observed during Section 3 verification on `rehab/`:
+
+```
+Lint pre-check found 18 fatal error(s):
+  F401 [*] `os` imported but unused
+   --> tests/test_config.py:4:8
+  F401 [*] `pytest` imported but unused
+   --> tests/test_config.py:7:8
+ExecutionResult: {"success":false,"revert_needed":true,"error_category":"lint_fatal",...}
+FAILED on attempt 1.
+Rolled back workspace to uas-wip checkpoint.
+```
+
+`tests/test_config.py` is dated `2026-04-07 03:58` (4 hours before today's
+uas runs began). It is committed to `uas-wip` as part of "Initial workspace
+state". The LLM-generated step-1 script never touches it — the script's
+own `UAS_RESULT.files_written` only lists the 11 expected scaffold files
+(`pyproject.toml`, `.python-version`, `.gitignore`, `CLAUDE.md`,
+`README.md`, six `__init__.py` files). Despite that, all three attempts
+fail with the same lint error and step 1 never completes.
+
+I reproduced the same lint failure outside the container by running the
+same ruff invocation `lint_workspace` uses
+(`ruff check --select=F --no-fix --no-cache --quiet -- tests/test_config.py`),
+confirming the failure is deterministic from the file contents alone and
+will recur on every uas run against any workspace that contains a Python
+file with unused imports.
+
+**Files to modify:**
+
+- `orchestrator/main.py` lines 1880-1896 — the lint pre-check call site.
+  It currently calls `lint_workspace(_workspace)` with no `files`
+  argument, which globs everything.
+- `uas/janitor.py` lines 79-114 — `lint_workspace` already accepts an
+  optional `files: list[str] | None` argument; only the call site needs
+  to populate it. No janitor change is required for option 1; option 2
+  may need a helper.
+
+**Possible fixes (pick one or combine):**
+
+1. **Lint only the files the script reported writing.** Parse
+   `UAS_RESULT` from the sandbox stdout BEFORE the lint pre-check
+   (currently it is parsed inside the `if exec_result.success:` branch
+   at line 1955), pull out `files_written`, filter to `*.py` entries,
+   and pass them to `lint_workspace(_workspace, files=...)`. Smallest
+   change; matches the existing data flow. Risk: if the LLM lies about
+   `files_written` or omits a file it created, that file is silently
+   exempt from lint. Mitigate by combining with option 2 as a sanity
+   check.
+
+2. **Lint files changed in this attempt according to git.** After the
+   sandbox runs, compute
+   `git diff --name-only HEAD -- '*.py'`
+   inside the workspace (the attempt branch was just created from
+   `uas-wip`, so HEAD's parent is the previous attempt or `uas-wip`).
+   Pass that file list to `lint_workspace`. Pro: doesn't trust the LLM.
+   Con: needs the attempt branch's pre-script HEAD to be captured
+   somewhere accessible at line 1885, which means a small refactor.
+
+3. **Skip the pre-check entirely when the offending file is not in the
+   set of files the attempt touched.** Run lint as today, but for each
+   error, parse the file path and discard errors whose file is unchanged
+   versus the attempt branch's parent. This preserves the
+   "lint everything" behavior for cases where the script does touch the
+   file but allows pre-existing errors to slide. More fragile because it
+   couples to ruff's output format.
+
+4. **Auto-fix unused imports with `ruff --fix`.** Bad: silently rewriting
+   pre-existing user files crosses a line the orchestrator should not
+   cross. Reject this option.
+
+5. **`.uas_lintignore` allowlist.** Maintain a per-workspace list of files
+   the lint pre-check should skip. Bad: requires user maintenance and
+   papers over the bug instead of fixing it. Reject.
+
+**Recommendation:** Start with option **1**. It is the smallest change,
+the data is already available downstream of where lint runs, and the
+fix is essentially a 5-line refactor: extract `parse_uas_result(stdout)`
+to run before the lint pre-check, then pass `files_written` (filtered to
+`.py`) to `lint_workspace`. Add option **2** as a defensive fallback if
+empirical testing shows scripts under-reporting `files_written`.
+
+**Tests to add or update:**
+
+- `tests/test_janitor.py` — add (or assert existing) test that
+  `lint_workspace(workspace, files=[a.py])` only inspects `a.py` and
+  does NOT flag errors in unrelated files like `b.py`.
+- `tests/test_orchestrator_main.py` — new regression test that
+  monkeypatches `run_in_sandbox` to return a stdout containing
+  `UAS_RESULT: {"status":"ok","files_written":["a.py"]}` and a
+  workspace where `b.py` has an unused import. Assert that the lint
+  pre-check passes (because `b.py` is not in `files_written`) and the
+  step is recorded as successful.
+- New end-to-end test (or integration smoke) that creates a workspace
+  with a pre-existing `tests/test_config.py` containing unused imports
+  and runs the orchestrator's per-attempt loop with a fake script that
+  writes only `pyproject.toml`. Assert the attempt is NOT rolled back
+  for `lint_fatal`.
+
+**Acceptance criteria:**
+
+- All existing `tests/test_janitor.py` and `tests/test_orchestrator_main.py`
+  tests still pass.
+- New regression test passes.
+- A re-run of `cd rehab && uas --resume --goal-file goal_001.txt`
+  against the existing `fa0d38fa9ef6` run state reaches step 1
+  attempt 1 and the lint pre-check no longer reports
+  `F401 ... os imported but unused` against `tests/test_config.py`.
+- Step 1 of the rehab goal records as a completed step in
+  `progress.md` (which finally satisfies Section 3's first
+  acceptance criterion).
+
+**When complete:** change the section header from `[PENDING]` to
+`[COMPLETED]`, then re-run Section 3's verification and update Section 3
+accordingly.
 
 ---
 

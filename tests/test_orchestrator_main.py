@@ -145,6 +145,112 @@ class TestBuildPrompt:
         assert constraints_pos < output_contract_pos
 
 
+class TestBuildPromptRetryCleanMode:
+    """Phase 6.1: build_prompt(mode="retry_clean") returns a stripped prompt."""
+
+    def test_retry_clean_contains_only_three_sections(self):
+        prompt = build_prompt(
+            "Write hello world",
+            attempt=2,
+            previous_error="NameError: name 'x' is not defined",
+            previous_code="print(x)",
+            mode="retry_clean",
+        )
+        assert "<spec>" in prompt
+        assert "</spec>" in prompt
+        assert "<current_code>" in prompt
+        assert "</current_code>" in prompt
+        assert "<error>" in prompt
+        assert "</error>" in prompt
+
+    def test_retry_clean_excludes_full_mode_scaffold(self):
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_error="boom",
+            previous_code="print()",
+            mode="retry_clean",
+        )
+        # None of the rich-mode sections should appear in the lean prompt.
+        for marker in (
+            "<environment>",
+            "<role>",
+            "<constraints>",
+            "<output_contract>",
+            "<approach>",
+            "<previous_error",
+            "<attempt_history>",
+            "<workspace_state>",
+            "<prior_knowledge>",
+            "<tdd_constraint>",
+        ):
+            assert marker not in prompt, f"unexpected section {marker} in retry_clean prompt"
+
+    def test_retry_clean_includes_task_in_spec(self):
+        prompt = build_prompt(
+            "Implement quicksort",
+            attempt=2,
+            previous_error="error",
+            previous_code="def sort(): pass",
+            mode="retry_clean",
+        )
+        spec_start = prompt.index("<spec>")
+        spec_end = prompt.index("</spec>")
+        assert "Implement quicksort" in prompt[spec_start:spec_end]
+
+    def test_retry_clean_includes_previous_code_in_current_code(self):
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_error="error",
+            previous_code="x = 42\nprint(x)",
+            mode="retry_clean",
+        )
+        cc_start = prompt.index("<current_code>")
+        cc_end = prompt.index("</current_code>")
+        assert "x = 42" in prompt[cc_start:cc_end]
+        assert "print(x)" in prompt[cc_start:cc_end]
+
+    def test_retry_clean_includes_error_in_error_section(self):
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_error="ZeroDivisionError: division by zero",
+            previous_code="1/0",
+            mode="retry_clean",
+        )
+        err_start = prompt.index("<error>")
+        err_end = prompt.index("</error>")
+        assert "ZeroDivisionError: division by zero" in prompt[err_start:err_end]
+
+    def test_retry_clean_falls_back_to_workspace_files_when_no_previous_code(self):
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_error="error",
+            previous_code=None,
+            workspace_files="main.py (200 bytes)",
+            mode="retry_clean",
+        )
+        cc_start = prompt.index("<current_code>")
+        cc_end = prompt.index("</current_code>")
+        assert "main.py" in prompt[cc_start:cc_end]
+
+    def test_retry_clean_handles_missing_inputs(self):
+        prompt = build_prompt("task", attempt=2, mode="retry_clean")
+        assert "<spec>" in prompt
+        assert "task" in prompt
+        assert "<current_code>" in prompt
+        assert "<error>" in prompt
+
+    def test_default_mode_is_full(self):
+        # When mode is not specified, the rich prompt is returned.
+        prompt = build_prompt("task", attempt=1)
+        assert "<environment>" in prompt
+        assert "<role>" in prompt
+        assert "<constraints>" in prompt
+
+
 class TestParseUasResult:
     def test_valid_result(self):
         stdout = 'some output\nUAS_RESULT: {"status": "ok", "files_written": ["a.txt"], "summary": "done"}\n'

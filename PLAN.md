@@ -246,7 +246,7 @@ spec, (2) the current code state, and (3) the exact error stack trace.
 
 ### Tasks
 
-- [ ] **6.1** In `orchestrator/main.py`, refactor `build_prompt()` (line 651)
+- [x] **6.1** In `orchestrator/main.py`, refactor `build_prompt()` (line 651)
       to accept a `mode: Literal["full", "retry_clean"]` parameter.
       - `"full"` (attempt 1): current behavior — includes environment,
         knowledge, approach, workspace files, full context.

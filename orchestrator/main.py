@@ -12,6 +12,7 @@ import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from typing import Literal
 
 import config
 
@@ -704,6 +705,38 @@ def _llm_retry_guidance(task: str, attempt: int, code_section: str,
         return None
 
 
+def _build_retry_clean_prompt(task: str,
+                              previous_code: str | None,
+                              previous_error: str | None,
+                              workspace_files: str | None) -> str:
+    """Build the stripped-down retry prompt for Phase 6 context pruning.
+
+    Contains only three sections: ``<spec>`` (immutable task spec),
+    ``<current_code>`` (the current state of the code), and ``<error>`` (the
+    failure output from the prior attempt). No environment scaffold, no
+    knowledge base, no attempt history, no retry guidance prose.
+
+    Phase 6.1 establishes the prompt skeleton. Subsequent tasks (6.2-6.4)
+    refine where each section's content comes from (e.g. ``<current_code>``
+    will be sourced from a fresh ``scan_workspace()`` call instead of the
+    in-memory ``previous_code`` variable).
+    """
+    spec_section = f"<spec>\n{task}\n</spec>"
+
+    if previous_code:
+        current_code_body = f"```python\n{previous_code}\n```"
+    elif workspace_files:
+        current_code_body = workspace_files
+    else:
+        current_code_body = "(no current code state available)"
+    current_code_section = f"<current_code>\n{current_code_body}\n</current_code>"
+
+    error_body = (previous_error or "(no error output captured)").strip()
+    error_section = f"<error>\n{error_body}\n</error>"
+
+    return "\n\n".join([spec_section, current_code_section, error_section])
+
+
 def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  previous_code: str | None = None,
                  environment: list[str] | None = None,
@@ -711,13 +744,32 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  system_state: str | None = None,
                  knowledge: dict | None = None,
                  attempt_history: list[dict] | None = None,
-                 test_files: dict[str, str] | None = None) -> str:
+                 test_files: dict[str, str] | None = None,
+                 mode: Literal["full", "retry_clean"] = "full") -> str:
     """Build the structured prompt for code generation.
 
     Uses XML tags with data sections (environment, task, workspace state)
     at the top and instruction sections (role, constraints, output_contract)
     at the bottom for optimal Claude response quality.
+
+    Phase 6.1: ``mode`` selects between two prompt strategies.
+    - ``"full"`` (attempt 1, default): the rich prompt that includes
+      environment, knowledge, approach, workspace files, and full retry
+      context. This is the historical behavior.
+    - ``"retry_clean"`` (attempt 2+): a stripped-down prompt with only three
+      sections — ``<spec>`` (the immutable task spec), ``<current_code>``
+      (the current state of the code), and ``<error>`` (the failure output
+      from the prior attempt). The LLM is given no memory of prior attempts;
+      the workspace filesystem is the source of truth.
     """
+    if mode == "retry_clean":
+        return _build_retry_clean_prompt(
+            task=task,
+            previous_code=previous_code,
+            previous_error=previous_error,
+            workspace_files=workspace_files,
+        )
+
     pkg_hint = ""
     if environment:
         pkgs = " ".join(environment)

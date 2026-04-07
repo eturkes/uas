@@ -1619,6 +1619,15 @@ def main():
     # Resolve workspace path once for git branch management.
     _workspace = config.get("workspace") or os.environ.get("WORKSPACE")
 
+    # Phase 6.8: The Architect forwards its immutable step spec via
+    # UAS_STEP_SPEC. Build a step_context dict so build_prompt() can ground
+    # the retry_clean <spec> section in the structured Architect fields
+    # rather than re-parsing the UAS_TASK blob.
+    _step_spec = config.get("step_spec")
+    step_context: dict | None = None
+    if isinstance(_step_spec, str) and _step_spec.strip():
+        step_context = {"step_spec": _step_spec}
+
     for attempt in range(1, MAX_RETRIES + 1):
         logger.info("\n--- Attempt %d/%d ---", attempt, MAX_RETRIES)
 
@@ -1646,6 +1655,7 @@ def main():
                               system_state=system_state,
                               knowledge=knowledge,
                               test_files=test_files,
+                              step_context=step_context,
                               previous_stderr=previous_stderr,
                               previous_stdout=previous_stdout,
                               mode=prompt_mode)

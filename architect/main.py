@@ -4514,6 +4514,57 @@ def _collect_test_files_for_step(step: dict, state: dict) -> dict[str, str]:
     return test_files
 
 
+def _format_step_spec(step: dict) -> str:
+    """Render the immutable Architect step spec as a single labelled string.
+
+    Phase 6.8: returns the title + description + verify criteria + outputs
+    of *step* in a stable, human-readable format. The orchestrator threads
+    this string into ``build_prompt`` via ``step_context["step_spec"]`` so
+    the ``retry_clean`` ``<spec>`` section is sourced from the Architect's
+    structured fields directly, without re-parsing the ``UAS_TASK`` blob.
+    """
+    title = (step.get("title") or "").strip()
+    description = (step.get("description") or "").strip()
+    verify = (step.get("verify") or "").strip()
+    outputs = step.get("outputs") or []
+
+    parts: list[str] = []
+    if title:
+        parts.append(f"Title: {title}")
+    if description:
+        parts.append(f"Description: {description}")
+    if verify:
+        parts.append(f"Verify: {verify}")
+    if outputs:
+        outs_str = ", ".join(str(o) for o in outputs)
+        parts.append(f"Outputs: {outs_str}")
+    return "\n\n".join(parts)
+
+
+def _build_step_context(step: dict, total: int,
+                        completed_steps_info: list[dict]) -> dict:
+    """Build the step context dict consumed by the orchestrator subprocess.
+
+    The dict carries the per-step metadata used by:
+
+    - ``orchestrator.claude_config.get_claude_md_content`` to render the
+      dynamic CLAUDE.md surfaced inside the worker sandbox.
+    - ``orchestrator.main.build_prompt`` (Phase 6.8) via the ``step_spec``
+      key, which feeds the ``retry_clean`` prompt's ``<spec>`` section with
+      the Architect's full immutable spec (title + description + verify
+      criteria + outputs).
+    """
+    return {
+        "step_number": step["id"],
+        "total_steps": total,
+        "step_title": step["title"],
+        "dependencies": step["depends_on"],
+        "prior_steps": completed_steps_info,
+        "workspace_name": os.path.basename(PROJECT_DIR),
+        "step_spec": _format_step_spec(step),
+    }
+
+
 def execute_step(step: dict, state: dict, completed_outputs: dict,
                  progress_counts: dict | None = None,
                  dashboard: Dashboard | None = None,
@@ -4567,14 +4618,7 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
         }
         for s in state["steps"] if s["status"] == "completed"
     ]
-    step_context = {
-        "step_number": step["id"],
-        "total_steps": total,
-        "step_title": step["title"],
-        "dependencies": step["depends_on"],
-        "prior_steps": completed_steps_info,
-        "workspace_name": os.path.basename(PROJECT_DIR),
-    }
+    step_context = _build_step_context(step, total, completed_steps_info)
 
     event_log = get_event_log()
     prov = get_provenance_graph()
@@ -4647,6 +4691,13 @@ def execute_step(step: dict, state: dict, completed_outputs: dict,
             "UAS_SPEC_ATTEMPT": str(spec_attempt),
             "UAS_RUN_ID": run_id,
         }
+        # Phase 6.8: Forward the immutable Architect step spec to the
+        # orchestrator subprocess so build_prompt() can ground the
+        # retry_clean <spec> section in step_context["step_spec"] without
+        # re-parsing the UAS_TASK blob.
+        _step_spec = step_context.get("step_spec", "")
+        if _step_spec:
+            extra_env["UAS_STEP_SPEC"] = _step_spec
         # Section 19: Signal truncation history to orchestrator so it can
         # add code-length guidance to the prompt.
         truncation_detected = any(

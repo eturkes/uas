@@ -275,7 +275,7 @@ spec, (2) the current code state, and (3) the exact error stack trace.
       2. Call `format_workspace()` (Phase 5) on the checkpoint state.
       3. Build the retry prompt in `"retry_clean"` mode.
       4. Generate fresh — the LLM has zero memory of prior attempts.
-- [ ] **6.8** Update the Architect's `_build_step_context()` in
+- [x] **6.8** Update the Architect's `_build_step_context()` in
       `architect/main.py` to always include the full step spec (title +
       description + verify criteria + outputs) as a `step_spec` key in
       the env dict, so it is available to `build_prompt()` for the

@@ -84,6 +84,7 @@ DEFAULTS: dict = {
     "spec_attempt": 0,
     "workspace_files": "",
     "step_environment": "",
+    "step_spec": "",
     "host_workspace": "",
     "truncation_detected": "",
     "test_files": "",

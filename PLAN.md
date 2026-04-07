@@ -267,6 +267,194 @@ fix the problem on the original failing project.
 `[COMPLETED]` and append a one-paragraph result summary at the bottom of
 the section.
 
+**Status note (2026-04-07):** Verification was attempted end-to-end. The
+container image was rebuilt via `install.sh`, the broken `rehab/.git/` and
+`rehab/.uas_state/` were moved aside (to
+`/tmp/uas-rehab-backup/.uas_failed_run_backup_20260407_044821/`), and `uas
+--goal-file goal_001.txt` was launched against `rehab/`. Two of the three
+acceptance criteria are now verifiable:
+
+- **Git failure: FIXED.** After resuming the run with the backup directory
+  moved out of the workspace, `ensure_git_repo` correctly entered its
+  Section 1 "half-initialized repair" branch, ran
+  `add`/`commit`/`tag uas-main`/`checkout -b uas-wip`, and the orchestrator
+  successfully created `refs/heads/uas/step-1/attempt-{1,2,3}` with no
+  "Failed to create attempt branch" warnings. Section 1's repair logic is
+  confirmed working in practice.
+- **Code-block extraction: STILL FAILING.** All three attempts of step 1
+  failed with the exact error from the Background section: `Failed to
+  extract code block from LLM response.` Acceptance criterion 3 is not
+  met. Per step 5 of this section ("If new failures appear, capture them
+  and add a Section 4..."), the root cause is captured below in
+  Section 4. Section 3 stays `[PENDING]` until Section 4's fix lands and
+  this verification can be re-attempted.
+
+A discovery during the verification: putting the backup `.git/` directory
+**inside** the workspace (e.g.
+`rehab/.uas_failed_run_backup_*/`) causes the next `git add -A` to fail
+with `error: '...does not have a commit checked out'` because git treats
+embedded `.git/` directories as submodules. Backup forensics directories
+must always be moved **outside** the workspace before re-running `uas`.
+This is a process note for whoever re-runs Section 3, not a code bug.
+
+---
+
+### Section 4: Stop the LLM from creating files via Bash redirection  [PENDING]
+
+**Why:** Section 2 added `--disallowed-tools Write Edit NotebookEdit` to
+the LLM subprocess and updated `CLAUDE.md` to instruct the LLM to put its
+script in a fenced code block. Verification in Section 3 shows the fix is
+**insufficient**: the LLM still bypasses the restriction by using `Bash`
+to create files via shell redirection (`echo > file`, `cat <<EOF`,
+`uv sync`, etc.) and then replies with prose ("I created the files"). The
+orchestrator's `extract_code()` finds nothing, every attempt is wasted,
+and the failure mode from the Background section recurs verbatim.
+
+This was confirmed by inspecting the LLM isolation directory of the
+running container (`/tmp/uas_llm_<rand>/`) during a live attempt:
+
+```
+/tmp/uas_llm__p0g8af9/src/rehab/__init__.py
+/tmp/uas_llm__p0g8af9/src/rehab/data/__init__.py
+/tmp/uas_llm__p0g8af9/src/rehab/dashboard/__init__.py
+/tmp/uas_llm__p0g8af9/pyproject.toml
+/tmp/uas_llm__p0g8af9/.python-version
+/tmp/uas_llm__p0g8af9/.gitignore
+/tmp/uas_llm__p0g8af9/CLAUDE.md
+/tmp/uas_llm__p0g8af9/README.md
+/tmp/uas_llm__p0g8af9/.venv/CACHEDIR.TAG
+... etc.
+```
+
+Every artifact step 1 was supposed to produce was actually created — by
+Bash inside the throwaway isolation dir, then discarded when the LLM
+client returned. The LLM completed the task perfectly; the orchestrator
+just had no way to capture it.
+
+The root design contradiction Section 2 was supposed to resolve is still
+there: keeping `Bash` enabled for "research" (verifying package versions,
+reading docs, environment introspection) is incompatible with "the LLM
+must not create files in this generation step", because Bash can write
+files via shell built-ins. Restricting Write/Edit/NotebookEdit while
+leaving Bash unconstrained fixes the *symptom name* but not the
+*capability boundary*.
+
+**Files to modify:**
+
+- `orchestrator/llm_client.py` `ClaudeCodeClient.generate` (around line
+  181 — the `--disallowed-tools` extension).
+- `orchestrator/claude_config.py` — the `CLAUDE.md` template the LLM
+  reads at the top of the conversation.
+- `orchestrator/main.py` `_contains_tool_calls` (line 354) — currently
+  hard-coded to `return False`, which means the orchestrator no longer
+  detects "LLM responded with tool actions instead of code". Whatever
+  detection strategy Section 4 picks should re-enable this signal.
+
+**Possible fixes (pick one or combine):**
+
+1. **Constrain Bash to read-only commands using claude's tool-arg
+   filter syntax.** `claude --help` documents that `--disallowed-tools`
+   accepts entries like `Bash(git:*)`. We can deny the file-writing
+   subset of bash:
+   ```python
+   cmd.extend([
+       "--disallowed-tools",
+       "Write", "Edit", "NotebookEdit",
+       "Bash(>:*)", "Bash(>>:*)", "Bash(tee:*)",
+       "Bash(cat:*<<*)",  # heredoc
+       "Bash(touch:*)", "Bash(mkdir:*)", "Bash(cp:*)",
+       "Bash(mv:*)", "Bash(rm:*)", "Bash(uv:sync*)",
+       "Bash(uv:pip*install*)", "Bash(pip:install*)",
+       "Bash(npm:install*)",
+   ])
+   ```
+   Verify the exact match syntax against `claude --help` and test that
+   each entry actually denies the intended invocation. The match
+   patterns are claude-specific and may not support arbitrary glob
+   forms; if shell redirection cannot be matched at all, fall through
+   to option 3 or 4.
+
+2. **Switch to an explicit allowlist with `--allowed-tools`.** Instead
+   of trying to enumerate every dangerous Bash invocation, list only
+   the read-only research tools that are safe:
+   ```python
+   cmd.extend([
+       "--allowed-tools",
+       "Read", "Grep", "Glob", "WebSearch", "WebFetch",
+   ])
+   ```
+   This drops `Bash` entirely from the LLM's toolbox. The LLM loses the
+   ability to run `python -c "import foo; print(foo.__version__)"` for
+   environment checks, but it keeps `WebFetch` for docs and `Read` for
+   inspecting on-disk files. Most version checks can be done via
+   WebFetch against PyPI/registry pages instead. This is the simplest
+   fix and the easiest to test.
+
+3. **Stronger CLAUDE.md prompt that names the failure mode
+   explicitly.** Add a paragraph near the top of the template that
+   says, in the model's voice: "Files I create with Bash in this
+   session are written to a throwaway temp directory and then deleted.
+   They are not visible to the orchestrator and they do not count
+   toward task completion. The ONLY thing the orchestrator reads from
+   me is a single \`\`\`python fenced code block in my text response.
+   If I do not produce that block, my work is lost." Empirically,
+   models follow strong negative consequence framing better than
+   abstract "do not" rules. This is the lowest-risk change but may not
+   be sufficient on its own — pair with option 1 or 2.
+
+4. **Detect "LLM did the work via Bash" in the orchestrator and
+   recover.** When `extract_code()` returns nothing, scan the LLM
+   response for Bash invocation patterns (`<bash>`, `Tool: Bash`, etc.)
+   and either (a) re-prompt with a sharper instruction, or (b) extract
+   the bash commands and synthesize an equivalent Python script. This
+   is the most fragile of the four because it depends on response
+   formatting that may change between claude versions. Avoid unless
+   options 1–3 prove infeasible.
+
+   While doing this, also fix `_contains_tool_calls` in
+   `orchestrator/main.py` line 354 — it currently returns `False`
+   unconditionally with the comment "tool calls are expected and
+   handled by the CLI", which is no longer true after Section 2.
+
+**Recommendation:** Start with option **2** (`--allowed-tools` with no
+Bash) because it is the smallest, most testable change and matches the
+semantic guarantee Section 2 was supposed to provide. If integration
+tests show the LLM losing essential research capability (e.g. it can't
+verify a package version that has only just been published and isn't in
+its training data), add option 3 (prompt strengthening) on top. Treat
+options 1 and 4 as fallbacks.
+
+**Tests to add or update:**
+
+- Extend `tests/test_llm_isolation.py` to assert the cmd uses
+  `--allowed-tools` (not `--disallowed-tools`) with the correct
+  read-only tool list, or that the disallowed list now blocks the
+  Bash file-write subset.
+- Add a regression test that mocks an LLM response containing a Bash
+  tool invocation and asserts `extract_code()` correctly returns None
+  AND the orchestrator surfaces a clear "LLM bypassed code-block
+  contract via Bash" error so future failures are diagnosable from the
+  log alone.
+- Update `tests/test_llm_isolation.py` to assert that the CLAUDE.md
+  template explicitly tells the LLM that tool-created files are
+  discarded, not just that Write/Edit are disabled.
+
+**Acceptance criteria:**
+
+- All existing `tests/test_llm_isolation.py` tests still pass with the
+  new flag shape.
+- The new regression test passes.
+- A re-run of `cd rehab && uas --resume --goal-file goal_001.txt`
+  (against the same `fa0d38fa9ef6` run state) reaches step 1
+  attempt 1 and produces a usable code block on the first try, with
+  no "Failed to extract code block" entries in the log.
+- Section 3's third acceptance criterion is then re-verifiable; Section
+  3 can be marked `[COMPLETED]` once a step finishes successfully.
+
+**When complete:** change the section header from `[PENDING]` to
+`[COMPLETED]`, then re-run Section 3's verification and update Section 3
+accordingly.
+
 ---
 
 ## Out of scope

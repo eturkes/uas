@@ -6,6 +6,7 @@ import subprocess
 import pytest
 
 from architect.git_state import (
+    changed_py_files_since_uas_wip,
     commit_attempt,
     create_attempt_branch,
     promote_attempt,
@@ -272,3 +273,96 @@ class TestPromoteAttempt:
         assert _current_branch(workspace) == "uas-wip"
         assert os.path.exists(os.path.join(workspace, "step1.py"))
         assert os.path.exists(os.path.join(workspace, "step2.py"))
+
+
+# ---------------------------------------------------------------------------
+# changed_py_files_since_uas_wip
+# ---------------------------------------------------------------------------
+
+
+class TestChangedPyFilesSinceUasWip:
+    """Section 6 of PLAN.md: the orchestrator scopes its lint pre-check to
+    the .py files that differ from ``uas-wip``. Pre-existing files
+    committed to ``uas-wip`` MUST NOT show up in the diff, otherwise the
+    legacy "lint everything" failure mode comes back.
+    """
+
+    def test_returns_none_without_git(self, tmp_path):
+        assert changed_py_files_since_uas_wip(str(tmp_path)) is None
+
+    def test_returns_none_without_uas_wip_branch(self, tmp_path):
+        ws = str(tmp_path)
+        (tmp_path / "f.txt").write_text("x", encoding="utf-8")
+        _git(ws, "init", "-b", "main")
+        _git(ws, "add", "-A")
+        _git(ws, "commit", "-m", "Init")
+        # No uas-wip branch yet.
+        assert changed_py_files_since_uas_wip(ws) is None
+
+    def test_empty_diff_for_clean_workspace(self, workspace):
+        # The fixture sets up uas-wip identical to HEAD. No .py files
+        # have been added or changed.
+        assert changed_py_files_since_uas_wip(workspace) == []
+
+    def test_empty_diff_with_pre_existing_unused_imports(self, tmp_path):
+        """The exact bug Section 6 fixes: a pre-existing file with
+        unused imports committed to uas-wip must NOT show up as a
+        changed file when nothing has been touched since.
+        """
+        ws = str(tmp_path)
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_config.py").write_text(
+            "import os\nimport pytest\n", encoding="utf-8",
+        )
+        _git(ws, "init", "-b", "main")
+        _git(ws, "add", "-A")
+        _git(ws, "commit", "-m", "Initial workspace state")
+        _git(ws, "tag", "-f", "uas-main")
+        _git(ws, "checkout", "-b", "uas-wip")
+
+        # Verifier-style: nothing has been changed since uas-wip.
+        assert changed_py_files_since_uas_wip(ws) == []
+
+    def test_includes_untracked_py_files(self, workspace):
+        with open(os.path.join(workspace, "new.py"), "w") as f:
+            f.write("x = 1\n")
+        result = changed_py_files_since_uas_wip(workspace)
+        assert result == ["new.py"]
+
+    def test_includes_modified_tracked_py_files(self, workspace):
+        # Add a tracked .py file to uas-wip.
+        with open(os.path.join(workspace, "tracked.py"), "w") as f:
+            f.write("x = 1\n")
+        _git(workspace, "add", "-A")
+        _git(workspace, "commit", "-m", "Add tracked.py")
+        # Modify it without committing.
+        with open(os.path.join(workspace, "tracked.py"), "w") as f:
+            f.write("x = 2\n")
+        # Move HEAD off uas-wip onto an attempt branch so the diff
+        # against uas-wip reflects an actual change.
+        branch = create_attempt_branch(workspace, step_id=1, attempt=1)
+        assert branch
+        with open(os.path.join(workspace, "tracked.py"), "w") as f:
+            f.write("x = 3\n")
+        _git(workspace, "add", "-A")
+        _git(workspace, "commit", "-m", "Modify tracked.py on attempt")
+
+        result = changed_py_files_since_uas_wip(workspace)
+        assert result == ["tracked.py"]
+
+    def test_excludes_non_python_files(self, workspace):
+        with open(os.path.join(workspace, "data.json"), "w") as f:
+            f.write("{}\n")
+        with open(os.path.join(workspace, "README.md"), "w") as f:
+            f.write("# hi\n")
+        result = changed_py_files_since_uas_wip(workspace)
+        assert result == []
+
+    def test_returns_sorted_unique_paths(self, workspace):
+        with open(os.path.join(workspace, "b.py"), "w") as f:
+            f.write("x = 1\n")
+        with open(os.path.join(workspace, "a.py"), "w") as f:
+            f.write("y = 2\n")
+        result = changed_py_files_since_uas_wip(workspace)
+        assert result == ["a.py", "b.py"]

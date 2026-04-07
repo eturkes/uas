@@ -1487,6 +1487,7 @@ class TestLintPreCheckScopedToWrittenFiles:
     """
 
     @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.changed_py_files_since_uas_wip", return_value=None)
     @patch("orchestrator.main.format_workspace")
     @patch("orchestrator.main.lint_workspace")
     @patch("orchestrator.main.parse_args")
@@ -1494,7 +1495,8 @@ class TestLintPreCheckScopedToWrittenFiles:
     @patch("orchestrator.main.get_llm_client")
     def test_lint_called_with_files_written_from_uas_result(
         self, mock_client_factory, mock_sandbox, mock_args,
-        mock_lint, _mock_format, _mock_cq, _mock_eval,
+        mock_lint, _mock_format, _mock_git_changed,
+        _mock_cq, _mock_eval,
         tmp_path, monkeypatch,
     ):
         """When the script reports files_written via UAS_RESULT, the
@@ -1546,6 +1548,7 @@ class TestLintPreCheckScopedToWrittenFiles:
         )
 
     @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.changed_py_files_since_uas_wip", return_value=None)
     @patch("orchestrator.main.format_workspace")
     @patch("orchestrator.main.lint_workspace")
     @patch("orchestrator.main.parse_args")
@@ -1553,7 +1556,8 @@ class TestLintPreCheckScopedToWrittenFiles:
     @patch("orchestrator.main.get_llm_client")
     def test_lint_skipped_when_uas_result_writes_no_python(
         self, mock_client_factory, mock_sandbox, mock_args,
-        mock_lint, _mock_format, _mock_cq, _mock_eval,
+        mock_lint, _mock_format, _mock_git_changed,
+        _mock_cq, _mock_eval,
         tmp_path, monkeypatch,
     ):
         """When the script reports files_written but none of them are
@@ -1590,19 +1594,129 @@ class TestLintPreCheckScopedToWrittenFiles:
         mock_lint.assert_not_called()
 
     @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.changed_py_files_since_uas_wip", return_value=[])
     @patch("orchestrator.main.format_workspace")
     @patch("orchestrator.main.lint_workspace")
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_lint_falls_back_to_full_workspace_without_uas_result(
+    def test_lint_skipped_when_no_uas_result_and_git_clean(
         self, mock_client_factory, mock_sandbox, mock_args,
-        mock_lint, _mock_format, _mock_cq, _mock_eval,
+        mock_lint, _mock_format, _mock_git_changed,
+        _mock_cq, _mock_eval,
         tmp_path, monkeypatch,
     ):
-        """When stdout has no parseable UAS_RESULT, fall back to the
-        legacy "lint everything" behavior so attempts whose scripts
-        predate the UAS_RESULT contract still get checked."""
+        """Section 6 of PLAN.md: when stdout has no parseable UAS_RESULT
+        AND git diff against uas-wip reports no changed .py files, the
+        lint pre-check must be skipped entirely. The legacy "lint
+        everything" fallback re-poisoned every verifier orchestrator
+        subprocess against pre-existing files; the new behavior is to
+        trust the explicit signal that nothing changed.
+
+        This is the regression test for the verifier-script failure
+        mode where verify_step_output spawns an orchestrator subprocess
+        that runs a read-only verification script printing
+        ``VERIFICATION PASSED`` (no UAS_RESULT) against a workspace
+        whose pre-existing tests/ files have unused imports.
+        """
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        mock_lint.return_value = []
+        mock_args.return_value = argparse.Namespace(
+            task=["test task"], verbose=False,
+        )
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```',
+            {"input": 0, "output": 0},
+        )
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},
+            {
+                "exit_code": 0,
+                "stdout": "VERIFICATION PASSED\n",
+                "stderr": "",
+            },
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+        # Section 6: lint must NOT be called. UAS_RESULT was missing,
+        # git diff said nothing changed, so the orchestrator has a
+        # positive signal that this attempt could not have broken any
+        # .py file.
+        mock_lint.assert_not_called()
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.changed_py_files_since_uas_wip")
+    @patch("orchestrator.main.format_workspace")
+    @patch("orchestrator.main.lint_workspace")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_lint_uses_git_changed_files_when_uas_result_missing(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_lint, _mock_format, mock_git_changed,
+        _mock_cq, _mock_eval,
+        tmp_path, monkeypatch,
+    ):
+        """Section 6 of PLAN.md: when UAS_RESULT is missing but git
+        diff reports .py files changed against uas-wip, those exact
+        files must be passed to lint_workspace — not the whole
+        workspace and not nothing.
+        """
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        mock_lint.return_value = []
+        mock_git_changed.return_value = ["src/foo.py", "tests/test_foo.py"]
+        mock_args.return_value = argparse.Namespace(
+            task=["test task"], verbose=False,
+        )
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```',
+            {"input": 0, "output": 0},
+        )
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},
+            {"exit_code": 0, "stdout": "no uas result here", "stderr": ""},
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+        assert mock_lint.call_count == 1
+        call = mock_lint.call_args
+        assert call.args[0] == str(tmp_path)
+        # The files= argument should be the git-changed list, sorted.
+        assert call.kwargs.get("files") == ["src/foo.py", "tests/test_foo.py"], (
+            f"expected git-changed files, got "
+            f"files={call.kwargs.get('files')!r}"
+        )
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.changed_py_files_since_uas_wip", return_value=None)
+    @patch("orchestrator.main.format_workspace")
+    @patch("orchestrator.main.lint_workspace")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_lint_falls_back_to_full_workspace_when_no_git(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_lint, _mock_format, _mock_git_changed,
+        _mock_cq, _mock_eval,
+        tmp_path, monkeypatch,
+    ):
+        """Section 6 of PLAN.md: the legacy "lint everything" path is
+        only acceptable when BOTH scoping signals are unavailable:
+        UAS_RESULT is missing AND git diff cannot be computed (no git
+        repo, no uas-wip ref). In that case there is no way to scope,
+        and linting everything is better than nothing for non-git
+        callers.
+        """
         monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
         mock_lint.return_value = []
         mock_args.return_value = argparse.Namespace(
@@ -1624,23 +1738,26 @@ class TestLintPreCheckScopedToWrittenFiles:
         assert exc_info.value.code == 0
 
         # Lint was called once, with no files= kwarg (legacy "glob
-        # everything" behavior).
+        # everything" behavior) — only because git scoping is also
+        # unavailable.
         assert mock_lint.call_count == 1
         call = mock_lint.call_args
         assert call.args[0] == str(tmp_path)
         assert call.kwargs.get("files") is None, (
-            f"expected files=None for fallback, got "
+            f"expected files=None for non-git fallback, got "
             f"files={call.kwargs.get('files')!r}"
         )
 
     @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.changed_py_files_since_uas_wip", return_value=[])
     @patch("orchestrator.main.format_workspace")
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
     def test_pre_existing_unused_import_does_not_fail_attempt(
         self, mock_client_factory, mock_sandbox, mock_args,
-        _mock_format, _mock_cq, _mock_eval,
+        _mock_format, _mock_git_changed,
+        _mock_cq, _mock_eval,
         tmp_path, monkeypatch,
     ):
         """End-to-end regression: a workspace containing a pre-existing
@@ -1699,4 +1816,71 @@ class TestLintPreCheckScopedToWrittenFiles:
             "Pre-existing file with unused imports caused the lint "
             "pre-check to fail an attempt whose script never touched "
             "that file"
+        )
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.changed_py_files_since_uas_wip", return_value=[])
+    @patch("orchestrator.main.format_workspace")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_verifier_script_pre_existing_unused_imports_does_not_fail(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        _mock_format, _mock_git_changed,
+        _mock_cq, _mock_eval,
+        tmp_path, monkeypatch,
+    ):
+        """Section 6 of PLAN.md regression: a verifier script (no
+        ``UAS_RESULT``, just ``VERIFICATION PASSED``) running against a
+        workspace whose pre-existing Python files have unused imports
+        must NOT trip the orchestrator's lint pre-check. This is the
+        exact reproducer described in Section 6's docker-run example —
+        verifier scripts launched by ``architect.verify_step_output``
+        intentionally don't speak the UAS_RESULT contract, and the
+        legacy fallback was rolling them back against pre-existing
+        files committed to ``uas-wip``.
+        """
+        if shutil.which("ruff") is None:
+            pytest.skip("ruff binary not installed; cannot exercise real lint")
+
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        # Pre-existing files with unused imports, modeled on the
+        # rehab/tests/test_config.py situation Section 6 describes.
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_config.py").write_text(
+            "import os\nimport pytest\n"
+        )
+        (tmp_path / "config.py").write_text("import sys\n")
+
+        mock_args.return_value = argparse.Namespace(
+            task=["test task"], verbose=False,
+        )
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```',
+            {"input": 0, "output": 0},
+        )
+        mock_client_factory.return_value = mock_client
+        # Verifier-style sandbox output: just "VERIFICATION PASSED",
+        # no UAS_RESULT JSON.
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},
+            {
+                "exit_code": 0,
+                "stdout": "VERIFICATION PASSED\n",
+                "stderr": "",
+            },
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        # Section 6 acceptance criterion: the verifier orchestrator
+        # subprocess must exit 0 on attempt 1 even with pre-existing
+        # F401 errors in the workspace, because git says the verifier
+        # didn't touch any .py files.
+        assert exc_info.value.code == 0, (
+            "Verifier-style attempt (no UAS_RESULT) was rolled back by "
+            "the lint pre-check against pre-existing unused-import "
+            "files — Section 6's bug has not been fixed"
         )

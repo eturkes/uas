@@ -188,6 +188,78 @@ def rollback_to_checkpoint(workspace: str, step_id: int) -> None:
         )
 
 
+def changed_py_files_since_uas_wip(workspace: str) -> list[str] | None:
+    """Return ``.py`` files in *workspace* that differ from the ``uas-wip`` tip.
+
+    Used by the orchestrator's lint pre-check (Section 6 of PLAN.md) to scope
+    lint to files this attempt actually touched, instead of every ``*.py``
+    in the workspace. Pre-existing files committed to ``uas-wip`` from a
+    prior failed run must NOT be linted by the current attempt — they
+    weren't this attempt's fault and re-poisoning every rollback creates
+    an infinite failure loop.
+
+    Includes both staged/unstaged changes against ``uas-wip`` and untracked
+    ``.py`` files. Returns:
+
+    - a list of workspace-relative ``.py`` paths (possibly empty) when the
+      diff was computed successfully, or
+    - ``None`` when the diff could not be computed (no git repo, no
+      ``uas-wip`` ref, or git command failure). Callers should treat
+      ``None`` as "scoping unavailable; do whatever you do for non-git
+      workspaces" rather than "no files changed".
+    """
+    git_dir = os.path.join(workspace, ".git")
+    if not os.path.isdir(git_dir):
+        return None
+
+    try:
+        # Verify uas-wip exists; if not, we cannot scope by diff.
+        check = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "refs/heads/uas-wip"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+        )
+        if check.returncode != 0:
+            return None
+
+        files: set[str] = set()
+
+        # Tracked files that differ from uas-wip (staged + unstaged + HEAD).
+        diff = subprocess.run(
+            ["git", "diff", "--name-only", "uas-wip", "--", "*.py"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in diff.stdout.splitlines():
+            line = line.strip()
+            if line:
+                files.add(line)
+
+        # Untracked .py files (never committed yet).
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "--", "*.py"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in untracked.stdout.splitlines():
+            line = line.strip()
+            if line:
+                files.add(line)
+
+        return sorted(files)
+    except Exception:
+        logger.debug(
+            "changed_py_files_since_uas_wip failed for %s", workspace,
+            exc_info=True,
+        )
+        return None
+
+
 def promote_attempt(workspace: str, branch: str) -> None:
     """Fast-forward merge a successful attempt branch into ``uas-wip``.
 

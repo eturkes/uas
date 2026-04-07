@@ -22,7 +22,11 @@ from uas.fuzzy import fuzzy_function
 from uas.fuzzy_models import CodeQuality, ExecutionResult, UASResult
 from uas.janitor import format_workspace, lint_workspace
 
-from architect.git_state import create_attempt_branch, rollback_to_checkpoint
+from architect.git_state import (
+    changed_py_files_since_uas_wip,
+    create_attempt_branch,
+    rollback_to_checkpoint,
+)
 
 from .llm_client import get_llm_client
 from .parser import extract_code, extract_truncated_block
@@ -1896,22 +1900,41 @@ def main():
                 f for f in uas_result.files_written if f.endswith(".py")
             ]
 
+        # Section 6 of PLAN.md: when UAS_RESULT is missing (e.g. verifier
+        # scripts launched by architect.verify_step_output never emit it),
+        # the legacy "lint everything" fallback re-introduced the exact
+        # bug Section 5 fixed. Compute git-changed .py files relative to
+        # uas-wip instead, so caller paths that don't speak the UAS_RESULT
+        # contract still get correctly scoped lint without blaming
+        # pre-existing files. Combine UAS_RESULT-claimed files with
+        # git-detected changes for defense in depth.
         lint_errors: list[str] = []
         if _workspace:
-            # When we have a non-empty list of .py files written, lint only
-            # those.  When the script wrote no .py files, skip lint entirely
-            # — there is nothing this attempt could have broken.  When we
-            # could not parse UAS_RESULT at all (py_files_written is None),
-            # fall back to the legacy "lint everything" behavior so attempts
-            # whose scripts predate the UAS_RESULT contract still get
-            # checked.
-            if py_files_written is not None:
-                if py_files_written:
-                    lint_errors = lint_workspace(
-                        _workspace, files=py_files_written,
-                    )
-            else:
+            git_changed_py: list[str] | None = (
+                changed_py_files_since_uas_wip(_workspace)
+            )
+
+            files_to_lint: set[str] = set()
+            if py_files_written:
+                files_to_lint.update(py_files_written)
+            if git_changed_py:
+                files_to_lint.update(git_changed_py)
+
+            if files_to_lint:
+                lint_errors = lint_workspace(
+                    _workspace, files=sorted(files_to_lint),
+                )
+            elif (
+                py_files_written is None
+                and git_changed_py is None
+            ):
+                # Neither scoping signal is available: no UAS_RESULT and
+                # no git repo / no uas-wip ref. Fall back to linting the
+                # whole workspace so non-git callers still get checked.
                 lint_errors = lint_workspace(_workspace)
+            # Otherwise (at least one signal returned an empty list):
+            # the attempt provably did not change any .py files, so
+            # there is nothing this attempt could have broken. Skip lint.
 
         if lint_errors:
             logger.warning("Lint pre-check found %d fatal error(s):", len(lint_errors))

@@ -1,10 +1,12 @@
 """Tests for Section 8: Verification Loop and Success Validation."""
 
 import os
+import subprocess
 from unittest.mock import patch, MagicMock
 
 import pytest
 
+from architect.git_state import changed_py_files_since_uas_wip
 from architect.main import (
     validate_uas_result,
     verify_step_output,
@@ -151,6 +153,129 @@ class TestVerifyStepOutput:
         step = {"id": 1, "verify": "check something"}
         result = verify_step_output(step, "/workspace")
         assert result is None
+
+
+class TestVerifyStepOutputSection6Regression:
+    """Section 6 of PLAN.md regression: verify_step_output must not be
+    sabotaged by the orchestrator's lint pre-check rolling back a
+    verifier-script attempt because of pre-existing unused-import files
+    committed to ``uas-wip``.
+
+    The bug surfaced as ``Step N FAILED. Error: VERIFICATION PASSED``:
+    the verifier sandbox printed VERIFICATION PASSED and exited 0, but
+    the orchestrator subprocess wrapping it then ran ``lint_workspace``
+    against every ``*.py`` in the workspace, found pre-existing F401
+    errors, and exited 1. The architect's verify_step_output saw
+    exit_code != 0 and surfaced the verifier's own stdout as the error.
+
+    The fix scopes the lint pre-check to .py files this attempt actually
+    touched (via ``changed_py_files_since_uas_wip``), so a read-only
+    verifier script with no .py changes against ``uas-wip`` triggers no
+    lint at all.
+    """
+
+    @pytest.fixture
+    def workspace_with_pre_existing_unused_imports(self, tmp_path, monkeypatch):
+        """Create a real git workspace seeded with pre-existing F401
+        files committed to uas-wip — the exact situation that triggered
+        the bug in the rehab/ project.
+        """
+        monkeypatch.setenv("GIT_AUTHOR_NAME", "Test")
+        monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@test.com")
+        monkeypatch.setenv("GIT_COMMITTER_NAME", "Test")
+        monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@test.com")
+
+        ws = str(tmp_path)
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_config.py").write_text(
+            "import os\nimport pytest\n", encoding="utf-8",
+        )
+        (tmp_path / "config.py").write_text(
+            "import sys\n", encoding="utf-8",
+        )
+
+        def _git(*args):
+            subprocess.run(
+                ["git"] + list(args),
+                cwd=ws, capture_output=True, text=True, check=True,
+            )
+
+        _git("init", "-b", "main")
+        _git("add", "-A")
+        _git("commit", "-m", "Initial workspace state")
+        _git("tag", "-f", "uas-main")
+        _git("checkout", "-b", "uas-wip")
+        return ws
+
+    def test_changed_py_files_helper_returns_empty_for_clean_verifier(
+        self, workspace_with_pre_existing_unused_imports,
+    ):
+        """Direct check on the helper used by the orchestrator's lint
+        pre-check: a workspace with pre-existing F401 files committed
+        to uas-wip but no changes since must report zero changed files.
+        """
+        ws = workspace_with_pre_existing_unused_imports
+        result = changed_py_files_since_uas_wip(ws)
+        assert result == [], (
+            f"Pre-existing F401 files leaked into the changed-files "
+            f"set: {result!r}. The orchestrator's lint pre-check would "
+            f"re-blame the verifier attempt for them."
+        )
+
+    @patch("architect.main.run_orchestrator")
+    def test_verify_step_output_succeeds_with_pre_existing_unused_imports(
+        self, mock_orch, workspace_with_pre_existing_unused_imports,
+    ):
+        """End-to-end-ish: verify_step_output must return None when
+        run against a real workspace whose tracked .py files have
+        unused imports.
+
+        Inside the mock for run_orchestrator we re-check
+        ``changed_py_files_since_uas_wip`` against the actual workspace
+        — this is the same scoping signal the real orchestrator
+        subprocess uses for its lint pre-check, so the assertion
+        guarantees that the orchestrator path that depends on the
+        Section 6 helper would behave correctly here.
+        """
+        ws = workspace_with_pre_existing_unused_imports
+
+        def _fake_run_orchestrator(task, *args, **kwargs):
+            # The orchestrator subprocess would compute this and
+            # find no .py files to lint (because the verifier never
+            # touches the workspace).
+            scoped = changed_py_files_since_uas_wip(ws)
+            assert scoped == [], (
+                f"changed_py_files_since_uas_wip leaked pre-existing "
+                f"files: {scoped!r}"
+            )
+            return {
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": (
+                    "Sandbox verified.\n"
+                    "===STDOUT_START===\n"
+                    "VERIFICATION PASSED\n"
+                    "===STDOUT_END===\n"
+                    "Exit code: 0\n"
+                ),
+            }
+
+        mock_orch.side_effect = _fake_run_orchestrator
+
+        step = {
+            "id": 1,
+            "verify": "config.py exists",
+            "files_written": [],
+            "output": "",
+        }
+        result = verify_step_output(step, ws)
+        assert result is None, (
+            f"verify_step_output failed for workspace with pre-existing "
+            f"unused-import files: {result!r}. This is the Section 6 "
+            f"regression — before the fix this surfaced as "
+            f"'Step 1 FAILED. Error: VERIFICATION PASSED'."
+        )
 
 
 class TestValidateWorkspace:

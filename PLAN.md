@@ -931,7 +931,7 @@ re-attempted with this fix in the rebuilt container.
 
 ---
 
-### Section 6: Stop the lint pre-check from re-poisoning verification orchestrator runs  [PENDING]
+### Section 6: Stop the lint pre-check from re-poisoning verification orchestrator runs  [COMPLETED]
 
 **Why:** Section 5 fixed the lint pre-check for the **main step**
 orchestrator path by scoping `lint_workspace` to the `.py` files the
@@ -1128,6 +1128,64 @@ later by the architect's guardrail scan
 `[COMPLETED]`, append a one-paragraph result summary at the bottom of
 the section, then re-run Section 3's verification and update Section 3
 accordingly.
+
+**Result (2026-04-07):** Implemented option 5 (combine git-diff
+scoping with skip-fallback) per the recommendation. Added a new
+helper `architect.git_state.changed_py_files_since_uas_wip(workspace)`
+that returns the sorted union of (a) tracked `.py` files differing
+between the working tree and `refs/heads/uas-wip` and (b) untracked
+`.py` files via `git ls-files --others --exclude-standard`. The
+helper returns `None` when the workspace is not a git repo or has no
+`uas-wip` ref so callers can distinguish "scoping unavailable" from
+"nothing changed". Rewrote the lint pre-check block at
+`orchestrator/main.py:1903-1937` to compute a `files_to_lint` set as
+the union of `UAS_RESULT.files_written` (filtered to `.py`) and the
+git-diff helper's result. When the set is non-empty, lint exactly
+those files; when both signals report empty (i.e., a positive "this
+attempt touched no `.py` files" answer), skip lint entirely; only
+when BOTH signals are unavailable does the legacy
+`lint_workspace(_workspace)` fallback fire (e.g., a non-git workspace
+running a script that doesn't speak `UAS_RESULT`). The verifier
+scripts spawned by `architect.verify_step_output` — the original
+trigger — now correctly skip lint because git diff against `uas-wip`
+reports zero changed `.py` files for a read-only verifier. Tests:
+replaced `test_lint_falls_back_to_full_workspace_without_uas_result`
+with five new test methods on
+`TestLintPreCheckScopedToWrittenFiles`
+(`test_lint_skipped_when_no_uas_result_and_git_clean`,
+`test_lint_uses_git_changed_files_when_uas_result_missing`,
+`test_lint_falls_back_to_full_workspace_when_no_git`, plus the
+unchanged `test_pre_existing_unused_import_does_not_fail_attempt`
+and a new `test_verifier_script_pre_existing_unused_imports_does_not_fail`
+that exercises the exact verifier-stdout-only scenario from this
+section); added a new `TestChangedPyFilesSinceUasWip` class with 8
+unit tests in `tests/test_git_state.py` covering the helper's
+edge cases (no git, no uas-wip, clean workspace, pre-existing F401
+files committed to uas-wip, untracked `.py`, modified tracked `.py`,
+non-`.py` files, sorted-unique output); and added
+`TestVerifyStepOutputSection6Regression` in
+`tests/test_verification_loop.py` with two end-to-end-ish tests
+that build a real git workspace with pre-existing F401 files and
+assert both that the helper returns `[]` and that
+`verify_step_output` returns `None` (success). Acceptance criterion
+1 met: `python3 -m pytest tests/test_orchestrator_main.py
+tests/test_janitor.py tests/test_verification_loop.py` (172 tests)
+plus `tests/test_git_state.py` (27 tests) all pass — 199 total.
+Acceptance criterion 2 met: rebuilt the container image via
+`docker build -t uas-engine:latest -f Containerfile .` (cached, ~3s)
+and ran the exact docker reproduction from the **Why** section
+above against `/home/eturkes/pro/uas/rehab` (which still contains
+`tests/test_config.py` with `import os`/`import pytest` unused);
+the orchestrator subprocess exited with `Exit code: 0`, printed
+`SUCCESS on attempt 1.`, and produced **zero**
+`Lint pre-check found ... fatal error(s)` warnings — the bug is
+gone. Acceptance criterion 3 (re-run `cd rehab && uas --resume
+--goal-file goal_001.txt` and confirm `progress.md` records a
+completed step) is the same as Section 3's first criterion and is
+left for Section 3's verification re-run, per the workflow note
+("flipping Section 6 to `[COMPLETED]` and re-running this
+verification is what finally unblocks Section 3"). Section 3
+remains `[PENDING]` until that end-to-end re-run is performed.
 
 ---
 

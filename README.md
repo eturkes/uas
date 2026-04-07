@@ -290,6 +290,10 @@ execution.
 │   ├── claude_config.py      # CLAUDE.md template for workspace guidance
 │   ├── sandbox.py            # Sandboxed code execution (local or container)
 │   └── parser.py             # Code extraction from LLM responses
+├── uas/                      # Shared utilities (imported by both layers)
+│   ├── fuzzy.py              # @fuzzy_function decorator (LLM-backed)
+│   ├── fuzzy_models.py       # Pydantic return models for fuzzy functions
+│   └── janitor.py            # Workspace formatting and linting
 ├── tests/                    # Unit and integration tests (pytest)
 │   ├── conftest.py           # Shared fixtures, container helpers, auth
 │   ├── test_integration.py   # Integration tests (run in uas-engine)

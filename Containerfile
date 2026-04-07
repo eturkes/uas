@@ -26,6 +26,7 @@ COPY config.py .
 COPY hooks.py .
 COPY orchestrator/ ./orchestrator/
 COPY architect/ ./architect/
+COPY uas/ ./uas/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 

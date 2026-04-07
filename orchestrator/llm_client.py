@@ -172,14 +172,32 @@ class ClaudeCodeClient:
                 "-p", "--dangerously-skip-permissions",
             ]
 
-        # File-modification tools are disabled so the LLM is forced to put
-        # the generated script in its text response (a fenced code block)
-        # instead of writing files directly via tools.  Read-only research
-        # tools (Read, Grep, Glob, WebSearch, WebFetch) and Bash remain
-        # available so the LLM can still verify package versions, read API
-        # docs, and run quick checks before generating code.
+        # Section 4 (PLAN.md): Block every tool the LLM could use to create
+        # files in the throwaway isolation directory.  After Section 2 only
+        # blocked Write/Edit/NotebookEdit, the LLM bypassed the contract by
+        # writing files via Bash shell redirection (echo >, cat <<EOF, tee,
+        # uv sync, etc.) and replying with prose ("I created the files").
+        # Empirical testing of `claude --help` shows that:
+        #   - `--allowed-tools` is silently ignored under
+        #     `--dangerously-skip-permissions`, so it cannot be used as a
+        #     hard restriction.
+        #   - `--disallowed-tools` IS enforced even with permissions
+        #     bypassed, so a deny-list is the only mechanism that works.
+        # We block:
+        #   - Write, Edit, NotebookEdit  (file creation/modification)
+        #   - Bash                       (shell redirection -> file writes,
+        #                                 also installs packages, also runs
+        #                                 commands that mutate disk state)
+        #   - Task                       (spawns subagents whose toolset is
+        #                                 NOT limited by this disallowed
+        #                                 list, so the LLM was using Task
+        #                                 to delegate file writes)
+        # Read-only research tools (Read, Grep, Glob, WebSearch, WebFetch)
+        # remain available so the LLM can still verify package versions
+        # against PyPI/registry pages and read on-disk files.
         cmd.extend([
-            "--disallowed-tools", "Write", "Edit", "NotebookEdit",
+            "--disallowed-tools",
+            "Write", "Edit", "NotebookEdit", "Bash", "Task",
         ])
 
         model = self.model or "claude-opus-4-6"

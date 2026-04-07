@@ -165,12 +165,25 @@ class TestGenerateIsolation:
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
     def test_disallowed_tools_flag_in_cmd(self, _mock_which, mock_run, _mock_cls):
-        """generate() must pass --disallowed-tools so the LLM cannot write files.
+        """generate() must pass --disallowed-tools blocking writes and Bash.
 
-        Section 2 of the bind-mount recovery PLAN: Write/Edit/NotebookEdit
-        must be disabled in the CLI subprocess so the orchestrator always
-        receives a fenced code block in the LLM's text response instead of
-        having the LLM perform the task with file-writing tools.
+        Section 4 of the bind-mount recovery PLAN: Section 2 only blocked
+        Write/Edit/NotebookEdit and the LLM bypassed it via Bash shell
+        redirection.  Section 4 verification empirically established that
+        ``--allowed-tools`` is silently IGNORED when combined with
+        ``--dangerously-skip-permissions``, so the deny-list is the only
+        mechanism that actually works.  Bash and Task must both be on the
+        deny-list:
+
+        - Bash:  shell redirection (``echo >``, ``cat <<EOF``, ``uv sync``)
+                 lets the LLM create files even with Write/Edit/NotebookEdit
+                 disabled.
+        - Task:  spawns subagents whose tools are NOT bounded by this
+                 deny-list, so the LLM was delegating file writes to a
+                 subagent.
+
+        Read-only tools (Read, Grep, Glob, WebSearch, WebFetch) must NOT
+        be in the deny list — they are what the LLM uses for research.
         """
         captured = {}
 
@@ -187,18 +200,21 @@ class TestGenerateIsolation:
             f"--disallowed-tools flag missing from cmd: {cmd}"
         )
         flag_idx = cmd.index("--disallowed-tools")
-        # The three blocked tools must follow the flag.  They may be in any
-        # order but all three must be present in the args after the flag.
-        following = cmd[flag_idx + 1: flag_idx + 4]
-        for tool in ("Write", "Edit", "NotebookEdit"):
+        # All five blocked tools must follow the flag.  They may appear in
+        # any order but all five must be present in the args after the
+        # flag.
+        following = cmd[flag_idx + 1: flag_idx + 6]
+        required_blocked = ("Write", "Edit", "NotebookEdit", "Bash", "Task")
+        for tool in required_blocked:
             assert tool in following, (
                 f"{tool} not found in args after --disallowed-tools: "
                 f"{following}"
             )
-        # Sanity: research tools must NOT be in the disallowed list.
-        for tool in ("Bash", "Read", "Grep", "Glob", "WebSearch", "WebFetch"):
+        # Sanity: read-only research tools must NOT be in the blocked list.
+        for tool in ("Read", "Grep", "Glob", "WebSearch", "WebFetch"):
             assert tool not in following, (
-                f"research tool {tool} should not be disallowed"
+                f"research tool {tool} should not be in --disallowed-tools "
+                f"list (Section 4): {following}"
             )
 
     @patch("orchestrator.llm_client.time.sleep")
@@ -244,14 +260,17 @@ class TestClaudeMdIsolationGuidance:
         assert "files or directories" in CLAUDE_MD_TEMPLATE
 
     def test_disabled_tools_called_out(self):
-        """Section 2 of the bind-mount recovery PLAN.
+        """Section 2 / Section 4 of the bind-mount recovery PLAN.
 
-        The template must explicitly tell the LLM that Write, Edit, and
-        NotebookEdit are DISABLED so it does not attempt to use them.
+        The template must explicitly tell the LLM that Write, Edit,
+        NotebookEdit, AND Bash are DISABLED so it does not attempt to use
+        them.  Bash was added in Section 4 because keeping it allowed let
+        the LLM bypass Section 2's restriction by writing files via
+        shell redirection.
         """
         from orchestrator.claude_config import CLAUDE_MD_TEMPLATE
 
-        for tool in ("Write", "Edit", "NotebookEdit"):
+        for tool in ("Write", "Edit", "NotebookEdit", "Bash"):
             assert tool in CLAUDE_MD_TEMPLATE, (
                 f"{tool} should be mentioned as disabled in CLAUDE.md"
             )
@@ -262,9 +281,56 @@ class TestClaudeMdIsolationGuidance:
 
         The template must NOT claim "ALL TOOLS ENABLED" because file
         modification tools are in fact restricted by the orchestrator's
-        --disallowed-tools flag.  The contradiction was confusing the LLM
+        --allowed-tools flag.  The contradiction was confusing the LLM
         into trying to use Write/Edit instead of producing a code block.
         """
         from orchestrator.claude_config import CLAUDE_MD_TEMPLATE
 
         assert "ALL TOOLS ENABLED" not in CLAUDE_MD_TEMPLATE
+
+    def test_tool_created_files_marked_discarded(self):
+        """Section 4 of the bind-mount recovery PLAN.
+
+        The template must explicitly tell the LLM that any files it
+        somehow creates with tools are written to a throwaway temp
+        directory and discarded.  This is the empirically strongest signal
+        we have to stop the LLM from completing tasks via Bash redirection
+        and replying with prose.  Without this language the LLM falls
+        back on its training-data prior of "use tools to do work".
+        """
+        from orchestrator.claude_config import CLAUDE_MD_TEMPLATE
+
+        # The phrase order matters less than the concept — we look for
+        # both the "throwaway/temp directory" framing and the "discarded"
+        # consequence.
+        lower = CLAUDE_MD_TEMPLATE.lower()
+        assert "discarded" in lower or "deleted" in lower, (
+            "CLAUDE.md must say tool-created files are discarded/deleted"
+        )
+        assert (
+            "throwaway" in lower
+            or "temporary directory" in lower
+            or "temp directory" in lower
+        ), (
+            "CLAUDE.md must mention the throwaway/temp directory the LLM "
+            "is running in so it understands tool side effects don't "
+            "persist"
+        )
+
+    def test_bash_not_advertised_as_research_tool(self):
+        """Section 4 of the bind-mount recovery PLAN.
+
+        Section 2's template described Bash as an available research
+        tool ("Bash for quick verification commands").  Section 4
+        removes Bash from the allowlist entirely, so the template must
+        not advertise Bash as an available research tool any more —
+        otherwise the LLM will try to call it and fail.
+        """
+        from orchestrator.claude_config import CLAUDE_MD_TEMPLATE
+
+        # Find any place where the template lists "available" research
+        # tools.  The phrase "Bash for quick verification" was the
+        # specific line that needed to go.
+        assert "Bash for quick verification" not in CLAUDE_MD_TEMPLATE, (
+            "Bash should not be advertised as an available research tool"
+        )

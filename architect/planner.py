@@ -2244,6 +2244,17 @@ REFLECTION_GEN_PROMPT = """\
 <task_description>{description}</task_description>
 <attempt_number>{attempt}</attempt_number>
 
+<orchestrator_contract>
+The orchestrator extracts a single ```python fenced code block from the
+LLM's text response and runs it as a Python script. It does NOT extract
+bash / shell / sh / shell-script code blocks. If the failure is
+"Failed to extract code block from LLM response.", the fix is ALWAYS to
+emit a ```python ... ``` fence in the LLM text response — never suggest
+producing a bash script, a shell script, or a heredoc-based setup script
+as the recovery strategy. The script the LLM produces is Python and it
+gets executed by python3. Bash one-liners are not a valid solution.
+</orchestrator_contract>
+
 <instructions>
 Generate a structured reflection on this failure. Respond with ONLY a JSON object \
 (no markdown, no code fences, no explanation) with exactly these fields:
@@ -2258,7 +2269,7 @@ Use unknown only if the error truly does not fit any other category.",
 "root_cause": "brief description of what caused the failure",
 "strategy_tried": "what approach was used in this attempt",
 "lesson": "what was learned from this failure",
-"what_to_try_next": "concrete suggestion for the next attempt",
+"what_to_try_next": "concrete suggestion for the next attempt (for format_error specifically: tell the worker to wrap the entire Python script in a single ```python fenced code block — do NOT recommend bash/shell scripts under any circumstances)",
 "recommended_strategy": "MUST be exactly one of: reflect_and_fix, alternative_approach, decompose_into_phases, defensive_rewrite. \
 Use reflect_and_fix when the error is a small, localised bug that can be corrected with a targeted change. \
 Use alternative_approach when the fundamental approach is flawed and a completely different technique should be tried. \

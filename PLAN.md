@@ -297,9 +297,50 @@ embedded `.git/` directories as submodules. Backup forensics directories
 must always be moved **outside** the workspace before re-running `uas`.
 This is a process note for whoever re-runs Section 3, not a code bug.
 
+**Status note (2026-04-07, after Section 4 landed):** Section 4 was
+implemented and verified. The third acceptance criterion of Section 3
+(`"Failed to extract code block" failure does not recur on attempt 1 of
+any step`) is now **CONCLUSIVELY MET** for `rehab/`:
+
+- Container rebuilt via `install.sh` after the Section 4 changes to
+  `orchestrator/llm_client.py`, `orchestrator/main.py` (`build_prompt`,
+  `_build_retry_clean_prompt`, `_contains_tool_calls`),
+  `orchestrator/claude_config.py`, and `architect/planner.py`
+  (`REFLECTION_GEN_PROMPT`).
+- Re-run via `cd rehab && uas --resume --goal-file goal_001.txt`
+  against the same `fa0d38fa9ef6` run state.
+- All 3 attempts of step 1 produced extractable Python scripts. All 3
+  scripts ran in the sandbox with `Exit code: 0` and printed
+  `UAS_RESULT: {"status": "ok", ...}` listing the 11 expected files
+  (`pyproject.toml`, `.python-version`, `.gitignore`, `CLAUDE.md`,
+  `README.md`, and the 6 `__init__.py` files under `src/rehab/`).
+- `grep -c "Failed to extract code block" /tmp/uas-section4-v3.log` =
+  `0`. The original failure mode is gone.
+
+However, Section 3's **first** acceptance criterion (`progress.md shows
+at least one completed step`) is **STILL NOT MET**. After the
+script-generation pipeline produces a usable code block and the sandbox
+executes it successfully, the orchestrator's post-execution
+**lint pre-check** rejects the workspace state with
+`F401 [*] os imported but unused` pointing at
+`rehab/tests/test_config.py:4`. That file is dated `Apr  7 03:58` —
+it predates today's work and was left over from the user's original
+failed run. The lint check sees a pre-existing file with unused imports
+and marks the entire step's execution as `revert_needed: true,
+error_category: lint_fatal`, which rolls the workspace back and the
+attempt is recorded as failed even though the LLM-generated script ran
+to success.
+
+This is a **new, distinct failure mode** unrelated to anything in this
+PLAN. Per step 5 of this section, it should be captured in a new
+Section 5: "Stop the lint pre-check from rejecting pre-existing
+workspace files." Until that section lands, Section 3 stays `[PENDING]`
+because it cannot meet its first acceptance criterion. Sections 1, 2,
+and 4 are conclusively complete.
+
 ---
 
-### Section 4: Stop the LLM from creating files via Bash redirection  [PENDING]
+### Section 4: Stop the LLM from creating files via Bash redirection  [COMPLETED]
 
 **Why:** Section 2 added `--disallowed-tools Write Edit NotebookEdit` to
 the LLM subprocess and updated `CLAUDE.md` to instruct the LLM to put its
@@ -454,6 +495,113 @@ options 1 and 4 as fallbacks.
 **When complete:** change the section header from `[PENDING]` to
 `[COMPLETED]`, then re-run Section 3's verification and update Section 3
 accordingly.
+
+**Result (2026-04-07):** Verified end-to-end against `rehab/`. The fix
+turned out to require **four** coordinated changes, not just the one
+Section 4 originally proposed:
+
+1. **`orchestrator/llm_client.py:175-186`** — `--disallowed-tools` was
+   extended from `Write Edit NotebookEdit` to
+   `Write Edit NotebookEdit Bash Task`. Empirical testing of `claude
+   --help` against the live binary established that `--allowed-tools`
+   (option 2 in this section's recommendation) is **silently ignored**
+   when combined with `--dangerously-skip-permissions`, so the deny-list
+   was the only mechanism that actually worked. `Task` had to be added
+   alongside `Bash` because the LLM was using `Task` to spawn subagents
+   whose toolset is NOT bounded by the parent's `--disallowed-tools`,
+   and the subagents were creating files. Without blocking `Task`, the
+   LLM bypassed the entire restriction by delegating to a subagent.
+2. **`orchestrator/main.py:354-401` (`_contains_tool_calls`)** — replaced
+   the `return False` stub with a regex-based detector for bash/shell
+   code fences, tool-use markup, and "I created the files" prose. The
+   error message at the call site (`orchestrator/main.py:1762-1774`) was
+   updated to surface "LLM bypassed code-block contract via Bash or tool
+   actions" so future format failures are diagnosable from the log alone.
+3. **`orchestrator/main.py` `build_prompt()` lines 962-1003 and 1051-1106
+   (the `<output_format>`, `<environment>`, and `<role>` blocks)** —
+   the actual root cause of the recurring failure. Section 2 had updated
+   `claude_config.py`'s `CLAUDE.md` template, but the orchestrator runs
+   the LLM with `cwd=isolation_dir` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`,
+   which means the workspace `.claude/CLAUDE.md` is **never read by the
+   coder LLM**. The only prompt the LLM actually sees is the one
+   `build_prompt()` constructs in Python — and that prompt advertised
+   "ALL TOOLS ENABLED", "FULL TOOL ACCESS", "USE TOOLS FREELY", and
+   "bash execution" as available, directly contradicting the
+   `--disallowed-tools` flag. The LLM dutifully tried to use Bash, was
+   blocked, and fell back to prose or bash code fences (per its training
+   prior). Removing the contradictions, listing only the actually-allowed
+   tools (`Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`), naming the
+   disabled tools, and adding the "throwaway temp directory / files are
+   discarded" framing fixed it.
+4. **`orchestrator/main.py` `_build_retry_clean_prompt()` lines 800-839
+   and `architect/planner.py` `REFLECTION_GEN_PROMPT` lines 2247-2257**
+   — the retry_clean prompt (used for attempts 2+) had no output-format
+   instructions at all, relying purely on the LLM's training prior. After
+   attempt 1 produced a clean code block, the architect's reflection LLM
+   was generating bad recovery suggestions (`"Produce a single
+   self-contained bash script enclosed in a fenced code block
+   ```bash ...```"`) because the reflection prompt didn't know the
+   orchestrator extracts Python, not bash. Both prompts were updated to
+   explicitly say "the orchestrator extracts ```python only" and to list
+   the available/disabled tools.
+
+A discovery during verification: the `CLAUDE.md` template I updated
+under `orchestrator/claude_config.py` is functionally **dead code** for
+the orchestrator's coder LLM path. It is still written to
+`workspace/.claude/CLAUDE.md` by `architect/executor.ensure_claude_md`,
+but the coder LLM never reads it because (a) the LLM subprocess runs
+with `cwd=/tmp/uas_llm_<rand>` not the workspace, and
+(b) `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` is set in
+`orchestrator/llm_client.py:196` to prevent nested-session detection.
+The CLAUDE.md template is still useful for users who run `claude`
+interactively against the workspace, so I left the Section 4 wording in
+it for parity with the build_prompt language. Whoever picks up the
+follow-up "remove dead code paths" sweep should consider either deleting
+the template entirely or wiring it through `--append-system-prompt` so
+it actually reaches the coder LLM.
+
+Live verification against `rehab/` after rebuild via `install.sh`:
+- **Run 1 (after fixes 1+2 only):** All 3 attempts of step 1 still
+  failed with "Failed to extract code block from LLM response."
+  Inspecting `orchestrator/main.py:build_prompt` revealed the
+  contradiction described in fix 3 above.
+- **Run 2 (after fixes 1+2+3):** Attempt 1 produced a complete Python
+  script, the sandbox ran it with `Exit code: 0` and `UAS_RESULT:
+  {"status": "ok", ...}`, and the script created all 11 expected
+  files plus ran `uv sync` successfully. **Zero "Failed to extract
+  code block" entries in attempt 1's log.** Attempts 2 and 3 still
+  failed with the format error because the retry_clean path had no
+  output-contract instructions — fix 4 then handled that.
+- **Run 3 (after fixes 1+2+3+4):** All 3 attempts produce extractable
+  Python scripts; all 3 sandbox executions succeed with
+  `Exit code: 0` and `UAS_RESULT: ok`. `grep -c "Failed to extract
+  code block" log = 0` across the entire run. Section 4's third
+  acceptance criterion is conclusively met.
+
+Step 1 still does not show as "completed" because the orchestrator's
+post-execution lint pre-check (a separate code path) fails with
+`F401 [*] os imported but unused` against `rehab/tests/test_config.py`
+— a **pre-existing** file dated `Apr  7 03:58` left in the workspace
+from before any of today's work began. This is unrelated to Section 4.
+The script-generation pipeline is fully fixed; the lint-strictness
+issue against pre-existing workspace files is a separate failure mode
+that warrants its own section. Section 3's first acceptance criterion
+("at least one completed step") therefore remains unmet pending that
+follow-up.
+
+Tests added: `tests/test_orchestrator_main.py` gained
+`test_no_all_tools_enabled_contradiction`,
+`test_disabled_tools_called_out_in_prompt`,
+`test_allowed_research_tools_listed_in_prompt`,
+`test_python_code_fence_required_in_prompt`,
+`test_throwaway_directory_warning_in_prompt`,
+`test_retry_clean_includes_output_format_section`, plus an entirely
+new `TestToolCallDetection` covering bash/shell fences, `<tool_use>`
+markup, and first-person prose. `tests/test_llm_isolation.py` was
+extended with the `Bash`/`Task` blocked-tool assertions and CLAUDE.md
+template assertions for the throwaway/discarded language.
+`tests/test_parser.py` got `test_bash_tool_bypass_response_returns_none`.
+Total: 1581 tests pass, 0 failures (vs. 1575 before Section 4).
 
 ---
 

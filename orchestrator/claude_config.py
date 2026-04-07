@@ -4,34 +4,50 @@ CLAUDE_MD_TEMPLATE = """\
 # CLAUDE.md - Workspace Instructions for UAS Code Generation
 
 ## Autonomy
-You are in an isolated, disposable container with research tools enabled:
+You are in an isolated, disposable container with read-only research
+tools enabled:
 - Root access, unrestricted network, no firewalls
-- Read-only and research tools available — Read, Grep, Glob, WebSearch,
-  WebFetch, and Bash for quick verification commands
-- File-modification tools (Write, Edit, NotebookEdit) are DISABLED for this
-  generation step. You cannot create or modify files via tools.
-- If you're unsure about a library version or API, use WebFetch / WebSearch
-  to check the docs or registry, or run a Bash command to inspect the
-  environment.
+- Read-only research tools available — Read, Grep, Glob, WebSearch,
+  WebFetch
+- ALL file-modification and execution tools (Write, Edit, NotebookEdit,
+  Bash) are DISABLED for this generation step. You cannot create files,
+  modify files, install packages, or run shell commands.
+- If you're unsure about a library version or API, use WebFetch /
+  WebSearch to check the docs or PyPI / registry pages.
 Act decisively. Research with the tools you have. Never hedge about
 permissions for the tools that ARE available.
 
+## CRITICAL: Tool-created files are DISCARDED
+You are running in a throwaway temporary directory that is deleted the
+moment your response completes. Anything you might somehow create with a
+tool — files, directories, installed packages, virtual environments —
+lives ONLY in that temp directory and is NOT visible to the orchestrator.
+Tool side effects do NOT count toward task completion.
+
+The ONLY thing the orchestrator extracts from your response is a single
+```python fenced code block in your text output. If you do not produce
+that block, your work is lost and the attempt is wasted. The orchestrator
+runs the script you emit inside the REAL workspace directory, after your
+response returns.
+
 ## Role
 You are generating a self-contained Python script as TEXT output.
-Use the available research tools (Read, Grep, Glob, WebSearch, WebFetch,
-Bash) to verify package versions, API signatures, and environment details
-before coding.
-The Write, Edit, and NotebookEdit tools are DISABLED — you cannot create
-files via tools. Output the complete script in a single fenced code block
-in your response. The framework will extract and execute the script later
-inside an isolated workspace directory.
+Use the available read-only research tools (Read, Grep, Glob, WebSearch,
+WebFetch) to verify package versions, API signatures, and environment
+details before coding.
+Write, Edit, NotebookEdit, and Bash are DISABLED — you cannot create
+files, modify files, or run shell commands via tools. Output the complete
+script in a single fenced code block in your response. The framework will
+extract and execute the script later inside an isolated workspace
+directory.
 
 ## Output Mode — TEXT ONLY
-Do NOT attempt to create any files or directories. The Write, Edit, and
-NotebookEdit tools are DISABLED in this session and any attempt to use
-them will fail. Your only job is to produce the Python script text in
-your response inside a single ```python fenced code block. The framework
-will extract and execute the script.
+Do NOT attempt to create any files or directories, install any packages,
+or run any shell commands. The Write, Edit, NotebookEdit, and Bash tools
+are DISABLED in this session and any attempt to use them will fail. Your
+only job is to produce the Python script text in your response inside a
+single ```python fenced code block. The framework will extract and
+execute the script. Anything you do via tools is discarded.
 
 ## Environment
 - Python 3.12 (full standard library available)

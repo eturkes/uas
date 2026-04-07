@@ -106,6 +106,31 @@ class TestExtractCode:
         )
         assert extract_code(response) is None
 
+    def test_bash_tool_bypass_response_returns_none(self):
+        """Regression test for Section 4 of the bind-mount recovery PLAN.
+
+        When the LLM tries to bypass the text-only contract by emitting
+        a bash code block (e.g. shell commands to create files) instead
+        of a Python script, ``extract_code`` must return None.  The
+        existing parser logic prefers ``python`` blocks and skips bare
+        / shell ones, so a pure ``bash`` block alone should leave it
+        with nothing to return.
+        """
+        response = (
+            "I'll set up the project skeleton:\n\n"
+            "```bash\n"
+            "mkdir -p src/myproj tests data\n"
+            "cat > pyproject.toml <<'EOF'\n"
+            "[project]\n"
+            "name = 'myproj'\n"
+            "version = '0.1.0'\n"
+            "EOF\n"
+            "uv sync\n"
+            "```\n\n"
+            "Then we run the tests with `pytest`."
+        )
+        assert extract_code(response) is None
+
 
 class TestLooksLikePython:
     def test_import_statement(self):

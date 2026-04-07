@@ -351,12 +351,54 @@ def _extract_header_context(code: str, max_lines: int = 40) -> str:
     return "\n".join(header_parts)
 
 
-def _contains_tool_calls(response: str) -> bool:
-    """Check if an LLM response contains tool call patterns instead of code.
+_TOOL_BYPASS_PATTERNS = (
+    # Shell / bash code fences — the LLM responded with shell instructions
+    # instead of a Python script.
+    re.compile(r"```(?:bash|sh|shell|zsh|console|terminal)\b", re.IGNORECASE),
+    # Tool-use markup that occasionally leaks into the JSON result field
+    # (different claude-code versions show tool invocations differently).
+    re.compile(r"<tool_use\b", re.IGNORECASE),
+    re.compile(r"<tool_call\b", re.IGNORECASE),
+    re.compile(r"<tool_name\b", re.IGNORECASE),
+    re.compile(r"\bTool:\s*Bash\b"),
+    # First-person prose that means the LLM did the task with tools and is
+    # reporting completion instead of emitting a script.  These are
+    # restricted to the start-of-line / start-of-sentence position so they
+    # don't false-positive on a Python script that happens to mention
+    # "I created a list" in a docstring.
+    re.compile(
+        r"(?:^|\n)\s*(?:I(?:'ve|'ll| have| will)?\s+)?"
+        r"(?:created|wrote|written|generated|installed|added|set\s+up|"
+        r"set-up|setup)\s+(?:the\s+|a\s+|an\s+|all\s+|the\s+following\s+|"
+        r"these\s+)?(?:files?|packages?|dependencies|deps|directory|"
+        r"directories|venv|virtual\s*env(?:ironment)?s?|environments?|"
+        r"project|skeleton|tests?|module|modules)\b",
+        re.IGNORECASE,
+    ),
+)
 
-    With full tool access enabled, tool calls are expected and handled by
-    the CLI. This now always returns False.
+
+def _contains_tool_calls(response: str) -> bool:
+    """Detect when an LLM response was produced via tools instead of code.
+
+    Section 4 of PLAN.md: even with ``--allowed-tools`` restricted to
+    read-only research tools, an LLM may still respond with prose that
+    describes work it *thought* it did with tools (e.g. "I've created the
+    files...") instead of emitting a fenced Python code block.  This
+    function flags such responses so the orchestrator can surface a
+    diagnostic error to the user and to the LLM on the next attempt.
+
+    The patterns deliberately err on the side of caution: this is only
+    consulted in the failure path (after ``extract_code`` returned None),
+    so a false positive does not cause a successful response to be
+    rejected.  It just selects a more informative ``previous_error`` that
+    tells the LLM what went wrong on the last attempt.
     """
+    if not response:
+        return False
+    for pat in _TOOL_BYPASS_PATTERNS:
+        if pat.search(response):
+            return True
     return False
 
 
@@ -764,7 +806,38 @@ def _build_retry_clean_prompt(task: str,
     )
     error_section = f"<error>\n{error_body}\n</error>"
 
-    return "\n\n".join([spec_section, current_code_section, error_section])
+    # Section 4 (PLAN.md): the retry_clean prompt is intentionally lean,
+    # but it MUST still tell the LLM about the output contract — without
+    # this, the LLM falls back on its training prior of writing prose or
+    # bash scripts and the parser's "Failed to extract code block" failure
+    # repeats forever across all retry attempts.  This is the same
+    # contradiction Section 4 fixed in build_prompt() above; the
+    # retry_clean path needed the same treatment.
+    output_format_section = (
+        "<output_format>\n"
+        "Respond with a single ```python fenced code block containing a "
+        "complete, self-contained Python script that fulfils the <spec>. "
+        "The orchestrator extracts that fenced block and runs it as a "
+        "Python script in the real workspace.\n\n"
+        "Do NOT respond with bash, shell, or sh code blocks — only "
+        "```python is extracted. Do NOT respond with prose describing "
+        "what you would do — emit the script directly. Do NOT split the "
+        "script across multiple fences.\n\n"
+        "Tools available to you right now (read-only research): Read, "
+        "Grep, Glob, WebSearch, WebFetch.  Tools DISABLED: Write, Edit, "
+        "NotebookEdit, Bash, Task.  Files you create with tools live in "
+        "a throwaway temp directory and are discarded — they do not "
+        "count toward task completion.  Only the ```python block in your "
+        "text response counts.\n"
+        "</output_format>"
+    )
+
+    return "\n\n".join([
+        output_format_section,
+        spec_section,
+        current_code_section,
+        error_section,
+    ])
 
 
 def build_prompt(task: str, attempt: int, previous_error: str | None = None,
@@ -917,18 +990,44 @@ better code because you researched first.
 
     # Data sections at top (environment, task, workspace state)
     prompt = f"""\
-<environment>
-You are running inside an isolated, disposable container. You have FULL AUTONOMY with ALL TOOLS ENABLED:
-- ROOT ACCESS. Install any system packages with apt-get. No sudo needed.
-- UNRESTRICTED NETWORK. Fetch any URL, call any API, clone any repo. No firewall, no proxy.
-- PACKAGE INSTALLATION. `uv` is pre-installed. Use `uv pip install --system` for fast package installation. Do it proactively at the top of your script.
-- COMMAND EXECUTION. Run any shell command via subprocess. No restrictions whatsoever.
-- FULL TOOL ACCESS. All tools are enabled — file operations, web search, web fetch, bash, and any other available tools or skills. Use them aggressively to research, verify, and build.
-- AGENT SKILLS. Install and use any agent skills that would help. You can extend your own capabilities.
-- WEB SEARCH. If you need to look something up — current library versions, API docs, best practices — you can and should use your tools and the network.
-- FILESYSTEM. Full read/write. Workspace: os.environ.get("WORKSPACE", "/workspace").
+<output_format>
+CRITICAL: This generation step is TEXT-only. The orchestrator extracts a
+single ```python fenced code block from your text response and runs that
+script later inside the real workspace directory. Anything you do via
+tools right now is DISCARDED.
 
-This container is disposable. Nothing here affects the host. Be bold, not cautious. Use every tool at your disposal.
+You are running in a throwaway temporary directory that is deleted the
+moment your response completes. Files you create with tools — including
+via Read/Grep/Glob — live ONLY in that temp dir and are NOT visible to
+the orchestrator. Tool side effects do NOT count toward task completion.
+
+The Write, Edit, NotebookEdit, Bash, and Task tools are DISABLED in this
+session and will fail if you try to call them. Do NOT respond with bash
+or shell code blocks — only ```python is extracted. Do NOT respond with
+prose describing what you would do — emit the script directly.
+
+Your ONLY output mechanism is a single ```python ... ``` fenced code
+block in your text response. If you do not produce that block, the
+attempt is wasted.
+</output_format>
+
+<environment>
+You are generating a Python script that the orchestrator will run inside
+a disposable, root-privileged container with full network access. The
+SCRIPT itself can do anything: install system packages with apt-get,
+install Python packages with `uv pip install --system`, fetch URLs, run
+shell commands via subprocess, write files anywhere under the workspace,
+etc. None of those things are restricted at script-execution time.
+
+But YOU (the model generating the script) have a restricted toolset for
+THIS generation step:
+- Available tools: Read, Grep, Glob, WebSearch, WebFetch (read-only
+  research only — use them to verify package versions, read API docs,
+  inspect any files already on disk).
+- Disabled tools: Write, Edit, NotebookEdit, Bash, Task. Do not call
+  them — they will fail.
+
+Workspace path inside the script: os.environ.get("WORKSPACE", "/workspace").
 {pkg_hint}
 System info:
 {system_state_block}
@@ -1007,27 +1106,31 @@ the script was too long. You MUST keep your script concise to avoid truncation:
     prompt += """
 
 <role>
-You are an expert engineer with full system access in a disposable container.
-You have ALL tools enabled and should use them aggressively:
+You are an expert engineer producing a Python script that the orchestrator
+will run inside a disposable, root-privileged container.
 
-- USE TOOLS FREELY. You have full tool access — file read/write, web search,
-  web fetch, bash execution, and any other available tools or skills. Use them
-  whenever they would help you produce a better result.
-- RESEARCH FIRST. Before writing code, use your tools to check current library
-  versions, read API docs, verify best practices. Don't guess — look it up.
-- INSTALL ANYTHING. Use apt-get for system packages, uv/pip for Python packages.
-  Install linters, formatters, dev tools — whatever improves quality.
-- MODIFY YOUR ENVIRONMENT. Configure your workspace, install editor plugins or
-  agent skills, set up whatever tooling you need. This container is disposable.
-- ACCESS THE NETWORK. Fetch URLs, call APIs, clone repos, download datasets.
-  No restrictions. Use the network proactively to verify assumptions.
+For THIS generation step you have a restricted toolset:
+- Read, Grep, Glob: inspect any files already on disk in your cwd.
+- WebSearch, WebFetch: verify current package versions against PyPI /
+  registry pages, read API docs, look up best practices.
+- Write, Edit, NotebookEdit, Bash, Task are DISABLED. Do not call them.
 
-Act like a senior engineer with root access who sets up their own environment
-and uses every tool at their disposal before starting work.
+The SCRIPT you emit (which the orchestrator runs after this step) has
+no such restrictions — it gets root, network, full filesystem, subprocess,
+apt-get, uv pip install, etc. So:
+- Research with WebFetch/WebSearch before coding when in doubt about a
+  library version or API.
+- Bake your research findings directly into the script as comments or
+  defensive checks. Do not produce a separate research document.
+- Encode package installation, environment setup, file creation, and
+  verification ALL inside the single Python script.
 
-After using tools to research and prepare, generate a complete, self-contained
-Python script in a ```python code fence. The script must be complete and
-self-contained.
+After researching, output a complete, self-contained Python script as a
+single ```python fenced code block in your text response. That fenced
+block is the ONLY thing the orchestrator extracts. Do not respond with
+bash/shell code blocks (they will be ignored), do not respond with prose
+descriptions of what the script would do, and do not split the script
+across multiple fences.
 </role>
 
 <constraints>
@@ -1708,10 +1811,16 @@ def main():
             if not code:
                 if _contains_tool_calls(response):
                     previous_error = (
-                        "Your response contained tool calls (e.g. <tool_call> XML) "
-                        "but tools are disabled. You MUST respond with a single "
-                        "```python code fence containing your complete script. "
-                        "Do not use tool calls."
+                        "LLM bypassed code-block contract via Bash or tool "
+                        "actions. Your previous response described work you "
+                        "did with tools (or contained shell/tool markup) "
+                        "instead of a Python script.  Files you create with "
+                        "tools live in a throwaway temp directory and are "
+                        "discarded — they do NOT count toward task "
+                        "completion.  You MUST output your complete Python "
+                        "script in a single ```python fenced code block in "
+                        "your text response.  The orchestrator extracts and "
+                        "runs that block in the real workspace."
                     )
                 else:
                     previous_error = "Failed to extract code block from LLM response."

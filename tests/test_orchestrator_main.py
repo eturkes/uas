@@ -55,9 +55,90 @@ class TestBuildPrompt:
         assert "UAS_RESULT" in prompt
 
     def test_includes_sandbox_constraints(self):
+        """The script the LLM emits has unrestricted network/install access.
+
+        Section 4 of PLAN.md: the prompt no longer says "UNRESTRICTED
+        NETWORK / PACKAGE INSTALLATION" as caps-lock advertising-style
+        copy because that wording confused the LLM into thinking it had
+        Bash available at GENERATION time.  The new wording explicitly
+        differentiates between "the script you emit can install packages
+        with uv pip install" and "the model generating the script has a
+        restricted toolset right now".
+        """
         prompt = build_prompt("any task", attempt=1)
-        assert "UNRESTRICTED NETWORK" in prompt
-        assert "PACKAGE INSTALLATION" in prompt
+        assert "uv pip install" in prompt
+        assert "subprocess" in prompt
+        assert "network" in prompt.lower()
+
+    def test_no_all_tools_enabled_contradiction(self):
+        """Section 4 of PLAN.md: the orchestrator's build_prompt MUST not
+        say "ALL TOOLS ENABLED" or similar at generation time, because the
+        model generating the script has Bash/Write/Edit/NotebookEdit/Task
+        DISABLED via --disallowed-tools.  The earlier wording was the
+        actual reason step 1 of the rehab project kept failing with
+        "Failed to extract code block from LLM response.": the LLM read
+        "ALL TOOLS ENABLED" in the orchestrator prompt, tried to use
+        Bash, fell back to bash code blocks or prose, and the parser
+        rejected the response.
+        """
+        prompt = build_prompt("any task", attempt=1)
+        assert "ALL TOOLS ENABLED" not in prompt
+        assert "FULL TOOL ACCESS" not in prompt
+        assert "USE TOOLS FREELY" not in prompt
+        assert "use them aggressively" not in prompt
+        # The role block should not list bash as an available tool for
+        # the generation step.
+        assert "bash execution" not in prompt
+
+    def test_disabled_tools_called_out_in_prompt(self):
+        """Section 4 of PLAN.md: the prompt must explicitly tell the LLM
+        which tools are DISABLED so it does not waste an attempt trying
+        to call them.
+        """
+        prompt = build_prompt("any task", attempt=1)
+        for tool in ("Write", "Edit", "NotebookEdit", "Bash", "Task"):
+            assert tool in prompt, (
+                f"{tool} must be mentioned in the disabled-tools list"
+            )
+        assert "DISABLED" in prompt
+
+    def test_allowed_research_tools_listed_in_prompt(self):
+        """The prompt must tell the LLM which research tools it CAN use,
+        otherwise it falls back on its training prior of "use Bash".
+        """
+        prompt = build_prompt("any task", attempt=1)
+        for tool in ("Read", "Grep", "Glob", "WebSearch", "WebFetch"):
+            assert tool in prompt, (
+                f"{tool} should be advertised as an available research tool"
+            )
+
+    def test_python_code_fence_required_in_prompt(self):
+        """Section 4 of PLAN.md: the prompt must explicitly require a
+        ```python fenced code block as the only output mechanism, and
+        must tell the LLM that bash code blocks are NOT extracted.
+        """
+        prompt = build_prompt("any task", attempt=1)
+        assert "```python" in prompt
+        # The bash-block warning should be present so the LLM (and any
+        # reflexion feedback that incorrectly suggested bash blocks) is
+        # corrected.
+        lower = prompt.lower()
+        assert ("bash" in lower and ("ignored" in lower or "not" in lower))
+
+    def test_throwaway_directory_warning_in_prompt(self):
+        """Section 4 of PLAN.md: the prompt must tell the LLM that any
+        files it creates with tools live in a throwaway temp directory
+        and are discarded.  Without this, the LLM happily creates files
+        via tools and reports completion in prose.
+        """
+        prompt = build_prompt("any task", attempt=1)
+        lower = prompt.lower()
+        assert "discarded" in lower or "deleted" in lower or "throwaway" in lower
+        assert (
+            "temporary directory" in lower
+            or "temp dir" in lower
+            or "throwaway" in lower
+        )
 
     def test_includes_common_failure_guidance(self):
         prompt = build_prompt("any task", attempt=1)
@@ -242,6 +323,29 @@ class TestBuildPromptRetryCleanMode:
         assert "task" in prompt
         assert "<current_code>" in prompt
         assert "<error>" in prompt
+
+    def test_retry_clean_includes_output_format_section(self):
+        """Section 4 of PLAN.md: the retry_clean prompt is intentionally
+        lean but it MUST still tell the LLM about the output contract.
+        Without this, every retry attempt fails with "Failed to extract
+        code block from LLM response." because the LLM has no instruction
+        about producing a ```python fence and falls back on its training
+        prior of writing prose or bash scripts.
+        """
+        prompt = build_prompt("task", attempt=2, mode="retry_clean")
+        assert "<output_format>" in prompt
+        assert "</output_format>" in prompt
+        assert "```python" in prompt
+        # The disabled-tools list must be present so the LLM does not try
+        # to call them on the retry path.
+        for tool in ("Write", "Edit", "NotebookEdit", "Bash", "Task"):
+            assert tool in prompt
+        # And the available read-only tools must be advertised.
+        for tool in ("Read", "Grep", "Glob", "WebSearch", "WebFetch"):
+            assert tool in prompt
+        # The "files are discarded" message must be present.
+        lower = prompt.lower()
+        assert "discarded" in lower or "throwaway" in lower
 
     def test_default_mode_is_full(self):
         # When mode is not specified, the rich prompt is returned.
@@ -795,22 +899,102 @@ class TestPreExecutionCheck:
 
 
 class TestToolCallDetection:
-    """Tool calls are now allowed — _contains_tool_calls always returns False."""
+    """Section 4 of the bind-mount recovery PLAN.
 
-    def test_allows_tool_call_xml(self):
-        response = "Sure, I'll help.\n<tool_call>\n<tool_name>write_file</tool_name>\n</tool_call>"
-        assert _contains_tool_calls(response) is False
+    ``_contains_tool_calls`` is consulted in the failure path (after
+    ``extract_code`` returned None) to decide between the generic
+    "Failed to extract code block" error and the more diagnostic "LLM
+    bypassed code-block contract via Bash" error.  It must detect the
+    main bypass patterns: bash/shell code fences, tool-use markup, and
+    first-person prose like "I created the files".  False negatives
+    fall back to the generic error message, so they are tolerable; false
+    positives only affect the previous_error string sent back to the
+    next attempt, never the success path.
+    """
 
-    def test_allows_tool_name_tag(self):
+    def test_detects_tool_call_xml(self):
+        response = (
+            "Sure, I'll help.\n"
+            "<tool_call>\n<tool_name>write_file</tool_name>\n</tool_call>"
+        )
+        assert _contains_tool_calls(response) is True
+
+    def test_detects_tool_name_tag(self):
         response = "Let me use a tool.\n<tool_name>read_file</tool_name>"
-        assert _contains_tool_calls(response) is False
+        assert _contains_tool_calls(response) is True
 
-    def test_no_tool_calls_in_normal_text(self):
+    def test_detects_tool_use_markup(self):
+        response = "<tool_use name='Bash'>echo hi</tool_use>"
+        assert _contains_tool_calls(response) is True
+
+    def test_detects_bash_code_fence(self):
+        """LLM responded with shell instructions, not Python."""
+        response = (
+            "Here is how to set up the project:\n"
+            "```bash\n"
+            "mkdir -p src/myproj\n"
+            "echo 'print(1)' > src/myproj/main.py\n"
+            "uv sync\n"
+            "```\n"
+        )
+        assert _contains_tool_calls(response) is True
+
+    def test_detects_sh_code_fence(self):
+        response = "```sh\ntouch foo.py\n```"
+        assert _contains_tool_calls(response) is True
+
+    def test_detects_shell_code_fence(self):
+        response = "```shell\nuv pip install requests\n```"
+        assert _contains_tool_calls(response) is True
+
+    def test_detects_i_have_created_files_prose(self):
+        """The exact failure mode from Section 4 of the PLAN."""
+        response = (
+            "I've created the following files in the workspace:\n"
+            "- src/rehab/__init__.py\n"
+            "- src/rehab/dashboard/__init__.py\n"
+            "- pyproject.toml\n"
+            "- README.md\n\n"
+            "All tests pass when run with pytest."
+        )
+        assert _contains_tool_calls(response) is True
+
+    def test_detects_i_created_project_skeleton_prose(self):
+        response = "I created the project skeleton with all required modules."
+        assert _contains_tool_calls(response) is True
+
+    def test_detects_i_installed_packages(self):
+        response = "I installed the packages listed in pyproject.toml using uv."
+        assert _contains_tool_calls(response) is True
+
+    def test_detects_i_set_up_venv(self):
+        response = "I set up a virtual environment and installed dependencies."
+        assert _contains_tool_calls(response) is True
+
+    def test_no_match_for_normal_refusal(self):
         response = "I cannot do that. Please try again."
         assert _contains_tool_calls(response) is False
 
-    def test_no_tool_calls_in_code_block(self):
+    def test_no_match_for_pure_python_block(self):
         response = '```python\nprint("hello")\n```'
+        assert _contains_tool_calls(response) is False
+
+    def test_no_match_for_empty_response(self):
+        assert _contains_tool_calls("") is False
+
+    def test_no_false_positive_on_python_only_response(self):
+        """A long, pure-Python response must not trip the detector."""
+        response = (
+            "```python\n"
+            "import os\n"
+            "import sys\n\n"
+            "def main():\n"
+            "    workspace = os.environ.get('WORKSPACE', '.')\n"
+            "    print('UAS_RESULT: ok')\n\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+            "```"
+        )
         assert _contains_tool_calls(response) is False
 
 

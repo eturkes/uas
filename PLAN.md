@@ -270,7 +270,7 @@ spec, (2) the current code state, and (3) the exact error stack trace.
 - [x] **6.6** Remove `_llm_retry_guidance()` and the hardcoded fallback
       guidance (lines 609-648). These injected opinions that conflicted
       with the Architect's spec.
-- [ ] **6.7** In the retry loop (line 1455), after a failed attempt:
+- [x] **6.7** In the retry loop (line 1455), after a failed attempt:
       1. Call `rollback_to_checkpoint()` (Phase 3) to reset the filesystem.
       2. Call `format_workspace()` (Phase 5) on the checkpoint state.
       3. Build the retry prompt in `"retry_clean"` mode.

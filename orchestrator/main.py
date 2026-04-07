@@ -1579,6 +1579,11 @@ def main():
     client = get_llm_client(role="coder")
     previous_error = None
     previous_code = None
+    # Phase 6.7: Track raw stderr/stdout from the prior sandbox execution
+    # so the retry_clean prompt's <error> section can be grounded in the
+    # actual sandbox output rather than a synthesized summary string.
+    previous_stderr: str | None = None
+    previous_stdout: str | None = None
     workspace_files = config.get("workspace_files")
 
     # Read step's package requirements from the architect
@@ -1627,12 +1632,23 @@ def main():
             if _attempt_branch:
                 logger.info("On branch %s", _attempt_branch)
 
+        # Phase 6.7: First attempt uses the rich "full" prompt; every retry
+        # is built in "retry_clean" mode so the LLM has zero memory of prior
+        # attempts. The retry_clean prompt is grounded in the post-rollback,
+        # post-format workspace state and the prior attempt's raw sandbox
+        # output (passed via previous_stderr / previous_stdout).
+        prompt_mode: Literal["full", "retry_clean"] = (
+            "full" if attempt == 1 else "retry_clean"
+        )
         prompt = build_prompt(task, attempt, previous_error, previous_code,
                               environment=environment,
                               workspace_files=workspace_files,
                               system_state=system_state,
                               knowledge=knowledge,
-                              test_files=test_files)
+                              test_files=test_files,
+                              previous_stderr=previous_stderr,
+                              previous_stdout=previous_stdout,
+                              mode=prompt_mode)
 
         # Section 7c: Determine N for this attempt (budget-aware gating).
         if not MINIMAL_MODE and previous_error:
@@ -1646,6 +1662,10 @@ def main():
             if code is None:
                 previous_error = "Failed to extract code block from LLM response."
                 previous_code = None
+                # Phase 6.7: No execution happened — clear any stale sandbox
+                # output so the next retry_clean prompt does not leak it.
+                previous_stderr = None
+                previous_stdout = None
                 logger.error("%s", previous_error)
                 continue
         else:
@@ -1657,6 +1677,8 @@ def main():
             except RuntimeError as exc:
                 previous_error = str(exc)
                 previous_code = None
+                previous_stderr = None
+                previous_stdout = None
                 logger.error("LLM generation failed: %s", exc)
                 continue
 
@@ -1684,6 +1706,8 @@ def main():
                 else:
                     previous_error = "Failed to extract code block from LLM response."
                 previous_code = None
+                previous_stderr = None
+                previous_stdout = None
                 logger.error("%s", previous_error)
                 logger.debug("Raw LLM response (%d chars):\n%s",
                              len(response), response[:2000])
@@ -1706,6 +1730,8 @@ def main():
                     + "\n".join(critical_errors)
                     + "\nFix this issue and regenerate."
                 )
+                previous_stderr = None
+                previous_stdout = None
                 logger.error("Pre-execution check failed: %s",
                              "; ".join(critical_errors))
                 continue
@@ -1794,6 +1820,10 @@ def main():
                         "Fix your implementation to make all tests pass. "
                         "Do NOT modify the test files."
                     )
+                    # Phase 6.7: ground the next retry_clean prompt in the
+                    # pytest output so it shows the actual test failure.
+                    previous_stderr = pytest_result["stderr"]
+                    previous_stdout = pytest_result["stdout"]
                     logger.error("Pytest gate FAILED on attempt %d.", attempt)
                     continue
                 logger.info("Pytest gate PASSED.")
@@ -1819,13 +1849,21 @@ def main():
             previous_error = (
                 f"[{exec_result.error_category}] {previous_error}"
             )
+        # Phase 6.7: Capture the prior attempt's raw sandbox output so the
+        # next iteration's retry_clean prompt can ground its <error> section
+        # in stderr/stdout instead of the synthesized summary string.
+        previous_stderr = result["stderr"]
+        previous_stdout = result["stdout"]
         logger.error("FAILED on attempt %d.", attempt)
 
-        # Phase 3.4: Roll back the workspace to the last uas-wip checkpoint
-        # so the next attempt starts from a clean filesystem state.
+        # Phase 3.4 / 6.7: Roll back the workspace to the last uas-wip
+        # checkpoint and format the checkpoint state so the next attempt's
+        # retry_clean prompt sees a pristine, normalized filesystem.
         if exec_result.revert_needed and _workspace and _step_id is not None:
             rollback_to_checkpoint(_workspace, _step_id)
             logger.info("Rolled back workspace to uas-wip checkpoint.")
+            format_workspace(_workspace)
+            logger.info("Formatted workspace after rollback.")
 
     logger.error("FAILED after %d attempts.", MAX_RETRIES)
     import json as _json

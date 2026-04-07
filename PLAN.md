@@ -256,7 +256,7 @@ spec, (2) the current code state, and (3) the exact error stack trace.
       step description from `UAS_TASK` env var or the `step_context` dict
       passed by the executor. This is the single source of truth for what
       the worker must produce.
-- [ ] **6.3** Define the `<current_code>` section: read the actual files
+- [x] **6.3** Define the `<current_code>` section: read the actual files
       from the workspace (not the previously generated code variable).
       Use `scan_workspace()` to get current file contents. This grounds
       the retry in filesystem reality, not the LLM's memory.

@@ -743,29 +743,41 @@ def _extract_immutable_spec(task: str,
 
 
 def _build_retry_clean_prompt(task: str,
-                              previous_code: str | None,
                               previous_error: str | None,
                               workspace_files: str | None,
                               step_context: dict | None = None) -> str:
     """Build the stripped-down retry prompt for Phase 6 context pruning.
 
     Contains only three sections: ``<spec>`` (immutable task spec),
-    ``<current_code>`` (the current state of the code), and ``<error>`` (the
-    failure output from the prior attempt). No environment scaffold, no
-    knowledge base, no attempt history, no retry guidance prose.
+    ``<current_code>`` (the current state of the code on disk), and
+    ``<error>`` (the failure output from the prior attempt). No
+    environment scaffold, no knowledge base, no attempt history, no
+    retry guidance prose.
 
     Phase 6.1 establishes the prompt skeleton.  Phase 6.2 grounds the
     ``<spec>`` section in the Architect's immutable step description via
-    ``_extract_immutable_spec``.  Subsequent tasks (6.3-6.4) refine the
-    other sections.
+    ``_extract_immutable_spec``.  Phase 6.3 grounds the ``<current_code>``
+    section in the workspace filesystem by re-scanning it via
+    ``scan_workspace`` at prompt-build time, so the retry sees the
+    post-rollback / post-format file state — never the previously
+    generated code variable, which lives only in the LLM's memory.
     """
     spec_text = _extract_immutable_spec(task, step_context)
     if not spec_text:
         spec_text = "(no spec available)"
     spec_section = f"<spec>\n{spec_text}\n</spec>"
 
-    if previous_code:
-        current_code_body = f"```python\n{previous_code}\n```"
+    # Phase 6.3: source <current_code> from filesystem reality. Re-scan the
+    # workspace at prompt-build time so the retry observes the actual file
+    # contents after any rollback / format step, not a stale snapshot or the
+    # LLM's prior output.
+    workspace_path = config.get("workspace") or os.environ.get("WORKSPACE")
+    live_workspace = ""
+    if isinstance(workspace_path, str) and os.path.isdir(workspace_path):
+        live_workspace = scan_workspace(workspace_path)
+
+    if live_workspace:
+        current_code_body = live_workspace
     elif workspace_files:
         current_code_body = workspace_files
     else:
@@ -812,7 +824,6 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
     if mode == "retry_clean":
         return _build_retry_clean_prompt(
             task=task,
-            previous_code=previous_code,
             previous_error=previous_error,
             workspace_files=workspace_files,
             step_context=step_context,

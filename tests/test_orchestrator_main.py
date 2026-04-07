@@ -198,18 +198,42 @@ class TestBuildPromptRetryCleanMode:
         spec_end = prompt.index("</spec>")
         assert "Implement quicksort" in prompt[spec_start:spec_end]
 
-    def test_retry_clean_includes_previous_code_in_current_code(self):
+    def test_retry_clean_ignores_previous_code_variable(self, tmp_path, monkeypatch):
+        # Phase 6.3: <current_code> is grounded in the filesystem, never in
+        # the previously generated code variable. Even when previous_code is
+        # supplied, its contents must not appear in the prompt.
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
         prompt = build_prompt(
             "task",
             attempt=2,
             previous_error="error",
-            previous_code="x = 42\nprint(x)",
+            previous_code="MEMORY_ONLY_TOKEN = 42\nprint(MEMORY_ONLY_TOKEN)",
             mode="retry_clean",
         )
         cc_start = prompt.index("<current_code>")
         cc_end = prompt.index("</current_code>")
-        assert "x = 42" in prompt[cc_start:cc_end]
-        assert "print(x)" in prompt[cc_start:cc_end]
+        cc_body = prompt[cc_start:cc_end]
+        assert "MEMORY_ONLY_TOKEN" not in cc_body
+        assert "print(MEMORY_ONLY_TOKEN)" not in cc_body
+
+    def test_retry_clean_reads_live_workspace_for_current_code(self, tmp_path, monkeypatch):
+        # Phase 6.3: scan_workspace() of the live workspace path provides the
+        # <current_code> body, so the retry sees the post-rollback file state.
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        (tmp_path / "main.py").write_text("LIVE_WORKSPACE_MARKER = 1\n")
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_error="error",
+            previous_code="stale_in_memory = 0",
+            mode="retry_clean",
+        )
+        cc_start = prompt.index("<current_code>")
+        cc_end = prompt.index("</current_code>")
+        cc_body = prompt[cc_start:cc_end]
+        assert "main.py" in cc_body
+        assert "LIVE_WORKSPACE_MARKER" in cc_body
+        assert "stale_in_memory" not in cc_body
 
     def test_retry_clean_includes_error_in_error_section(self):
         prompt = build_prompt(
@@ -223,7 +247,12 @@ class TestBuildPromptRetryCleanMode:
         err_end = prompt.index("</error>")
         assert "ZeroDivisionError: division by zero" in prompt[err_start:err_end]
 
-    def test_retry_clean_falls_back_to_workspace_files_when_no_previous_code(self):
+    def test_retry_clean_falls_back_to_workspace_files_when_no_live_workspace(
+        self, tmp_path, monkeypatch,
+    ):
+        # When no live workspace is resolvable on disk, the legacy
+        # workspace_files string is used as the fallback for <current_code>.
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path / "does-not-exist"))
         prompt = build_prompt(
             "task",
             attempt=2,

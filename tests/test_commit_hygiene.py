@@ -68,16 +68,38 @@ class TestEnsureGitRepoCreatesWipBranch:
         main_commit = _git(str(tmp_path), "rev-parse", "main")
         assert tag_commit == main_commit
 
-    def test_existing_repo_not_modified(self, tmp_path):
-        """ensure_git_repo returns early if .git already exists."""
+    def test_existing_healthy_repo_not_modified(self, tmp_path):
+        """ensure_git_repo is a no-op when a healthy uas-wip repo exists."""
         _init_workspace(tmp_path)
+        ws = str(tmp_path)
         subprocess.run(
             ["git", "init", "-b", "main"],
-            cwd=str(tmp_path), capture_output=True, check=True,
+            cwd=ws, capture_output=True, check=True,
         )
-        ensure_git_repo(str(tmp_path))
-        # Should still be on main since ensure_git_repo returned early
-        assert _current_branch(str(tmp_path)) == "main"
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=ws, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Initial workspace state"],
+            cwd=ws, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "tag", "-f", "uas-main"],
+            cwd=ws, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "checkout", "-b", "uas-wip"],
+            cwd=ws, capture_output=True, check=True,
+        )
+
+        before_log = _git(ws, "log", "--all", "--format=%H")
+
+        ensure_git_repo(ws)
+
+        # Healthy repo should be left exactly as it was
+        assert _current_branch(ws) == "uas-wip"
+        assert _git(ws, "log", "--all", "--format=%H") == before_log
 
 
 class TestGitCheckpointOnCurrentBranch:

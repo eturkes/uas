@@ -57,7 +57,7 @@ text intact for posterity.
 
 ---
 
-### Section 1: Make `ensure_git_repo` repair partial git state  [PENDING]
+### Section 1: Make `ensure_git_repo` repair partial git state  [COMPLETED]
 
 **Why:** The Containerfile fix prevents NEW runs from hitting the dubious-
 ownership trap, but any workspace that already has a half-initialized

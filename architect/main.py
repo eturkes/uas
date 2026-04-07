@@ -297,7 +297,7 @@ data/
 
 
 def ensure_git_repo(workspace: str) -> None:
-    """Initialize a git repo in the workspace if it doesn't exist yet.
+    """Initialize a git repo in the workspace, or repair partial state.
 
     After initialization, tags the initial commit as ``uas-main`` to mark
     the immutable pre-execution filesystem state, then creates and checks
@@ -305,72 +305,183 @@ def ensure_git_repo(workspace: str) -> None:
     ``main``.  The wip branch is squash-merged back into ``main`` by
     :func:`finalize_git` at the end of a successful run.
 
-    Initializes when the workspace has at least one non-dot entry, or
-    when any subdirectory contains ``.py`` files.  Logs a warning if
-    initialization fails.
+    When ``.git/`` is missing, initializes the repo from scratch (provided
+    the workspace has at least one non-dot entry or a ``.py`` file in any
+    subdirectory).  When ``.git/`` already exists, this function inspects
+    the repo and repairs any partial state left behind by an earlier
+    interrupted run:
+
+    * Half-initialized (init done, no commit yet): finishes the missing
+      ``add``/``commit``/``tag``/``checkout`` steps.
+    * Has commits but no ``uas-wip`` branch: recreates ``uas-wip`` from
+      the current ``HEAD`` so subsequent steps can checkpoint, without
+      retagging ``uas-main``.
+    * Healthy (has commits and ``uas-wip``): no-op.
+
+    All git failures are logged at WARNING and never raised past the
+    function boundary.
     """
     try:
         git_dir = os.path.join(workspace, ".git")
-        if os.path.isdir(git_dir):
+
+        if not os.path.isdir(git_dir):
+            _init_fresh_git_repo(workspace)
             return
 
-        # Init if workspace has any non-dot entry
-        entries = [
-            e for e in os.listdir(workspace)
-            if not e.startswith(".")
-        ]
-        if len(entries) < 1:
-            # Check subdirectories for .py files as a fallback
-            has_py = False
-            for root, dirs, files in os.walk(workspace):
-                dirs[:] = [d for d in dirs if not d.startswith(".")]
-                if any(f.endswith(".py") for f in files):
-                    has_py = True
-                    break
-            if not has_py:
+        # .git/ exists -- inspect state and repair if needed.
+        log_result = subprocess.run(
+            ["git", "log", "-1"],
+            cwd=workspace,
+            capture_output=True,
+        )
+        has_commits = log_result.returncode == 0
+
+        wip_check = subprocess.run(
+            ["git", "show-ref", "--verify", "refs/heads/uas-wip"],
+            cwd=workspace,
+            capture_output=True,
+        )
+        has_wip = wip_check.returncode == 0
+
+        if has_commits and has_wip:
+            # Healthy repo -- nothing to do.
+            return
+
+        if not has_commits:
+            # Half-initialized: finish the missing init steps.
+            gitignore_path = os.path.join(workspace, ".gitignore")
+            if not os.path.exists(gitignore_path):
+                with open(gitignore_path, "w", encoding="utf-8") as f:
+                    f.write(_GITIGNORE_CONTENT)
+
+            add_result = subprocess.run(
+                ["git", "add", "-A"],
+                cwd=workspace,
+                capture_output=True,
+            )
+            if add_result.returncode != 0:
+                logger.warning(
+                    "Git repair (add) failed in %s: %s",
+                    workspace,
+                    (add_result.stderr or b"").decode(
+                        "utf-8", errors="replace",
+                    ),
+                )
                 return
 
-        # Write .gitignore
-        gitignore_path = os.path.join(workspace, ".gitignore")
-        if not os.path.exists(gitignore_path):
-            with open(gitignore_path, "w", encoding="utf-8") as f:
-                f.write(_GITIGNORE_CONTENT)
+            commit_result = subprocess.run(
+                ["git", "commit", "-m", "Initial workspace state"],
+                cwd=workspace,
+                capture_output=True,
+            )
+            if commit_result.returncode != 0:
+                logger.warning(
+                    "Git repair (commit) failed in %s: %s",
+                    workspace,
+                    (commit_result.stderr or b"").decode(
+                        "utf-8", errors="replace",
+                    ),
+                )
+                return
 
-        subprocess.run(
-            ["git", "init", "-b", "main"],
-            cwd=workspace,
-            capture_output=True,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=workspace,
-            capture_output=True,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "Initial workspace state"],
-            cwd=workspace,
-            capture_output=True,
-            check=True,
-        )
-        # Tag the initial commit as the immutable baseline for the run
-        subprocess.run(
-            ["git", "tag", "-f", "uas-main"],
-            cwd=workspace,
-            capture_output=True,
-            check=True,
-        )
-        # Create a wip branch for checkpoint commits
+            subprocess.run(
+                ["git", "tag", "-f", "uas-main"],
+                cwd=workspace,
+                capture_output=True,
+            )
+
+            if has_wip:
+                subprocess.run(
+                    ["git", "checkout", "uas-wip"],
+                    cwd=workspace,
+                    capture_output=True,
+                )
+            else:
+                subprocess.run(
+                    ["git", "checkout", "-b", "uas-wip"],
+                    cwd=workspace,
+                    capture_output=True,
+                )
+            logger.debug(
+                "Repaired half-initialized git repo in %s", workspace,
+            )
+            return
+
+        # Has commits but no uas-wip branch (post-finalize or interrupted).
+        # Recreate uas-wip from the current HEAD without retagging uas-main:
+        # we don't know what the original baseline was, and the existing
+        # main history is the user's source of truth.
         subprocess.run(
             ["git", "checkout", "-b", "uas-wip"],
             cwd=workspace,
             capture_output=True,
-            check=True,
         )
-        logger.debug("Git repo initialized in %s (on uas-wip branch)", workspace)
+        logger.debug(
+            "Recreated uas-wip branch from HEAD in %s", workspace,
+        )
     except Exception:
         logger.warning("Git init failed in %s", workspace, exc_info=True)
+
+
+def _init_fresh_git_repo(workspace: str) -> None:
+    """Run a fresh ``git init`` flow when ``.git/`` does not exist."""
+    # Init if workspace has any non-dot entry
+    entries = [
+        e for e in os.listdir(workspace)
+        if not e.startswith(".")
+    ]
+    if len(entries) < 1:
+        # Check subdirectories for .py files as a fallback
+        has_py = False
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            if any(f.endswith(".py") for f in files):
+                has_py = True
+                break
+        if not has_py:
+            return
+
+    # Write .gitignore
+    gitignore_path = os.path.join(workspace, ".gitignore")
+    if not os.path.exists(gitignore_path):
+        with open(gitignore_path, "w", encoding="utf-8") as f:
+            f.write(_GITIGNORE_CONTENT)
+
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=workspace,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=workspace,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "Initial workspace state"],
+        cwd=workspace,
+        capture_output=True,
+        check=True,
+    )
+    # Tag the initial commit as the immutable baseline for the run
+    subprocess.run(
+        ["git", "tag", "-f", "uas-main"],
+        cwd=workspace,
+        capture_output=True,
+        check=True,
+    )
+    # Create a wip branch for checkpoint commits
+    subprocess.run(
+        ["git", "checkout", "-b", "uas-wip"],
+        cwd=workspace,
+        capture_output=True,
+        check=True,
+    )
+    logger.debug(
+        "Git repo initialized in %s (on uas-wip branch)", workspace,
+    )
 
 
 def _ensure_wip_branch(workspace: str) -> bool:

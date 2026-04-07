@@ -252,7 +252,7 @@ spec, (2) the current code state, and (3) the exact error stack trace.
         knowledge, approach, workspace files, full context.
       - `"retry_clean"` (attempt 2+): stripped-down prompt with only three
         sections: `<spec>`, `<current_code>`, `<error>`.
-- [ ] **6.2** Define the `<spec>` section: extract the Architect's immutable
+- [x] **6.2** Define the `<spec>` section: extract the Architect's immutable
       step description from `UAS_TASK` env var or the `step_context` dict
       passed by the executor. This is the single source of truth for what
       the worker must produce.

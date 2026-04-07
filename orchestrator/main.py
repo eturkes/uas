@@ -705,10 +705,48 @@ def _llm_retry_guidance(task: str, attempt: int, code_section: str,
         return None
 
 
+# Phase 6.2: Marker appended by ``architect.spec_generator.build_task_from_spec``
+# when prior-step context is concatenated onto the immutable step description.
+# Splitting on this marker recovers just the Architect's directive.
+_TASK_CONTEXT_MARKER = "\n\nContext from previous steps:"
+
+
+def _extract_immutable_spec(task: str,
+                            step_context: dict | None = None) -> str:
+    """Return the Architect's immutable step description.
+
+    Phase 6.2: the ``<spec>`` section in the ``retry_clean`` prompt is the
+    single source of truth for what the worker must produce.  It is sourced
+    from (in priority order):
+
+    1. ``step_context["step_spec"]`` if a caller provides it.  Phase 6.8 will
+       populate this from ``architect._build_step_context()`` so the full
+       step spec (title + description + verify criteria + outputs) is
+       available without re-parsing the ``UAS_TASK`` blob.
+    2. The ``task`` argument, which the Orchestrator reads from the
+       ``UAS_TASK`` env var (set by ``architect.executor.run_orchestrator``).
+       Any prior-step context appended by ``build_task_from_spec`` is
+       stripped so only the immutable directive remains.
+    3. The ``UAS_TASK`` env var read directly, as a last-resort fallback for
+       in-process callers that did not thread ``task`` through.
+    """
+    if step_context and isinstance(step_context, dict):
+        spec = step_context.get("step_spec")
+        if isinstance(spec, str) and spec.strip():
+            return spec.strip()
+
+    source = task or os.environ.get("UAS_TASK", "")
+    if not source:
+        return ""
+    spec, _, _ = source.partition(_TASK_CONTEXT_MARKER)
+    return spec.strip()
+
+
 def _build_retry_clean_prompt(task: str,
                               previous_code: str | None,
                               previous_error: str | None,
-                              workspace_files: str | None) -> str:
+                              workspace_files: str | None,
+                              step_context: dict | None = None) -> str:
     """Build the stripped-down retry prompt for Phase 6 context pruning.
 
     Contains only three sections: ``<spec>`` (immutable task spec),
@@ -716,12 +754,15 @@ def _build_retry_clean_prompt(task: str,
     failure output from the prior attempt). No environment scaffold, no
     knowledge base, no attempt history, no retry guidance prose.
 
-    Phase 6.1 establishes the prompt skeleton. Subsequent tasks (6.2-6.4)
-    refine where each section's content comes from (e.g. ``<current_code>``
-    will be sourced from a fresh ``scan_workspace()`` call instead of the
-    in-memory ``previous_code`` variable).
+    Phase 6.1 establishes the prompt skeleton.  Phase 6.2 grounds the
+    ``<spec>`` section in the Architect's immutable step description via
+    ``_extract_immutable_spec``.  Subsequent tasks (6.3-6.4) refine the
+    other sections.
     """
-    spec_section = f"<spec>\n{task}\n</spec>"
+    spec_text = _extract_immutable_spec(task, step_context)
+    if not spec_text:
+        spec_text = "(no spec available)"
+    spec_section = f"<spec>\n{spec_text}\n</spec>"
 
     if previous_code:
         current_code_body = f"```python\n{previous_code}\n```"
@@ -745,6 +786,7 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  knowledge: dict | None = None,
                  attempt_history: list[dict] | None = None,
                  test_files: dict[str, str] | None = None,
+                 step_context: dict | None = None,
                  mode: Literal["full", "retry_clean"] = "full") -> str:
     """Build the structured prompt for code generation.
 
@@ -761,6 +803,11 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
       (the current state of the code), and ``<error>`` (the failure output
       from the prior attempt). The LLM is given no memory of prior attempts;
       the workspace filesystem is the source of truth.
+
+    Phase 6.2: ``step_context`` carries the Architect's structured step
+    metadata (e.g. ``step_spec``).  When supplied, the ``retry_clean``
+    branch uses it as the authoritative source for the ``<spec>`` section
+    instead of parsing the ``UAS_TASK`` blob.
     """
     if mode == "retry_clean":
         return _build_retry_clean_prompt(
@@ -768,6 +815,7 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
             previous_code=previous_code,
             previous_error=previous_error,
             workspace_files=workspace_files,
+            step_context=step_context,
         )
 
     pkg_hint = ""

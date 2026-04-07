@@ -251,6 +251,79 @@ class TestBuildPromptRetryCleanMode:
         assert "<constraints>" in prompt
 
 
+class TestRetryCleanSpecExtraction:
+    """Phase 6.2: <spec> contains only the immutable Architect directive."""
+
+    def test_spec_strips_appended_prior_step_context(self):
+        # build_task_from_spec appends "Context from previous steps:" to the
+        # immutable description. The retry_clean spec must drop that suffix.
+        task = (
+            "Implement quicksort.\n\n"
+            "Context from previous steps:\n"
+            "<file_signatures>def helper(x: int) -> int</file_signatures>"
+        )
+        prompt = build_prompt(
+            task,
+            attempt=2,
+            previous_error="boom",
+            previous_code="pass",
+            mode="retry_clean",
+        )
+        spec_start = prompt.index("<spec>")
+        spec_end = prompt.index("</spec>")
+        spec_body = prompt[spec_start:spec_end]
+        assert "Implement quicksort." in spec_body
+        assert "Context from previous steps:" not in spec_body
+        assert "<file_signatures>" not in spec_body
+
+    def test_spec_uses_step_context_step_spec_when_provided(self):
+        # When the caller threads a step_context with a step_spec key, that
+        # value wins over the parsed task string.
+        prompt = build_prompt(
+            "raw task blob with extras",
+            attempt=2,
+            previous_error="err",
+            previous_code="pass",
+            step_context={"step_spec": "Authoritative step spec text."},
+            mode="retry_clean",
+        )
+        spec_start = prompt.index("<spec>")
+        spec_end = prompt.index("</spec>")
+        spec_body = prompt[spec_start:spec_end]
+        assert "Authoritative step spec text." in spec_body
+        assert "raw task blob with extras" not in spec_body
+
+    def test_spec_falls_back_to_uas_task_env_var(self, monkeypatch):
+        # If task is empty, _extract_immutable_spec reads UAS_TASK directly.
+        monkeypatch.setenv("UAS_TASK", "Spec from env var.")
+        prompt = build_prompt(
+            "",
+            attempt=2,
+            previous_error="err",
+            previous_code="pass",
+            mode="retry_clean",
+        )
+        spec_start = prompt.index("<spec>")
+        spec_end = prompt.index("</spec>")
+        spec_body = prompt[spec_start:spec_end]
+        assert "Spec from env var." in spec_body
+
+    def test_spec_handles_empty_task_and_no_env_var(self, monkeypatch):
+        monkeypatch.delenv("UAS_TASK", raising=False)
+        prompt = build_prompt(
+            "",
+            attempt=2,
+            previous_error="err",
+            previous_code="pass",
+            mode="retry_clean",
+        )
+        spec_start = prompt.index("<spec>")
+        spec_end = prompt.index("</spec>")
+        spec_body = prompt[spec_start:spec_end]
+        # Sentinel placeholder, not a crash.
+        assert "(no spec available)" in spec_body
+
+
 class TestParseUasResult:
     def test_valid_result(self):
         stdout = 'some output\nUAS_RESULT: {"status": "ok", "files_written": ["a.txt"], "summary": "done"}\n'

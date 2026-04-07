@@ -8,6 +8,7 @@ import pytest
 
 from architect.main import parse_args, write_json_output, main
 from architect.state import init_state, add_steps
+from orchestrator.llm_client import ClaudeCodeClient, LLMResult
 
 
 class TestOutputFlag:
@@ -110,6 +111,23 @@ class TestWriteJsonOutput:
 
 
 class TestOutputIntegration:
+    @pytest.fixture(autouse=True)
+    def _isolate_llm(self, monkeypatch):
+        """Prevent any unmocked LLM call from reaching the real Claude CLI.
+
+        The integration paths in main() touch many LLM-backed helpers
+        (workspace validation, guardrail review, dependency distillation,
+        re-planning, etc.) that have no global timeout. Stub the client
+        out so they exercise their built-in fallback paths instead of
+        hanging on a real subprocess. Also disable TDD enforcement so
+        ``fix_tdd_violations`` is not invoked with an empty response.
+        """
+        monkeypatch.setattr(
+            ClaudeCodeClient, "generate",
+            lambda self, prompt: LLMResult(text="", usage={"input": 0, "output": 0}),
+        )
+        monkeypatch.setenv("UAS_TDD_ENFORCE", "0")
+
     @patch("architect.main.insert_integration_checkpoints", side_effect=lambda s: s)
     @patch("architect.main.split_coupled_steps", side_effect=lambda s: s)
     @patch("architect.main.enforce_minimum_steps", side_effect=lambda g, s, c: s)

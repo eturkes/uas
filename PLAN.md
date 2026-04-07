@@ -367,6 +367,100 @@ goal_001.txt` and confirm `progress.md` records at least one completed
 step before flipping Section 3 to `[COMPLETED]` with a final result
 paragraph.
 
+**Status note (2026-04-07, after Section 5 landed — fourth attempt):**
+Section 5 was committed as `6b1b721` and the container image was rebuilt
+via `install.sh` (image timestamp `2026-04-07 09:22:29`, after the Section
+5 commit at `09:19:14`). Re-ran end-to-end against the same `fa0d38fa9ef6`
+run state by invoking the orchestrator subprocess directly (the
+`~/.local/bin/uas` wrapper requires `-it` and is unusable from a
+non-TTY context — this is a process note, not a code bug):
+
+```
+docker run -d --privileged --name uas-run-1aac882308ef \
+  -e IS_SANDBOX=1 -e UAS_SANDBOX_MODE=local \
+  -e UAS_HOST_UID=$(id -u) -e UAS_HOST_GID=$(id -g) \
+  -v /home/eturkes/pro/uas/rehab/.uas_auth:/root/.claude:Z \
+  -v /home/eturkes/pro/uas/rehab/.uas_auth/claude.json:/root/.claude.json:Z \
+  -v /home/eturkes/pro/uas/rehab:/workspace:Z \
+  -w /workspace uas-engine:latest --resume --goal-file goal_001.txt
+```
+
+Two acceptance criteria progressed; the third did not:
+
+- **Git failure: STILL FIXED.** No "Failed to create attempt branch"
+  warnings. The orchestrator successfully created
+  `refs/heads/uas/step-1/attempt-1` from `uas-wip`. Section 1's repair
+  logic still works.
+- **Code-block extraction: STILL FIXED.** Step 1 attempt 1's main
+  orchestrator subprocess returned exit code 0 in 69.2s after running the
+  LLM-generated Python script in the sandbox. The script wrote all 11
+  expected files (`pyproject.toml`, `.python-version`, `.gitignore`,
+  `CLAUDE.md`, `README.md`, six `__init__.py` files under `src/rehab/`)
+  and the lint pre-check from Section 5 correctly scoped to those files
+  and passed. The "Failed to extract code block" failure does NOT recur.
+- **First completed step: STILL NOT MET.** Immediately after the main
+  script succeeded, the architect ran `verify_step_output` which spawns
+  a second orchestrator subprocess to generate and run a verifier
+  script. The verifier script printed `VERIFICATION PASSED` and exited
+  0, but the verification orchestrator subprocess still exited with
+  code 1 because the **same Section 5 lint pre-check** fired against
+  the workspace's pre-existing `tests/test_config.py` and friends. The
+  architect's `verify_step_output` saw `exit_code != 0` and returned
+  the verifier's stdout (`"VERIFICATION PASSED"`) verbatim as the error
+  string, which is why the architect log line reads
+  `Step 1 FAILED. Error: VERIFICATION PASSED` — a confusing surface
+  symptom of an invisible (to the architect) lint failure inside the
+  verification orchestrator subprocess.
+
+Direct reproduction of the verification-side failure outside the
+end-to-end run, against the post-step-1 workspace:
+
+```
+docker run --rm -v /home/eturkes/pro/uas/rehab:/workspace:Z \
+  -e IS_SANDBOX=1 -e UAS_SANDBOX_MODE=local \
+  -e UAS_TASK="Write a Python verification script that checks: \
+pyproject.toml exists. Print 'VERIFICATION PASSED' if all checks pass, \
+exit 0. The script must be READ-ONLY." \
+  -w /workspace --entrypoint /bin/bash uas-engine:latest \
+  -c "PYTHONPATH=/uas python3 -m orchestrator.main"
+```
+
+prints (per attempt, all 3 attempts):
+
+```
+===STDOUT_START===
+pyproject.toml exists at /workspace/pyproject.toml
+VERIFICATION PASSED
+
+===STDOUT_END===
+Lint pre-check found 18 fatal error(s):
+  F401 [*] `os` imported but unused
+   --> tests/test_config.py:4:8
+  ...
+ExecutionResult: {"success":false,"revert_needed":true,
+  "error_category":"lint_fatal", ...}
+FAILED on attempt N.
+```
+
+After `MAX_RETRIES`, the orchestrator subprocess exits 1 and rolls back
+the workspace to `uas-wip`, undoing the main step's file writes.
+
+Root cause: Section 5's fix at `orchestrator/main.py:1908-1914` only
+scopes lint to `py_files_written` when `parse_uas_result` returns a
+non-None result. Verifier scripts have no reason to print `UAS_RESULT`
+(the verifier prompt at `architect/main.py:3761-3787` doesn't ask for
+it), so `parse_uas_result` returns None, `py_files_written` stays None,
+and the orchestrator falls through to `lint_workspace(_workspace)` —
+the legacy "lint everything" path Section 5 was supposed to retire.
+
+This is a **new, distinct failure mode** unrelated to anything
+previously captured. Per step 5 of this section, it is captured as
+Section 6 below: "Stop the lint pre-check from re-poisoning verification
+orchestrator runs". Section 3 stays `[PENDING]` until Section 6's fix
+lands and this verification can be re-attempted. The current rehab
+workspace is left on branch `uas/step-1/attempt-1` with the failed run
+state intact for forensics; do NOT delete it without user confirmation.
+
 ---
 
 ### Section 4: Stop the LLM from creating files via Bash redirection  [COMPLETED]
@@ -834,6 +928,206 @@ acceptance criterion of Section 3 — not Section 5. Section 5's own
 acceptance criteria (existing tests pass, new regression test passes)
 are met. Section 3 stays `[PENDING]` until the rehab end-to-end run is
 re-attempted with this fix in the rebuilt container.
+
+---
+
+### Section 6: Stop the lint pre-check from re-poisoning verification orchestrator runs  [PENDING]
+
+**Why:** Section 5 fixed the lint pre-check for the **main step**
+orchestrator path by scoping `lint_workspace` to the `.py` files the
+script reported in `UAS_RESULT.files_written`. The fix preserves a
+fallback at `orchestrator/main.py:1913-1914`: when `parse_uas_result`
+returns None, lint the entire workspace. The fallback's stated purpose
+in the Section 5 comment is "so older scripts that predate the
+UAS_RESULT contract still get checked".
+
+The fallback re-introduces the exact bug Section 5 was meant to fix
+whenever the orchestrator subprocess is invoked for a script that has
+no reason to print `UAS_RESULT`. The `verify_step_output` path in
+`architect/main.py:3789` is one such caller: it spawns a fresh
+orchestrator subprocess with a verifier task whose prompt
+(`architect/main.py:3761-3787`) explicitly asks the script to print
+`VERIFICATION PASSED`/`VERIFICATION FAILED`, never `UAS_RESULT`.
+
+End-to-end consequence (observed during the Section 3 re-verification
+described in Section 3's fourth status note):
+
+1. Step 1's main orchestrator subprocess runs the LLM-generated Python
+   script. It prints `UAS_RESULT: {"status":"ok","files_written":[...]}`
+   listing the 11 expected scaffold files. Section 5's fix scopes lint
+   to those files, lint passes, orchestrator exits 0.
+2. Architect runs `verify_step_output(step, PROJECT_DIR)`.
+3. A second orchestrator subprocess is launched with the verifier task.
+   The LLM emits a Python script that does
+   `assert (workspace / "pyproject.toml").exists()` and prints
+   `VERIFICATION PASSED`. Sandbox exit code 0.
+4. Lint pre-check at `orchestrator/main.py:1880-1914` runs.
+   `parse_uas_result(stdout)` returns None because the verifier script
+   doesn't emit `UAS_RESULT`. `py_files_written` stays None. Falls into
+   `else: lint_errors = lint_workspace(_workspace)` at line 1913-1914.
+5. `lint_workspace` globs every `*.py` and finds 18 `F401` errors in
+   `tests/test_config.py` (and other pre-existing files committed to
+   `uas-wip` from before the user's first uas run).
+6. Verification orchestrator subprocess marks the attempt as
+   `lint_fatal`, rolls back the workspace to `uas-wip` (undoing the
+   main step's writes from step 1!), retries 3 times, then exits 1.
+7. Architect's `verify_step_output` sees `result["exit_code"] != 0`
+   and returns `stdout or stderr or "Verification script failed"`.
+   `stdout` (extracted via `extract_sandbox_stdout`) contains the
+   verifier's actual output: `VERIFICATION PASSED`.
+8. The architect logs `Step 1 FAILED. Error: VERIFICATION PASSED` —
+   a confusing surface symptom because the architect cannot see the
+   orchestrator subprocess's stderr-only logger output where the
+   `Lint pre-check found 18 fatal error(s)` warning was emitted.
+9. Step 1 is recorded as `failed`; the next architect attempt
+   regenerates the spec and starts over. The cycle repeats forever
+   because the lint pre-check is deterministic against pre-existing
+   files.
+
+Direct reproduction (against the current `rehab/` workspace, which
+still contains `tests/test_config.py` with `import os`/`import pytest`
+unused):
+
+```
+docker run --rm \
+  -v /home/eturkes/pro/uas/rehab:/workspace:Z \
+  -e IS_SANDBOX=1 -e UAS_SANDBOX_MODE=local \
+  -e UAS_TASK="Write a Python verification script that checks: \
+pyproject.toml exists. Print 'VERIFICATION PASSED' if all checks pass, \
+exit 0. The script must be READ-ONLY." \
+  -w /workspace --entrypoint /bin/bash uas-engine:latest \
+  -c "PYTHONPATH=/uas python3 -m orchestrator.main"
+```
+
+reproduces the failure deterministically: 3 attempts each print
+`VERIFICATION PASSED` from the verifier sandbox followed by
+`Lint pre-check found 18 fatal error(s)` and
+`ExecutionResult: {"success":false,...,"error_category":"lint_fatal"}`,
+ending in `FAILED after 3 attempts.`
+
+**Files to modify:**
+
+- `orchestrator/main.py` lines 1880-1914 — the lint pre-check scoping
+  block from Section 5. The `else: lint_errors = lint_workspace(_workspace)`
+  fallback is the bug. Decide what scoping to apply when the script does
+  not emit `UAS_RESULT`.
+- `architect/main.py` lines 3761-3787 — `verify_step_output`'s task
+  template. Optionally add a `UAS_RESULT` instruction if option 3 is
+  chosen.
+- `orchestrator/main.py` near `_run_local`/`run_orchestrator` env
+  setup, OR `architect/executor.py:230-271` — if option 4 is chosen,
+  thread an env var that disables the lint pre-check for caller-opted
+  paths (verification, future read-only orchestrators).
+- `tests/test_orchestrator_main.py::TestLintPreCheckScopedToWrittenFiles`
+  — must be updated/extended to cover the new behavior. Section 5's
+  `test_lint_falls_back_to_full_workspace_without_uas_result` currently
+  asserts the buggy fallback. It needs to be replaced with a test that
+  asserts the **new** behavior (whichever option is chosen).
+
+**Possible fixes (pick one or combine):**
+
+1. **Skip lint pre-check entirely when `UAS_RESULT` is missing.**
+   Smallest change: replace
+   `else: lint_errors = lint_workspace(_workspace)` with `pass`. The
+   rationale: a script that doesn't emit `UAS_RESULT` has not made any
+   claim about what it wrote, so the orchestrator has no way to scope
+   the check fairly. Better to skip than to run a check guaranteed to
+   blame pre-existing errors on the current attempt. Risk: a script
+   that genuinely creates a broken `.py` file but forgets `UAS_RESULT`
+   slips through. Mitigate by combining with option 2.
+
+2. **Lint files changed in this attempt according to git.** Use
+   `git diff --name-only HEAD -- '*.py'` (or `HEAD~1` against the
+   attempt branch's parent, which is `uas-wip`) to get the actual
+   list of `.py` files this attempt touched, then pass that to
+   `lint_workspace(files=...)`. Pro: doesn't trust the LLM to populate
+   `UAS_RESULT`, doesn't blame pre-existing files, works for both the
+   main path and the verification path uniformly. Con: needs the
+   orchestrator to know what the attempt's parent commit is, which is
+   currently implicit in the branch name `uas/step-N/attempt-M`.
+
+3. **Make the verifier task emit `UAS_RESULT`.** Add to the task at
+   `architect/main.py:3761-3787`:
+   `Print 'UAS_RESULT: {"status":"ok","files_written":[]}' as the last
+   line of stdout.` This makes verifier scripts honor the same contract
+   as main-step scripts, so Section 5's existing scoping logic skips
+   lint (empty `files_written` → no `.py` files → lint skipped). Pro:
+   smallest behavioral change for the orchestrator. Con: papers over
+   the underlying issue — any other future caller of the orchestrator
+   subprocess that doesn't emit `UAS_RESULT` re-trips the bug.
+
+4. **Add an env var (`UAS_SKIP_LINT_PRECHECK=1`) the architect can set
+   before invoking the verification orchestrator.** Explicit
+   opt-out, no behavior change for callers that don't set it. Con:
+   adds another orchestrator config knob; doesn't fix the bug for
+   any future architect-side caller that forgets to set the env var.
+
+5. **Combine options 1 and 2.** Default to "lint files git says were
+   touched" (option 2). Fall back to "skip lint entirely" (option 1)
+   only when git says no `.py` files were touched OR when the workspace
+   is not a git repo.
+
+**Recommendation:** Start with option **2** (git-diff scoping). It is
+the most defensible because it does not trust the LLM (neither for
+`UAS_RESULT` nor for the script's behavior), it works uniformly for
+the main path AND the verification path, and it gives the right answer
+even for callers that don't know about the lint pre-check. Section 5's
+`UAS_RESULT`-based scoping can stay as a sanity-check overlay (lint the
+union of "git-changed `.py` files" and "files_written-claimed `.py`
+files"), or be removed entirely in favor of the git approach.
+
+If option 2 turns out to require more refactoring than expected (the
+orchestrator subprocess needs to know the attempt branch's parent
+commit), fall back to option **1** (skip when no `UAS_RESULT`) which
+is a one-line change. The risk of option 1 is bounded: scripts that
+create broken `.py` files without `UAS_RESULT` will still be caught
+later by the architect's guardrail scan
+(`architect/main.py:5078-5114`) and the full pytest suite
+(`architect/main.py:5175-5190`).
+
+**Tests to add or update:**
+
+- `tests/test_orchestrator_main.py::TestLintPreCheckScopedToWrittenFiles::test_lint_falls_back_to_full_workspace_without_uas_result`
+  — currently asserts `lint_workspace(workspace)` is called as the
+  legacy fallback. Replace with a test that asserts the new behavior:
+  for option 1, that `lint_workspace` is NOT called when `UAS_RESULT`
+  is missing; for option 2, that it is called with the git-diff file
+  list; for option 3, no orchestrator change is needed but a new test
+  in `tests/test_verification_loop.py` should assert the verifier
+  prompt template includes `UAS_RESULT` instructions.
+- `tests/test_orchestrator_main.py` — new regression test that
+  reproduces the verification scenario end-to-end: monkeypatch
+  `run_in_sandbox` to return a sandbox stdout containing
+  `VERIFICATION PASSED` (no `UAS_RESULT`), seed the workspace with a
+  pre-existing `tests/test_config.py` containing `import os` unused,
+  and assert the orchestrator subprocess exits 0 (lint skipped /
+  scoped, no `lint_fatal`). This is the direct analogue of Section 5's
+  `test_pre_existing_unused_import_does_not_fail_attempt` but for the
+  no-`UAS_RESULT` path.
+- `tests/test_verification_loop.py` — add an end-to-end-ish test that
+  exercises `verify_step_output` against a workspace with pre-existing
+  unused-import files. Assert the function returns None (success).
+
+**Acceptance criteria:**
+
+- `python3 -m pytest tests/test_orchestrator_main.py tests/test_janitor.py
+  tests/test_verification_loop.py` passes including the new regression
+  test(s).
+- Direct manual reproduction (the `docker run ... -e UAS_TASK="Write a
+  Python verification script..."` command in the **Why** section above)
+  no longer produces `Lint pre-check found 18 fatal error(s)` and the
+  orchestrator subprocess exits 0 on attempt 1.
+- Re-run `cd rehab && uas --resume --goal-file goal_001.txt` against
+  the existing `fa0d38fa9ef6` run state. Step 1 records as completed
+  in `progress.md`. The architect log no longer shows
+  `Error: VERIFICATION PASSED`. (This is the same final acceptance
+  criterion as Section 3's #1; flipping Section 6 to `[COMPLETED]`
+  and re-running this verification is what finally unblocks Section 3.)
+
+**When complete:** change the section header from `[PENDING]` to
+`[COMPLETED]`, append a one-paragraph result summary at the bottom of
+the section, then re-run Section 3's verification and update Section 3
+accordingly.
 
 ---
 

@@ -9,6 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Configure git system-wide so it works on bind-mounted workspaces.
+# The container runs as root, but /workspace is owned by the host UID, which
+# triggers git's safe.directory ownership check (exit 128). The wildcard
+# exemption is safe because the container is a disposable sandbox. We also
+# pre-set a default identity so `git commit` succeeds without any per-project
+# configuration from the user.
+RUN git config --system --add safe.directory '*' \
+    && git config --system user.email 'uas@local' \
+    && git config --system user.name 'UAS Orchestrator' \
+    && git config --system init.defaultBranch main
+
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 

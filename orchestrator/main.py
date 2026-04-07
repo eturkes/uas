@@ -710,6 +710,71 @@ def _llm_retry_guidance(task: str, attempt: int, code_section: str,
 # Splitting on this marker recovers just the Architect's directive.
 _TASK_CONTEXT_MARKER = "\n\nContext from previous steps:"
 
+# Phase 6.4: ANSI escape sequence pattern. Strips terminal color/cursor codes
+# from sandbox output before injecting it into the retry_clean ``<error>``
+# section so the LLM does not waste tokens parsing escape sequences.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+# Phase 6.4: Maximum number of stdout lines retained in the retry_clean
+# ``<error>`` section. stderr is included verbatim; stdout is tail-truncated
+# because successful sandbox runs can produce arbitrarily long traces.
+_RETRY_CLEAN_STDOUT_TAIL_LINES = 50
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from *text*."""
+    if not text:
+        return ""
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
+def _tail_lines(text: str, max_lines: int) -> str:
+    """Return the last *max_lines* lines of *text*, right-stripped."""
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return text.rstrip()
+    return "\n".join(lines[-max_lines:]).rstrip()
+
+
+def _build_error_section_body(previous_stderr: str | None,
+                              previous_stdout: str | None,
+                              previous_error: str | None) -> str:
+    """Assemble the body of the retry_clean ``<error>`` section.
+
+    Phase 6.4: the section contains ONLY the prior attempt's
+    ``result["stderr"]`` and the last ``_RETRY_CLEAN_STDOUT_TAIL_LINES``
+    lines of ``result["stdout"]``, with ANSI escape codes stripped from
+    both. No attempt history, no prior code snippets, no retry guidance
+    prose. ``previous_error`` (the legacy synthesized string assembled in
+    the orchestrator main loop) is used only as a last-resort fallback for
+    callers that have not yet been migrated to thread the structured
+    sandbox output through ``build_prompt``.
+    """
+    parts: list[str] = []
+
+    stderr = _strip_ansi(previous_stderr or "").strip()
+    if stderr:
+        parts.append(f"stderr:\n{stderr}")
+
+    stdout = _strip_ansi(previous_stdout or "").strip()
+    if stdout:
+        tail = _tail_lines(stdout, _RETRY_CLEAN_STDOUT_TAIL_LINES)
+        if tail:
+            parts.append(
+                f"stdout (last {_RETRY_CLEAN_STDOUT_TAIL_LINES} lines):\n{tail}"
+            )
+
+    if parts:
+        return "\n\n".join(parts)
+
+    legacy = _strip_ansi(previous_error or "").strip()
+    if legacy:
+        return legacy
+
+    return "(no error output captured)"
+
 
 def _extract_immutable_spec(task: str,
                             step_context: dict | None = None) -> str:
@@ -745,7 +810,9 @@ def _extract_immutable_spec(task: str,
 def _build_retry_clean_prompt(task: str,
                               previous_error: str | None,
                               workspace_files: str | None,
-                              step_context: dict | None = None) -> str:
+                              step_context: dict | None = None,
+                              previous_stderr: str | None = None,
+                              previous_stdout: str | None = None) -> str:
     """Build the stripped-down retry prompt for Phase 6 context pruning.
 
     Contains only three sections: ``<spec>`` (immutable task spec),
@@ -761,6 +828,12 @@ def _build_retry_clean_prompt(task: str,
     ``scan_workspace`` at prompt-build time, so the retry sees the
     post-rollback / post-format file state — never the previously
     generated code variable, which lives only in the LLM's memory.
+    Phase 6.4 grounds the ``<error>`` section in the prior attempt's raw
+    ``result["stderr"]`` and the last 50 lines of ``result["stdout"]``,
+    with ANSI escape codes stripped, via ``_build_error_section_body``.
+    The legacy ``previous_error`` synthesized string is retained only as a
+    fallback for callers that have not yet been migrated to thread the
+    structured sandbox output through.
     """
     spec_text = _extract_immutable_spec(task, step_context)
     if not spec_text:
@@ -784,7 +857,14 @@ def _build_retry_clean_prompt(task: str,
         current_code_body = "(no current code state available)"
     current_code_section = f"<current_code>\n{current_code_body}\n</current_code>"
 
-    error_body = (previous_error or "(no error output captured)").strip()
+    # Phase 6.4: <error> contains only the prior attempt's stderr and the
+    # last 50 lines of stdout, ANSI-stripped. No attempt history, no prior
+    # code snippets, no retry guidance prose.
+    error_body = _build_error_section_body(
+        previous_stderr=previous_stderr,
+        previous_stdout=previous_stdout,
+        previous_error=previous_error,
+    )
     error_section = f"<error>\n{error_body}\n</error>"
 
     return "\n\n".join([spec_section, current_code_section, error_section])
@@ -799,6 +879,8 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
                  attempt_history: list[dict] | None = None,
                  test_files: dict[str, str] | None = None,
                  step_context: dict | None = None,
+                 previous_stderr: str | None = None,
+                 previous_stdout: str | None = None,
                  mode: Literal["full", "retry_clean"] = "full") -> str:
     """Build the structured prompt for code generation.
 
@@ -820,6 +902,13 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
     metadata (e.g. ``step_spec``).  When supplied, the ``retry_clean``
     branch uses it as the authoritative source for the ``<spec>`` section
     instead of parsing the ``UAS_TASK`` blob.
+
+    Phase 6.4: ``previous_stderr`` and ``previous_stdout`` carry the prior
+    attempt's raw sandbox output.  In ``retry_clean`` mode they become the
+    sole source of the ``<error>`` section (stderr verbatim, stdout
+    tail-truncated to 50 lines, both ANSI-stripped). The legacy
+    ``previous_error`` synthesized string is retained as a fallback for
+    callers that have not yet been migrated.
     """
     if mode == "retry_clean":
         return _build_retry_clean_prompt(
@@ -827,6 +916,8 @@ def build_prompt(task: str, attempt: int, previous_error: str | None = None,
             previous_error=previous_error,
             workspace_files=workspace_files,
             step_context=step_context,
+            previous_stderr=previous_stderr,
+            previous_stdout=previous_stdout,
         )
 
     pkg_hint = ""

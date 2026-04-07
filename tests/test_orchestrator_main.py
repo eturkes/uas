@@ -353,6 +353,146 @@ class TestRetryCleanSpecExtraction:
         assert "(no spec available)" in spec_body
 
 
+class TestRetryCleanErrorSection:
+    """Phase 6.4: <error> contains only stderr + last 50 stdout lines, ANSI-stripped."""
+
+    @staticmethod
+    def _error_body(prompt: str) -> str:
+        start = prompt.index("<error>") + len("<error>")
+        end = prompt.index("</error>")
+        return prompt[start:end]
+
+    def test_error_section_includes_previous_stderr(self):
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_stderr="Traceback (most recent call last):\n  ZeroDivisionError",
+            mode="retry_clean",
+        )
+        body = self._error_body(prompt)
+        assert "Traceback (most recent call last):" in body
+        assert "ZeroDivisionError" in body
+
+    def test_error_section_includes_stdout_tail(self):
+        # 80 stdout lines: only the last 50 (lines 30..79) should appear.
+        stdout = "\n".join(f"line-{i:03d}" for i in range(80))
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_stdout=stdout,
+            mode="retry_clean",
+        )
+        body = self._error_body(prompt)
+        # Tail boundary: line-030 is the first kept line, line-079 the last.
+        assert "line-079" in body
+        assert "line-030" in body
+        # Earliest 30 lines (000..029) must be dropped.
+        assert "line-029" not in body
+        assert "line-000" not in body
+
+    def test_error_section_keeps_short_stdout_intact(self):
+        stdout = "\n".join(f"line-{i}" for i in range(10))
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_stdout=stdout,
+            mode="retry_clean",
+        )
+        body = self._error_body(prompt)
+        for i in range(10):
+            assert f"line-{i}" in body
+
+    def test_error_section_strips_ansi_escape_codes(self):
+        # ANSI escape codes from colorized output must be removed.
+        ansi_stderr = "\x1b[31mERROR:\x1b[0m something\x1b[1m bold\x1b[0m broke"
+        ansi_stdout = "\x1b[32mOK\x1b[0m line one\n\x1b[33mwarn\x1b[0m line two"
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_stderr=ansi_stderr,
+            previous_stdout=ansi_stdout,
+            mode="retry_clean",
+        )
+        body = self._error_body(prompt)
+        assert "\x1b[" not in body
+        assert "ERROR: something bold broke" in body
+        assert "OK line one" in body
+        assert "warn line two" in body
+
+    def test_error_section_omits_synthesized_previous_error_when_structured_provided(self):
+        # When previous_stderr/previous_stdout are provided, the synthesized
+        # previous_error string (which contains category prefixes and other
+        # opinionated synthesis) must NOT appear.
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_error="[runtime_error] OPINIONATED_SYNTHESIS_TOKEN summary",
+            previous_stderr="raw stderr trace",
+            previous_stdout="raw stdout trace",
+            mode="retry_clean",
+        )
+        body = self._error_body(prompt)
+        assert "raw stderr trace" in body
+        assert "raw stdout trace" in body
+        assert "OPINIONATED_SYNTHESIS_TOKEN" not in body
+        assert "[runtime_error]" not in body
+
+    def test_error_section_falls_back_to_previous_error_when_no_structured(self):
+        # Legacy callers passing only previous_error must continue to work.
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_error="legacy error string",
+            mode="retry_clean",
+        )
+        body = self._error_body(prompt)
+        assert "legacy error string" in body
+
+    def test_error_section_handles_no_inputs_gracefully(self):
+        prompt = build_prompt("task", attempt=2, mode="retry_clean")
+        body = self._error_body(prompt)
+        assert "(no error output captured)" in body
+
+    def test_error_section_excludes_attempt_history_and_code_snippets(self):
+        # The retry_clean error section must never contain attempt history
+        # markers or prior code snippets.
+        prompt = build_prompt(
+            "task",
+            attempt=3,
+            previous_error="error",
+            previous_code="def secret_prior_code(): pass",
+            previous_stderr="stderr trace",
+            previous_stdout="stdout trace",
+            mode="retry_clean",
+        )
+        body = self._error_body(prompt)
+        assert "secret_prior_code" not in body
+        assert "Attempt " not in body
+        assert "<attempt_history>" not in body
+
+    def test_error_section_only_stdout_no_stderr(self):
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_stdout="stdout-only output",
+            mode="retry_clean",
+        )
+        body = self._error_body(prompt)
+        assert "stdout-only output" in body
+        assert "stderr:" not in body
+
+    def test_error_section_only_stderr_no_stdout(self):
+        prompt = build_prompt(
+            "task",
+            attempt=2,
+            previous_stderr="stderr-only output",
+            mode="retry_clean",
+        )
+        body = self._error_body(prompt)
+        assert "stderr-only output" in body
+        assert "stdout " not in body
+
+
 class TestParseUasResult:
     def test_valid_result(self):
         stdout = 'some output\nUAS_RESULT: {"status": "ok", "files_written": ["a.txt"], "summary": "done"}\n'

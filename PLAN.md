@@ -260,7 +260,7 @@ spec, (2) the current code state, and (3) the exact error stack trace.
       from the workspace (not the previously generated code variable).
       Use `scan_workspace()` to get current file contents. This grounds
       the retry in filesystem reality, not the LLM's memory.
-- [ ] **6.4** Define the `<error>` section: include ONLY the last
+- [x] **6.4** Define the `<error>` section: include ONLY the last
       `result["stderr"]` and the last 50 lines of `result["stdout"]`.
       Strip ANSI escape codes. No attempt history, no prior code snippets,
       no retry guidance prose.

@@ -1880,9 +1880,38 @@ def main():
         # Phase 5.4: Lint pre-check — if the linter finds fatal errors
         # (e.g. undefined names), short-circuit with revert_needed=True
         # without burning an LLM call on evaluate_sandbox.
+        #
+        # Section 5 of PLAN.md: scope the lint to ONLY the Python files this
+        # attempt's script reported writing.  Linting every *.py in the
+        # workspace blames the current attempt for pre-existing errors in
+        # files it never touched (e.g. files committed to uas-wip from a
+        # prior failed run), which then re-poisons every rollback forever.
+        # Parse UAS_RESULT here (the variable is reused by the success
+        # branch below so we never invoke parse_uas_result twice for the
+        # same stdout — the fuzzy fallback can trigger an LLM call).
+        uas_result = parse_uas_result(result["stdout"] or "")
+        py_files_written: list[str] | None = None
+        if uas_result and uas_result.files_written:
+            py_files_written = [
+                f for f in uas_result.files_written if f.endswith(".py")
+            ]
+
         lint_errors: list[str] = []
         if _workspace:
-            lint_errors = lint_workspace(_workspace)
+            # When we have a non-empty list of .py files written, lint only
+            # those.  When the script wrote no .py files, skip lint entirely
+            # — there is nothing this attempt could have broken.  When we
+            # could not parse UAS_RESULT at all (py_files_written is None),
+            # fall back to the legacy "lint everything" behavior so attempts
+            # whose scripts predate the UAS_RESULT contract still get
+            # checked.
+            if py_files_written is not None:
+                if py_files_written:
+                    lint_errors = lint_workspace(
+                        _workspace, files=py_files_written,
+                    )
+            else:
+                lint_errors = lint_workspace(_workspace)
 
         if lint_errors:
             logger.warning("Lint pre-check found %d fatal error(s):", len(lint_errors))
@@ -1947,7 +1976,10 @@ def main():
                     continue
                 logger.info("Pytest gate PASSED.")
 
-            uas_result = parse_uas_result(result["stdout"] or "")
+            # Section 5 of PLAN.md: uas_result was already parsed above
+            # the lint pre-check, so we just log it here instead of
+            # re-invoking parse_uas_result (which can trigger an LLM call
+            # via the fuzzy fallback path).
             if uas_result:
                 logger.info("UAS_RESULT: %s", uas_result.model_dump_json())
 

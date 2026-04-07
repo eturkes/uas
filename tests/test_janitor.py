@@ -375,3 +375,35 @@ class TestFormatWorkspaceRealRuff:
         mock_cfg.return_value = "ruff"
         _write(tmp_path, "ok.py", "x = 1\nprint(x)\n")
         assert lint_workspace(str(tmp_path), files=["ok.py"]) == []
+
+    @patch("uas.janitor.config.get")
+    def test_lint_files_filter_ignores_unrelated_files(self, mock_cfg, tmp_path):
+        """Section 5 of PLAN.md: when ``files=[a.py]`` is passed,
+        ``lint_workspace`` must only inspect ``a.py``. Errors in unrelated
+        files (e.g. ``b.py`` left over from a prior run) must NOT appear
+        in the returned error list, otherwise the orchestrator's lint
+        pre-check would blame the current attempt for damage it did not
+        cause and re-poison every rollback forever.
+        """
+        mock_cfg.return_value = "ruff"
+        # a.py is clean.  b.py has a fatal F401 unused-import error that
+        # mirrors the rehab/tests/test_config.py reproduction in Section 5.
+        _write(tmp_path, "a.py", "x = 1\nprint(x)\n")
+        _write(tmp_path, "b.py", "import os\nimport pytest\n")
+
+        # Sanity: the unfiltered call sees the b.py errors. Ruff's
+        # grouped output puts the error code on one line and the file
+        # path on a separate ``-->`` line, so we verify both appear
+        # somewhere in the returned list rather than on the same line.
+        all_errors = lint_workspace(str(tmp_path))
+        all_text = "\n".join(all_errors)
+        assert "F401" in all_text and "b.py" in all_text, (
+            f"sanity check failed: expected b.py F401 in {all_errors!r}"
+        )
+
+        # The fix: passing files=[a.py] must produce zero errors because
+        # b.py is not in the inspected file list.
+        scoped_errors = lint_workspace(str(tmp_path), files=["a.py"])
+        assert scoped_errors == [], (
+            f"lint_workspace(files=[a.py]) leaked b.py errors: {scoped_errors!r}"
+        )

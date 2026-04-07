@@ -2,6 +2,7 @@
 
 import argparse
 import io
+import shutil
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -1470,3 +1471,232 @@ class TestRetryCleanThreeAttemptSequence:
         # synthesis when raw stderr/stdout is available (Phase 6.4).
         assert "[runtime_error]" not in err2_body
         assert "[runtime_error]" not in err3_body
+
+
+@patch("orchestrator.main.evaluate_sandbox", side_effect=_mock_evaluate_sandbox)
+@patch("orchestrator.main.assess_code_quality", side_effect=_mock_quality)
+class TestLintPreCheckScopedToWrittenFiles:
+    """Section 5 of PLAN.md: the orchestrator's lint pre-check must only
+    inspect the Python files the current attempt's script reported writing
+    via UAS_RESULT, not every *.py file in the workspace.
+
+    Without this scoping, files committed to ``uas-wip`` from a prior
+    failed run (or from the user's pre-uas working tree) re-poison every
+    rollback forever — the orchestrator loops until it exhausts the
+    attempt budget no matter what the LLM does.
+    """
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.format_workspace")
+    @patch("orchestrator.main.lint_workspace")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_lint_called_with_files_written_from_uas_result(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_lint, _mock_format, _mock_cq, _mock_eval,
+        tmp_path, monkeypatch,
+    ):
+        """When the script reports files_written via UAS_RESULT, the
+        orchestrator must call lint_workspace(files=...) with that exact
+        list (filtered to .py entries) instead of letting it glob the
+        whole workspace."""
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        mock_lint.return_value = []
+        mock_args.return_value = argparse.Namespace(
+            task=["test task"], verbose=False,
+        )
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```',
+            {"input": 0, "output": 0},
+        )
+        mock_client_factory.return_value = mock_client
+        # Sandbox: 1st call is the verify, 2nd call is the actual exec.
+        # The exec stdout carries a UAS_RESULT JSON that lists exactly
+        # one .py file (a.py) plus a non-.py file (data.json) — only the
+        # .py entry should be forwarded to the lint pre-check.
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},
+            {
+                "exit_code": 0,
+                "stdout": (
+                    'wrote files\n'
+                    'UAS_RESULT: {"status": "ok", '
+                    '"files_written": ["a.py", "data.json"], '
+                    '"summary": "wrote two files"}\n'
+                ),
+                "stderr": "",
+            },
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+        # The lint pre-check must have been called exactly once with
+        # files=["a.py"] — NOT files=None (which would glob everything)
+        # and NOT files=["a.py", "data.json"] (data.json is not Python).
+        assert mock_lint.call_count == 1
+        call = mock_lint.call_args
+        assert call.args[0] == str(tmp_path)
+        # The files= argument is the critical assertion.
+        assert call.kwargs.get("files") == ["a.py"], (
+            f"expected files=['a.py'], got files={call.kwargs.get('files')!r}"
+        )
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.format_workspace")
+    @patch("orchestrator.main.lint_workspace")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_lint_skipped_when_uas_result_writes_no_python(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_lint, _mock_format, _mock_cq, _mock_eval,
+        tmp_path, monkeypatch,
+    ):
+        """When the script reports files_written but none of them are
+        .py files, the lint pre-check has nothing to inspect and must
+        be skipped entirely."""
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        mock_args.return_value = argparse.Namespace(
+            task=["test task"], verbose=False,
+        )
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```',
+            {"input": 0, "output": 0},
+        )
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},
+            {
+                "exit_code": 0,
+                "stdout": (
+                    'UAS_RESULT: {"status": "ok", '
+                    '"files_written": ["data.json", "README.md"], '
+                    '"summary": "wrote two non-python files"}\n'
+                ),
+                "stderr": "",
+            },
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        # No .py file was written this attempt; nothing for the lint
+        # pre-check to inspect.
+        mock_lint.assert_not_called()
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.format_workspace")
+    @patch("orchestrator.main.lint_workspace")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_lint_falls_back_to_full_workspace_without_uas_result(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        mock_lint, _mock_format, _mock_cq, _mock_eval,
+        tmp_path, monkeypatch,
+    ):
+        """When stdout has no parseable UAS_RESULT, fall back to the
+        legacy "lint everything" behavior so attempts whose scripts
+        predate the UAS_RESULT contract still get checked."""
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        mock_lint.return_value = []
+        mock_args.return_value = argparse.Namespace(
+            task=["test task"], verbose=False,
+        )
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```',
+            {"input": 0, "output": 0},
+        )
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},
+            {"exit_code": 0, "stdout": "no uas result here", "stderr": ""},
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+        # Lint was called once, with no files= kwarg (legacy "glob
+        # everything" behavior).
+        assert mock_lint.call_count == 1
+        call = mock_lint.call_args
+        assert call.args[0] == str(tmp_path)
+        assert call.kwargs.get("files") is None, (
+            f"expected files=None for fallback, got "
+            f"files={call.kwargs.get('files')!r}"
+        )
+
+    @patch("orchestrator.main.MINIMAL_MODE", True)
+    @patch("orchestrator.main.format_workspace")
+    @patch("orchestrator.main.parse_args")
+    @patch("orchestrator.main.run_in_sandbox")
+    @patch("orchestrator.main.get_llm_client")
+    def test_pre_existing_unused_import_does_not_fail_attempt(
+        self, mock_client_factory, mock_sandbox, mock_args,
+        _mock_format, _mock_cq, _mock_eval,
+        tmp_path, monkeypatch,
+    ):
+        """End-to-end regression: a workspace containing a pre-existing
+        Python file with unused imports (the rehab/tests/test_config.py
+        scenario) must not cause the orchestrator's lint pre-check to
+        roll back an attempt whose script only writes a different file.
+
+        This is the exact failure mode described in Section 5 of
+        PLAN.md: ``F401 [*] os imported but unused`` in
+        ``tests/test_config.py`` poisoning every step-1 attempt.
+        """
+        if shutil.which("ruff") is None:
+            pytest.skip("ruff binary not installed; cannot exercise real lint")
+
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        # Pre-existing file with unused imports — modeled on the rehab
+        # workspace's tests/test_config.py.
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_config.py").write_text(
+            "import os\nimport pytest\n"
+        )
+        # The script the LLM emits "writes" pyproject.toml only.
+        # Note: we don't actually need a.py to exist on disk — the lint
+        # pre-check filters to .py files reported by UAS_RESULT, and
+        # since pyproject.toml is not .py, lint_workspace must be
+        # skipped entirely.
+        mock_args.return_value = argparse.Namespace(
+            task=["test task"], verbose=False,
+        )
+        mock_client = MagicMock()
+        mock_client.generate.return_value = (
+            '```python\nprint("hello")\n```',
+            {"input": 0, "output": 0},
+        )
+        mock_client_factory.return_value = mock_client
+        mock_sandbox.side_effect = [
+            {"exit_code": 0, "stdout": "sandbox OK", "stderr": ""},
+            {
+                "exit_code": 0,
+                "stdout": (
+                    'UAS_RESULT: {"status": "ok", '
+                    '"files_written": ["pyproject.toml"], '
+                    '"summary": "wrote pyproject.toml"}\n'
+                ),
+                "stderr": "",
+            },
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        # Section 5 acceptance criterion: the attempt must succeed even
+        # though tests/test_config.py has F401 errors, because the
+        # script never touched it.
+        assert exc_info.value.code == 0, (
+            "Pre-existing file with unused imports caused the lint "
+            "pre-check to fail an attempt whose script never touched "
+            "that file"
+        )

@@ -634,7 +634,7 @@ Total: 1581 tests pass, 0 failures (vs. 1575 before Section 4).
 
 ---
 
-### Section 5: Stop the lint pre-check from rejecting pre-existing workspace files  [PENDING]
+### Section 5: Stop the lint pre-check from rejecting pre-existing workspace files  [COMPLETED]
 
 **Why:** Sections 1, 2, and 4 fixed the original Background failure modes
 (half-initialized git, missing code-block extraction, Bash bypass). After
@@ -772,6 +772,68 @@ empirical testing shows scripts under-reporting `files_written`.
 **When complete:** change the section header from `[PENDING]` to
 `[COMPLETED]`, then re-run Section 3's verification and update Section 3
 accordingly.
+
+**Result (2026-04-07):** Implemented option **1** (the recommended fix):
+the orchestrator now parses `UAS_RESULT` once before the lint pre-check,
+filters `files_written` to `.py` entries, and forwards that list to
+`lint_workspace(_workspace, files=...)`. When the script reports zero
+`.py` files written, the lint pre-check is skipped entirely (nothing
+this attempt could have broken). When `UAS_RESULT` cannot be parsed at
+all, the orchestrator falls back to the legacy "lint the whole
+workspace" behavior so older scripts that predate the contract still
+get checked. The duplicate `parse_uas_result` call inside the success
+branch was removed and the variable is reused, so the fuzzy LLM
+fallback inside `parse_uas_result` is invoked at most once per attempt.
+
+Code changes:
+- `orchestrator/main.py:1880-1913` — new pre-check scoping logic.
+- `orchestrator/main.py:1978-1983` — removed redundant `parse_uas_result`
+  call in the success branch (uses the variable from the earlier parse).
+
+Tests added:
+- `tests/test_janitor.py::TestFormatWorkspaceRealRuff::test_lint_files_filter_ignores_unrelated_files`
+  — exercises real `ruff` against two files (`a.py` clean, `b.py` with
+  `F401`) and asserts `lint_workspace(files=["a.py"])` returns `[]`
+  while the unfiltered call sees the `b.py` errors.
+- `tests/test_orchestrator_main.py::TestLintPreCheckScopedToWrittenFiles`
+  — four regression tests:
+  1. `test_lint_called_with_files_written_from_uas_result` asserts the
+     orchestrator forwards `files=["a.py"]` (filtered from
+     `["a.py", "data.json"]`) to `lint_workspace`.
+  2. `test_lint_skipped_when_uas_result_writes_no_python` asserts
+     `lint_workspace` is not called when no `.py` file was written.
+  3. `test_lint_falls_back_to_full_workspace_without_uas_result`
+     asserts `lint_workspace(workspace)` (no `files=` kwarg) is the
+     legacy behavior when `UAS_RESULT` cannot be parsed.
+  4. `test_pre_existing_unused_import_does_not_fail_attempt` is the
+     end-to-end regression: a workspace containing
+     `tests/test_config.py` with `import os; import pytest` (the exact
+     `rehab/` reproduction) plus a sandbox stdout reporting only
+     `pyproject.toml` as written must result in `SystemExit(0)`. This
+     test uses real `ruff` and is skipped if the binary is missing.
+
+Verification:
+- `python3 -m pytest tests/test_janitor.py tests/test_orchestrator_main.py`
+  → **144 passed**.
+- `python3 -m pytest tests/` (full suite) → **1586 passed,
+  3 deselected** in 350s.
+- Sanity check: temporarily reverted only the `orchestrator/main.py`
+  change (kept the new tests) and re-ran
+  `tests/test_orchestrator_main.py::TestLintPreCheckScopedToWrittenFiles`
+  → **3 of 4 tests failed**, including
+  `test_pre_existing_unused_import_does_not_fail_attempt` which
+  reproduced the exact PLAN.md failure
+  (`Lint pre-check found 16 fatal error(s): F401 [*] os imported but
+  unused --> tests/test_config.py:1:8`). This confirms the new tests
+  would catch a regression of this bug.
+
+The end-to-end re-verification of Section 3 (running
+`cd rehab && uas --resume --goal-file goal_001.txt` against the
+existing `fa0d38fa9ef6` run state) is still owed, and is the final
+acceptance criterion of Section 3 — not Section 5. Section 5's own
+acceptance criteria (existing tests pass, new regression test passes)
+are met. Section 3 stays `[PENDING]` until the rehab end-to-end run is
+re-attempted with this fix in the rebuilt container.
 
 ---
 

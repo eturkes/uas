@@ -65,18 +65,14 @@ class TestBuildPrompt:
         assert "os.path.join" in prompt
         assert "Check if files exist" in prompt
 
-    def test_with_previous_error(self):
-        prompt = build_prompt("fix it", attempt=2, previous_error="NameError: x")
-        assert "<previous_error" in prompt
-        assert "NameError: x" in prompt
-        assert "analysis" in prompt
-
-    def test_with_previous_error_includes_code(self):
+    def test_full_mode_omits_previous_error_section(self):
+        """Phase 6.6: full mode no longer injects retry guidance prose."""
         prompt = build_prompt("fix it", attempt=2,
                               previous_error="NameError: x",
                               previous_code="print(x)")
-        assert "print(x)" in prompt
-        assert "script that failed" in prompt
+        assert "previous_error" not in prompt
+        assert "NameError: x" not in prompt
+        assert "script that failed" not in prompt
 
     def test_no_error_section_on_attempt1_even_with_error(self):
         prompt = build_prompt("task", attempt=1, previous_error="some error")
@@ -85,25 +81,6 @@ class TestBuildPrompt:
     def test_no_error_section_when_error_is_none(self):
         prompt = build_prompt("task", attempt=2, previous_error=None)
         assert "previous_error" not in prompt
-
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
-    def test_final_attempt_defensive_instructions(self, _mock_llm):
-        prompt = build_prompt("task", attempt=MAX_RETRIES,
-                              previous_error="error",
-                              previous_code="code")
-        assert "FINAL ATTEMPT" in prompt
-        assert "simplest possible script" in prompt
-        assert "try/except" in prompt
-        assert "standard library" in prompt
-
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
-    @patch("orchestrator.main.MAX_RETRIES", 4)
-    def test_second_retry_different_strategy(self, _mock_llm):
-        prompt = build_prompt("task", attempt=3,
-                              previous_error="error",
-                              previous_code="code")
-        assert "fundamentally flawed" in prompt
-        assert "completely different way" in prompt
 
     def test_environment_hints(self):
         prompt = build_prompt("task", attempt=1,
@@ -124,12 +101,6 @@ class TestBuildPrompt:
     def test_no_workspace_state_when_none(self):
         prompt = build_prompt("do work", attempt=1)
         assert "workspace_state" not in prompt
-
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
-    def test_analysis_instruction_in_retry(self, _mock_llm):
-        prompt = build_prompt("any task", attempt=2, previous_error="some error")
-        assert "<analysis>" in prompt
-        assert "diagnose the root cause" in prompt
 
     def test_data_before_instructions(self):
         """Data sections (environment, task) should appear before instructions (role, constraints)."""
@@ -595,11 +566,10 @@ class TestMainLoop:
         assert mock_sandbox.call_count == 2
 
     @patch("orchestrator.main.MINIMAL_MODE", True)
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_retry_on_sandbox_failure(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq, _mock_eval):
+    def test_retry_on_sandbox_failure(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -617,11 +587,10 @@ class TestMainLoop:
         assert mock_client.generate.call_count == 2
 
     @patch("orchestrator.main.MINIMAL_MODE", True)
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_failure_after_all_retries(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq, _mock_eval):
+    def test_failure_after_all_retries(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         mock_client.generate.return_value = ('```python\nprint("hello")\n```', {"input": 0, "output": 0})
@@ -686,11 +655,10 @@ class TestMainLoop:
             main()
         assert exc_info.value.code == 0
 
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq, _mock_eval):
+    def test_syntax_error_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         _u = {"input": 0, "output": 0}
@@ -711,11 +679,10 @@ class TestMainLoop:
         # Sandbox: 1 verify + 1 execute (syntax error skipped sandbox)
         assert mock_sandbox.call_count == 2
 
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
-    def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_llm_retry, _mock_cq, _mock_eval):
+    def test_input_call_skips_sandbox(self, mock_client_factory, mock_sandbox, mock_args, _mock_cq, _mock_eval):
         mock_args.return_value = argparse.Namespace(task=["test task"], verbose=False)
         mock_client = MagicMock()
         _u = {"input": 0, "output": 0}
@@ -825,86 +792,6 @@ class TestPreExecutionCheck:
         errors, warnings = pre_execution_check(code)
         assert errors == []
         assert warnings == []
-
-
-class TestRetryStrategy:
-    @patch("orchestrator.main.get_llm_client")
-    def test_llm_guidance_injected_into_prompt(self, mock_get_client):
-        client = MagicMock()
-        client.generate.return_value = (
-            "The error is a missing import. Add 'import os' at the top.",
-            {"input": 0, "output": 0},
-        )
-        mock_get_client.return_value = client
-
-        prompt = build_prompt("create a file", attempt=2,
-                              previous_error="NameError: name 'os' is not defined",
-                              previous_code="os.path.join('a', 'b')")
-        assert "missing import" in prompt
-        assert "<previous_error" in prompt
-        assert "</previous_error>" in prompt
-        assert "<analysis>" in prompt
-        client.generate.assert_called_once()
-
-    @patch("orchestrator.main.get_llm_client")
-    def test_llm_failure_falls_back_to_hardcoded(self, mock_get_client):
-        mock_get_client.side_effect = RuntimeError("API unavailable")
-
-        prompt = build_prompt("task", attempt=MAX_RETRIES,
-                              previous_error="error",
-                              previous_code="code")
-        assert "FINAL ATTEMPT" in prompt
-        assert "simplest possible script" in prompt
-
-    @patch("orchestrator.main.get_llm_client")
-    def test_llm_empty_response_falls_back(self, mock_get_client):
-        client = MagicMock()
-        client.generate.return_value = ("", {"input": 0, "output": 0})
-        mock_get_client.return_value = client
-
-        prompt = build_prompt("task", attempt=2,
-                              previous_error="error",
-                              previous_code="code")
-        assert "diagnose the root cause" in prompt
-
-    @patch("orchestrator.main.MINIMAL_MODE", True)
-    def test_minimal_mode_skips_llm(self):
-        prompt = build_prompt("task", attempt=2,
-                              previous_error="error",
-                              previous_code="code")
-        assert "diagnose the root cause" in prompt
-        assert "<previous_error" in prompt
-
-    @patch("orchestrator.main.get_llm_client")
-    def test_prompt_xml_structure_with_llm_guidance(self, mock_get_client):
-        client = MagicMock()
-        client.generate.return_value = ("Try a different approach using subprocess.", {"input": 0, "output": 0})
-        mock_get_client.return_value = client
-
-        prompt = build_prompt("run a command", attempt=2,
-                              previous_error="OSError: file not found",
-                              previous_code="open('missing.txt')")
-        assert "<previous_error" in prompt
-        assert "</previous_error>" in prompt
-        assert "<environment>" in prompt
-        assert "<task>" in prompt
-        assert "<role>" in prompt
-
-    @patch("orchestrator.main.get_llm_client")
-    def test_attempt_history_passed_to_llm(self, mock_get_client):
-        client = MagicMock()
-        client.generate.return_value = ("Use a different library for HTTP requests.", {"input": 0, "output": 0})
-        mock_get_client.return_value = client
-
-        history = [
-            {"attempt": 1, "error": "ConnectionError", "code_snippet": "import requests"},
-        ]
-        build_prompt("fetch data", attempt=2,
-                     previous_error="ConnectionError",
-                     previous_code="import requests",
-                     attempt_history=history)
-        call_args = client.generate.call_args[0][0]
-        assert "ConnectionError" in call_args
 
 
 class TestToolCallDetection:
@@ -1121,14 +1008,13 @@ class TestPytestGate:
         mock_pytest.assert_called_once_with(["test_math.py"])
 
     @patch("orchestrator.main.MINIMAL_MODE", True)
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.run_pytest_in_sandbox")
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
     def test_pytest_fail_triggers_retry(
         self, mock_client_factory, mock_sandbox, mock_args,
-        mock_pytest, _mock_llm_retry, _mock_cq, _mock_eval, monkeypatch,
+        mock_pytest, _mock_cq, _mock_eval, monkeypatch,
     ):
         """When pytest fails, the step retries with pytest output as the error."""
         monkeypatch.setenv("UAS_TEST_FILES",
@@ -1152,14 +1038,13 @@ class TestPytestGate:
         assert mock_pytest.call_count == 2
 
     @patch("orchestrator.main.MINIMAL_MODE", True)
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.run_pytest_in_sandbox")
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
     def test_pytest_fail_all_retries_exits_1(
         self, mock_client_factory, mock_sandbox, mock_args,
-        mock_pytest, _mock_llm_retry, _mock_cq, _mock_eval, monkeypatch,
+        mock_pytest, _mock_cq, _mock_eval, monkeypatch,
     ):
         """When pytest fails on all attempts, exit code is 1."""
         monkeypatch.setenv("UAS_TEST_FILES",
@@ -1204,14 +1089,13 @@ class TestPytestGate:
         assert exc_info.value.code == 0
 
     @patch("orchestrator.main.MINIMAL_MODE", True)
-    @patch("orchestrator.main._llm_retry_guidance", return_value=None)
     @patch("orchestrator.main.run_pytest_in_sandbox")
     @patch("orchestrator.main.parse_args")
     @patch("orchestrator.main.run_in_sandbox")
     @patch("orchestrator.main.get_llm_client")
     def test_pytest_error_message_includes_output(
         self, mock_client_factory, mock_sandbox, mock_args,
-        mock_pytest, _mock_llm_retry, _mock_cq, _mock_eval, monkeypatch,
+        mock_pytest, _mock_cq, _mock_eval, monkeypatch,
     ):
         """Pytest failure error message includes stdout and stderr."""
         monkeypatch.setenv("UAS_TEST_FILES",
@@ -1233,7 +1117,7 @@ class TestPytestGate:
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
-        # Second generate() call should receive a prompt mentioning pytest failure
-        second_prompt = mock_client.generate.call_args_list[1][0][0]
-        assert "pytest test suite FAILED" in second_prompt
-        assert "FAILED test_z" in second_prompt
+        # Phase 6.6: full-mode prompts no longer carry retry guidance prose;
+        # the retry path will inject pytest failures via retry_clean mode in
+        # task 6.7. For now, just verify the retry attempt occurred.
+        assert mock_client.generate.call_count == 2

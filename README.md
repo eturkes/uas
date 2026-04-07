@@ -548,10 +548,7 @@ included as a fifth tab in the HTML report.
    f. Emit delimited stdout/stderr blocks for reliable parsing
    g. Parse UAS_RESULT JSON line from stdout if present
    h. If exit_code == 0 -> SUCCESS, stop
-   i. Else -> escalating error feedback:
-      - 1st retry: root cause analysis + corrected script
-      - 2nd retry: fundamentally different strategy required
-      - 3rd retry: maximally defensive (try/except everywhere)
+   i. Else -> regenerate on the next attempt
 5. If all 3 attempts fail -> exit with error
 ```
 

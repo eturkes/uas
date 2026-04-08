@@ -444,7 +444,33 @@ an append-only `eval_results.jsonl` log. Each row is self-describing.
 - Each line carries §4 metadata + case name + §1 metrics + checks
   + pass/fail.
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+- `integration/eval.py`: added `RESULTS_JSONL` constant, marked
+  `RESULTS_FILE` as legacy in its inline comment (Phase 5 removes),
+  added `append_result_row(row, *, run_metadata, run_index,
+  output_path=None)` helper, added `--results-out PATH` CLI flag,
+  wired the writer into `main()`'s case loop with `run_index=0`
+  pinned (Section 6 will switch this to a real loop index).
+- `tests/test_eval_persistence.py`: 10 tests covering file creation
+  on first append, single-line round-trip, multi-row append,
+  metadata stamping every row, `default=str` for non-serialisable
+  values like `datetime`, newline termination, no internal newlines
+  per record, parent-directory creation, and the
+  `RESULTS_JSONL`-default fallback. **10/10 passed in 0.07s.**
+- **Integration smoke**: monkey-patched `run_case` to bypass the
+  architect, ran `eval.main()` with `--results-out=tmp.jsonl`,
+  verified the resulting row has all 7 metadata fields + `run_index`
+  + the row fields:
+  `[checks, config_hash, elapsed, env_snapshot, exit_code,
+  git_branch, git_dirty, git_sha, goal, harness_version, name,
+  passed, run_index, timestamp_utc, workspace]`.
+- **`.gitignore` audit:** the existing pattern
+  `integration/eval_results.json` (line 18) is an exact-name match;
+  `eval_results.jsonl` is NOT excluded, so the new file will be
+  tracked as planned.
 
 ## Section 6 — Multi-run variance and aggregation
 

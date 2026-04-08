@@ -30,7 +30,13 @@ REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 WORKSPACES_DIR = os.path.join(SCRIPT_DIR, "workspace")
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 PROMPTS_FILE = os.path.join(SCRIPT_DIR, "prompts.json")
+# Legacy per-invocation summary file. Overwritten on every run. Kept
+# for one phase as a compatibility surface; Phase 5 removes it. New
+# consumers should read RESULTS_JSONL instead.
 RESULTS_FILE = os.path.join(SCRIPT_DIR, "eval_results.json")
+# Append-only durable log of every (case × run) result row, stamped
+# with capture_run_metadata() at the head. Created on first append.
+RESULTS_JSONL = os.path.join(SCRIPT_DIR, "eval_results.jsonl")
 
 UAS_AUTH_DIR = os.path.join(REPO_ROOT, ".uas_auth")
 CLAUDE_JSON = os.path.join(UAS_AUTH_DIR, "claude.json")
@@ -138,6 +144,35 @@ def capture_run_metadata() -> dict:
         "config_hash": _hash_active_config(),
         "harness_version": HARNESS_VERSION,
     }
+
+
+def append_result_row(row, *, run_metadata, run_index,
+                      output_path=None) -> None:
+    """Append a single self-describing result row to the JSONL log.
+
+    The row written to disk is a flat dict combining ``run_metadata``
+    (git SHA, branch, dirty flag, timestamp, env snapshot, config
+    hash, harness version) with ``run_index`` and the per-case row
+    fields. Section 6's multi-run loop calls this once per
+    (case × run_index); Section 5's single-iteration mode passes
+    ``run_index=0``.
+
+    The file is created on first append (``"a"`` mode). Each line is
+    a single JSON object with no internal newlines, ``default=str``
+    so non-serialisable values like ``datetime`` round-trip as strings
+    rather than crashing the writer.
+
+    ``output_path`` defaults to ``RESULTS_JSONL`` but can be overridden
+    via the ``--results-out`` CLI flag for scratch / CI runs.
+    """
+    target = output_path if output_path is not None else RESULTS_JSONL
+    record = {**run_metadata, "run_index": run_index, **row}
+    parent = os.path.dirname(target)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
+    with open(target, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, default=str))
+        f.write("\n")
 
 
 def load_prompts(filter_pattern=None):
@@ -786,6 +821,11 @@ def main():
                         help="Use local subprocess instead of containers")
     parser.add_argument("--clean", action="store_true",
                         help="Remove previous workspaces before running")
+    parser.add_argument(
+        "--results-out", default=None,
+        help="Override path for the append-only JSONL results log "
+             "(default: integration/eval_results.jsonl)",
+    )
     args = parser.parse_args()
 
     cases = load_prompts(args.filter)
@@ -843,6 +883,7 @@ def main():
 
     print(f"Running {len(cases)} prompt case(s)...\n", file=sys.stderr)
 
+    results_jsonl_path = args.results_out or RESULTS_JSONL
     results = []
     for i, case in enumerate(cases, 1):
         label = case["goal"][:70]
@@ -851,6 +892,16 @@ def main():
         result = run_case(case, verbose=args.verbose, local=args.local,
                           engine=engine)
         results.append(result)
+        # Section 5: append every result row to the durable JSONL log,
+        # stamped with the captured run metadata. Section 6's
+        # multi-run loop will pass a real run_index; Section 5's
+        # single-iteration mode pins it at 0.
+        append_result_row(
+            result,
+            run_metadata=run_metadata,
+            run_index=0,
+            output_path=results_jsonl_path,
+        )
         status = "PASS" if result["passed"] else "FAIL"
         print(f"        -> {status} ({result.get('elapsed', 0):.1f}s)",
               file=sys.stderr)

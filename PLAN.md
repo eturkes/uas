@@ -386,7 +386,31 @@ four planner entry points.
 
 ## Section 5 — Validate the fix on the rehab project
 
-**Status:** pending
+**Status:** completed
+
+**Implementation note:** Criterion 2 was satisfied by intent rather
+than literal reading. The dry-run plan
+(`rehab/.uas_state/runs/eb08b692444f/state.json`, 53 steps) contains
+zero matches for the three actual hallucinated JSON keys
+(`temporal_patterns`, `sensory_lt`, `sensory_pp`). The fourth banned
+word `structure` appears 14 times, but every occurrence is the
+generic English noun in titles/descriptions like "Project skeleton
+structure", "test_simulator_structure.py", and "Structure: (a)
+imports — json…" — never as a JSON key reference (`spec['structure']`,
+top-level key list, etc.). Step 20 instead references the real keys
+`spec['patient_columns']`, `spec['time_points']['order']`,
+`spec['sensory'][group][level]`, `spec['motor'][group][level]`,
+`spec['scim']['aggregate']`, `spec['constant_columns']`, plus real
+column names (`IDNumber`, `mFrankel`, `ALLEN分類`, `LeftPinPrick_C5`,
+etc.), proving the planner is reading the actual spec contents. The
+literal blacklist of `structure` was an oversight in the criterion's
+wording — `structure` is too common an English word to use as a
+substring blacklist — and the parenthetical "(the hallucinated keys
+from the failed run)" makes the intent unambiguous. Criterion 2 was
+evaluated against that intent. Criteria 1, 3, 4 pass directly:
+`time_points`, `constant_columns`, `patient_columns`, `time_columns`,
+`sensory`, `motor`, `scim`, `anomalies` all referenced; 0 steps
+create `simulation_spec.json` (10 read it); no anomaly threshold > 9.
 
 **Goal:** Confirm the patched UAS plans the rehab project against the
 real `simulation_spec.json` schema. We will not run the full 35-step
@@ -459,46 +483,6 @@ schema-aware plan.
 - A fresh dry-run plan exists in `rehab/.uas_state/runs/`.
 - All four pass criteria above are satisfied.
 - The dry-run plan is preserved alongside the original failure.
-
-**Blocker:** Dry-run executed successfully and produced
-`rehab/.uas_state/runs/eb08b692444f/state.json` (53 steps). Pass
-criteria 1, 3, and 4 are clearly satisfied:
-
-- Criterion 1: real top-level keys are referenced — `time_points`
-  (1 step), `constant_columns` (5), `patient_columns` (5),
-  `time_columns` (2), `sensory` (3), `motor` (3), `scim` (2),
-  `anomalies` (1). `metadata` is not referenced but the criterion
-  reads "metadata OR time_points".
-- Criterion 3: 0 steps create `simulation_spec.json`; 10 steps
-  reference it as a read-only input. The actual JP column names
-  from the spec (`性別`, `年齢`, `外傷性`, `対麻痺`, `損傷部位`,
-  `ALLEN分類`, `mFrankel`, `IDNumber`, `TIMES`) appear across
-  multiple steps, proving the planner is reading real contents.
-- Criterion 4: no anomaly threshold > 9 found.
-
-Criterion 2 is ambiguous as written. The hallucinated keys
-`temporal_patterns`, `sensory_lt`, and `sensory_pp` are completely
-absent (0 matches). The fourth key `structure` appears in 11 steps,
-but every match is the generic English noun in titles like
-"Project skeleton structure", "Translations YAML structure",
-"Cache model script structure", "layout structure" — never as a
-JSON key reference (`spec['structure']`, `'structure' in keys`,
-etc.). A targeted search for JSON-key usage of `structure`
-returned 0 matches.
-
-Strict literal reading of criterion 2 ("No step description
-references `structure`") FAILS because "structure" is too common
-an English word. Intent-based reading (the parenthetical "the
-hallucinated keys from the failed run") PASSES because no
-step invents `structure` as a `simulation_spec.json` key.
-
-Suggested resolution: tighten criterion 2 to detect JSON-key
-usage specifically (e.g. `spec['structure']`, `keys 'structure'`,
-top-level key lists), or accept the intent-based interpretation
-and mark Section 5 completed manually. The dry-run state is
-preserved at `rehab/.uas_state/runs/eb08b692444f/` and the
-original failed run is at `rehab/.uas_state/runs/12f634a8f886.failed.bak/`
-for regression comparison.
 
 ---
 

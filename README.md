@@ -267,7 +267,7 @@ execution.
 ├── Containerfile             # Image (Podman + Python + Claude Code CLI)
 ├── requirements.txt          # Python dependencies
 ├── uas_config.py             # Layered config (TOML + env vars)
-├── hooks.py                  # Lifecycle hook system
+├── uas_hooks.py              # Lifecycle hook system
 ├── uas.example.toml          # Sample config file with all keys
 ├── architect/                # Architect Agent (installed to /uas)
 │   ├── main.py               # Controller loop

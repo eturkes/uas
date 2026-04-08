@@ -34,7 +34,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && ln -sf /root/.local/bin/uv /usr/local/bin/uv
 
 COPY uas_config.py .
-COPY hooks.py .
+COPY uas_hooks.py .
 COPY orchestrator/ ./orchestrator/
 COPY architect/ ./architect/
 COPY uas/ ./uas/

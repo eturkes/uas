@@ -7,7 +7,7 @@ import textwrap
 
 import pytest
 
-from hooks import (
+from uas_hooks import (
     HookEvent,
     HookConfig,
     load_hooks,

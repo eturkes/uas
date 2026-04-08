@@ -8,7 +8,7 @@ import re
 
 from orchestrator.llm_client import get_llm_client
 from .events import EventType, get_event_log
-from hooks import HookEvent, load_hooks, run_hook
+from uas_hooks import HookEvent, load_hooks, run_hook
 
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
 _DEFAULT_REWRITE_TRIM = 3000

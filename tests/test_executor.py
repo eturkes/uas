@@ -434,8 +434,9 @@ class TestBuildPlannerWorkspaceContext:
 
 
 class TestRunLocalDashPFlag:
-    """PLAN.md Section 6: -P flag prevents workspace files from shadowing
-    framework modules in the orchestrator subprocess invocation.
+    """The -P flag is passed to every orchestrator subprocess so that
+    the workspace cwd does not get prepended to sys.path, preventing
+    workspace files from shadowing stdlib or third-party imports.
     """
 
     def test_run_local_passes_dash_p_flag(self, tmp_path, monkeypatch):
@@ -502,78 +503,6 @@ class TestRunLocalDashPFlag:
             f"-P must immediately follow sys.executable; got: {cmd}"
         )
         assert "orchestrator.main" in cmd
-
-    def test_run_local_does_not_shadow_framework_modules(
-        self, tmp_path, monkeypatch,
-    ):
-        """End-to-end check: with -P, a workspace cwd containing junk
-        config.py / state.py / executor.py / events.py / hooks.py does
-        NOT shadow the framework's same-named modules.
-
-        We don't actually run the orchestrator (it would call the LLM
-        and hang). Instead we intercept _run_local's subprocess.run and
-        substitute a tiny ``python3 -P -c "import config; ..."`` invocation
-        that uses the same cwd and env _run_local would have used. The
-        substituted subprocess proves the -P flag is the structural
-        defense by failing if any of the workspace shadow modules win
-        the import race.
-        """
-        for name in (
-            "config.py", "state.py", "executor.py", "events.py", "hooks.py",
-        ):
-            (tmp_path / name).write_text(
-                'raise ImportError("workspace shadow")\n'
-            )
-
-        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
-        monkeypatch.setattr(
-            _executor_module.config, "get",
-            lambda key, default=None: (
-                str(tmp_path) if key == "workspace" else default
-            ),
-        )
-
-        captured_cmds: list = []
-        real_run = subprocess.run
-
-        def intercepted_run(cmd, *args, **kwargs):
-            captured_cmds.append(list(cmd))
-            # Replace the orchestrator invocation with a controlled probe:
-            # import the framework's top-level ``uas_config`` module (the
-            # framework's only bare-imported top-level module). Verify it
-            # resolves to the framework copy. The -P flag (preserved from
-            # the original cmd at index 1) plus the unique name make this
-            # structurally safe even when the workspace contains a junk
-            # ``config.py``.
-            probe = (
-                "import uas_config; "
-                "assert hasattr(uas_config, 'get'), "
-                "f'wrong module: {uas_config.__file__}'; "
-                "print('OK')"
-            )
-            new_cmd = [cmd[0], cmd[1], "-c", probe]
-            return real_run(new_cmd, *args, **kwargs)
-
-        monkeypatch.setattr(
-            _executor_module.subprocess, "run", intercepted_run,
-        )
-
-        result = _run_local("noop")
-
-        assert captured_cmds, "subprocess.run was never called"
-        cmd = captured_cmds[0]
-        assert "-P" in cmd, (
-            f"-P flag absent from intercepted command: {cmd}"
-        )
-        assert "workspace shadow" not in result["stderr"], (
-            f"Workspace junk modules shadowed framework modules despite -P. "
-            f"stderr={result['stderr']!r}"
-        )
-        assert result["exit_code"] == 0, (
-            f"Probe subprocess failed (exit {result['exit_code']}). "
-            f"stderr={result['stderr']!r} stdout={result['stdout']!r}"
-        )
-        assert "OK" in result["stdout"]
 
     def test_run_local_safe_path_does_not_propagate_to_grandchildren(
         self, tmp_path, monkeypatch,

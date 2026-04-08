@@ -460,6 +460,46 @@ schema-aware plan.
 - All four pass criteria above are satisfied.
 - The dry-run plan is preserved alongside the original failure.
 
+**Blocker:** Dry-run executed successfully and produced
+`rehab/.uas_state/runs/eb08b692444f/state.json` (53 steps). Pass
+criteria 1, 3, and 4 are clearly satisfied:
+
+- Criterion 1: real top-level keys are referenced — `time_points`
+  (1 step), `constant_columns` (5), `patient_columns` (5),
+  `time_columns` (2), `sensory` (3), `motor` (3), `scim` (2),
+  `anomalies` (1). `metadata` is not referenced but the criterion
+  reads "metadata OR time_points".
+- Criterion 3: 0 steps create `simulation_spec.json`; 10 steps
+  reference it as a read-only input. The actual JP column names
+  from the spec (`性別`, `年齢`, `外傷性`, `対麻痺`, `損傷部位`,
+  `ALLEN分類`, `mFrankel`, `IDNumber`, `TIMES`) appear across
+  multiple steps, proving the planner is reading real contents.
+- Criterion 4: no anomaly threshold > 9 found.
+
+Criterion 2 is ambiguous as written. The hallucinated keys
+`temporal_patterns`, `sensory_lt`, and `sensory_pp` are completely
+absent (0 matches). The fourth key `structure` appears in 11 steps,
+but every match is the generic English noun in titles like
+"Project skeleton structure", "Translations YAML structure",
+"Cache model script structure", "layout structure" — never as a
+JSON key reference (`spec['structure']`, `'structure' in keys`,
+etc.). A targeted search for JSON-key usage of `structure`
+returned 0 matches.
+
+Strict literal reading of criterion 2 ("No step description
+references `structure`") FAILS because "structure" is too common
+an English word. Intent-based reading (the parenthetical "the
+hallucinated keys from the failed run") PASSES because no
+step invents `structure` as a `simulation_spec.json` key.
+
+Suggested resolution: tighten criterion 2 to detect JSON-key
+usage specifically (e.g. `spec['structure']`, `keys 'structure'`,
+top-level key lists), or accept the intent-based interpretation
+and mark Section 5 completed manually. The dry-run state is
+preserved at `rehab/.uas_state/runs/eb08b692444f/` and the
+original failed run is at `rehab/.uas_state/runs/12f634a8f886.failed.bak/`
+for regression comparison.
+
 ---
 
 ## Reusable agent prompt

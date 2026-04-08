@@ -68,6 +68,39 @@ harness itself are the only appropriate work.
 
 See `CLAUDE.md` for the session-level restatement.
 
+## Model policy
+
+UAS has two distinct LLM use cases with different model defaults:
+
+1. **Eval / measurement instrument** (`integration/`, all Phase 1
+   Section 10 validation work, all Phase 2 baseline work, all Phase
+   4 ablation work). Defaults to **Haiku 4.5**
+   (`claude-haiku-4-5-20251001`) for cost-conscious, fast iteration
+   that preserves the user's weekly Opus quota for real use. Set in
+   `integration/eval.py` via the `EVAL_MODEL_DEFAULT` constant;
+   overridable per-invocation by exporting `UAS_MODEL` (or the
+   role-specific `UAS_MODEL_PLANNER` / `UAS_MODEL_CODER`) before
+   running `uas-eval`. The Tier 3 LLM-as-judge is independently
+   pinned to Haiku 4.5 in each open-ended case file (PLAN.md
+   §8 carry-forward note 1).
+
+2. **Real-world UAS task execution** (architect / orchestrator
+   invoked directly, outside the eval harness). Defaults to **Opus
+   4.6** (`claude-opus-4-6`) with maximum effort, max output tokens,
+   and any other capability knobs cranked. This is the configuration
+   UAS's reliability claim is about. The eval harness's policy never
+   touches this path.
+
+**Implication for measurement.** The "Baseline metrics" section
+below and every Phase 4 ablation delta are Haiku-relative numbers.
+Mechanism contribution under Haiku may not translate 1:1 to Opus —
+some self-correction mechanisms exist precisely to compensate for
+weaker single-shot completions and may matter more on Haiku than on
+Opus, and vice versa. This is an accepted tradeoff for measurement-
+instrument cost and iteration speed. The methodological consistency
+across phases is preserved (every measurement uses the same model),
+which is what matters for comparing change-deltas.
+
 ## Current phase
 
 **Phase 1 — Eval harness hardening** (active)

@@ -9,7 +9,8 @@
       "type": "llm_judge",
       "criteria": "Pass iff ALL of these are true: (1) ANALYSIS.md exists and is at least 25 lines long. (2) It contains a dataset overview paragraph that cites the actual row count (matching cars.csv) and lists the actual column names. (3) It contains a Summary Statistics section with numeric mean, median, and standard deviation for both mileage_km and price_eur — the numbers must be plausible given cars.csv (within a sane range, not all zeros, not all the same value). (4) It contains at least 3 data-driven observations each referencing a specific car or specific number from cars.csv. (5) Conclusions section present. (6) analyze_cars.py exists and computes statistics from cars.csv (not hard-coded). Any hallucinated numbers or missing section is a failure.",
       "files": ["analyze_cars.py", "ANALYSIS.md", "cars.csv"],
-      "samples": 5
+      "samples": 5,
+      "model": "claude-haiku-4-5-20251001"
     }
   ],
   "notes": {

@@ -12,7 +12,8 @@
         "site/posts/post-3.html",
         "site/style.css"
       ],
-      "samples": 5
+      "samples": 5,
+      "model": "claude-haiku-4-5-20251001"
     }
   ],
   "notes": {

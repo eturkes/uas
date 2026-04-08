@@ -187,6 +187,18 @@ def append_result_row(row, *, run_metadata, run_index,
 # backward compat with pre-Section-7 prompt files.
 ALLOWED_TIERS = ("trivial", "moderate", "hard", "open_ended")
 
+# Default model used by the eval harness for the architect subprocess.
+# Project policy (set during Phase 1 Section 10): the eval / measurement
+# instrument runs on Haiku 4.5 to keep dev iteration cheap and to
+# preserve the user's weekly Opus quota for real-world UAS task
+# execution. Real-world UAS use (architect/orchestrator invoked
+# directly, outside this harness) is unaffected and continues to use
+# whatever uas_config / UAS_MODEL the user has set. Override here by
+# exporting UAS_MODEL (or UAS_MODEL_PLANNER / UAS_MODEL_CODER) before
+# invoking uas-eval.
+EVAL_MODEL_DEFAULT = "claude-haiku-4-5-20251001"
+EVAL_MODEL_ENV_VARS = ("UAS_MODEL", "UAS_MODEL_PLANNER", "UAS_MODEL_CODER")
+
 
 def load_prompts(filter_pattern=None, tier=None):
     """Load and filter cases from ``CASES_DIR/<tier>/<case>.json``.
@@ -285,12 +297,24 @@ def invoke_architect(case, workspace, *, local, engine, verbose,
             # python3 with -P (sandboxing flag that suppresses
             # cwd-prepending), so the architect package would not
             # otherwise be importable from /uas.
+            #
+            # Forward every ``UAS_*`` env var the parent process has
+            # set into the container so user-level configuration
+            # (notably ``UAS_MODEL``) reaches the architect. The
+            # per-case overrides below (``UAS_GOAL``, ``UAS_WORKSPACE``,
+            # ``UAS_OUTPUT``) win because they are applied after the
+            # parent forward.
             container_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k.startswith("UAS_")
+            }
+            container_env.update({
                 "UAS_GOAL": case["goal"],
                 "UAS_WORKSPACE": "/workspace",
                 "UAS_OUTPUT": "/workspace/output.json",
                 "PYTHONPATH": "/uas",
-            }
+            })
             if verbose:
                 container_env["UAS_VERBOSE"] = "1"
             if extra_env:
@@ -305,10 +329,17 @@ def invoke_architect(case, workspace, *, local, engine, verbose,
             ]
             for k, v in container_env.items():
                 cmd.extend(["-e", f"{k}={v}"])
-            cmd.extend([
-                "--entrypoint", "", "-w", "/uas", IMAGE_TAG,
-                "python3", "-P", "-m", "architect.main",
-            ])
+            # Use the image's default entrypoint (entrypoint.sh). It
+            # detects non-interactive mode via UAS_GOAL, runs
+            # ``python3 -P -m architect.main``, and on EXIT its trap
+            # chowns /workspace to UAS_HOST_UID:UAS_HOST_GID — the
+            # standard project pattern that other shell wrappers
+            # (install.sh, quick_test.sh, start_orchestrator.sh,
+            # run_container.sh) all use. Without this, the architect
+            # subprocess runs as root inside the container and leaves
+            # root-owned files in the host workspace dir, which
+            # subsequently breaks ``setup_workspace``'s rmtree.
+            cmd.append(IMAGE_TAG)
             proc = subprocess.run(
                 cmd,
                 capture_output=not verbose,
@@ -1132,6 +1163,15 @@ def _ensure_image(engine):
 
 
 def main():
+    # Project policy: default the eval harness to Haiku for cost.
+    # Done before argparse / metadata capture so the env_snapshot
+    # captured into the JSONL log accurately reflects the model the
+    # architect actually saw. ``setdefault`` semantics — any value
+    # already set in the parent shell wins.
+    for _key in EVAL_MODEL_ENV_VARS:
+        if _key not in os.environ:
+            os.environ[_key] = EVAL_MODEL_DEFAULT
+
     parser = argparse.ArgumentParser(description="UAS Prompt Evaluation")
     parser.add_argument("-k", "--filter", help="Run cases matching pattern")
     parser.add_argument("-v", "--verbose", action="store_true",

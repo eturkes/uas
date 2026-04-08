@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+# Mirror the convention used by install.sh, quick_test.sh,
+# start_orchestrator.sh, and run_container.sh: forward host UID/GID
+# into the container so entrypoint.sh's exit trap can chown the
+# workspace back to the launching user. eval.py's invoke_architect
+# forwards every parent UAS_* env var into the container env.
+export UAS_HOST_UID="${UAS_HOST_UID:-$(id -u)}"
+export UAS_HOST_GID="${UAS_HOST_GID:-$(id -g)}"
+exec python3 -P -m integration.eval "$@"

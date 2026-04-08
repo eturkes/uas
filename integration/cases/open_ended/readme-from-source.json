@@ -8,7 +8,8 @@
       "type": "llm_judge",
       "criteria": "Pass iff ALL of these are true: (1) README.md exists and is at least 30 lines long. (2) It contains a project description paragraph. (3) It contains an Installation section with at least one mention of how to make the module importable. (4) It contains a Usage section with at least 3 distinct Python code blocks (fenced with ```python) showing real calls to functions defined in quicklib.py — the function names must actually exist in the source. (5) It contains an API Reference section listing every public function defined in quicklib.py (no underscore prefix) with its signature and a description. (6) It contains a license line. (7) quicklib.py was not modified. Any missing or invented function name is a failure.",
       "files": ["README.md", "quicklib.py"],
-      "samples": 5
+      "samples": 5,
+      "model": "claude-haiku-4-5-20251001"
     }
   ],
   "notes": {

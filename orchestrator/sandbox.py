@@ -4,9 +4,20 @@ import logging
 import os
 import subprocess
 import tempfile
+import time
 import uuid
 
 logger = logging.getLogger(__name__)
+
+# Cumulative wall-clock time spent in run_in_sandbox / run_pytest_in_sandbox.
+# Reported back to the architect via the __UAS_ORCH_SANDBOX__ marker so the
+# dashboard's "Sandbox" column reflects actual sandbox execution time.
+_sandbox_total_time = 0.0
+
+
+def get_total_sandbox_time() -> float:
+    """Return cumulative wall-clock seconds spent inside sandbox executions."""
+    return _sandbox_total_time
 
 SANDBOX_IMAGE = os.environ.get(
     "UAS_SANDBOX_IMAGE", "docker.io/library/python:3.12-slim"
@@ -66,11 +77,16 @@ def run_in_sandbox(code: str, timeout: int | None = None) -> dict:
 
     Returns dict with keys: exit_code, stdout, stderr.
     """
+    global _sandbox_total_time
     timeout = timeout or SANDBOX_TIMEOUT
 
-    if SANDBOX_MODE == "local":
-        return _run_local(code, timeout)
-    return _run_container(code, timeout)
+    start = time.monotonic()
+    try:
+        if SANDBOX_MODE == "local":
+            return _run_local(code, timeout)
+        return _run_container(code, timeout)
+    finally:
+        _sandbox_total_time += time.monotonic() - start
 
 
 def _run_local(code: str, timeout: int) -> dict:

@@ -181,6 +181,22 @@ def run_orchestrator(task: str, extra_env: dict | None = None,
     event_log.emit(EventType.SANDBOX_COMPLETE,
                    duration=sandbox_elapsed,
                    data={"exit_code": result["exit_code"]})
+
+    # Parse the orchestrator's __UAS_ORCH_SANDBOX__ marker out of stderr so
+    # the architect's per-step timing split (sandbox vs LLM) reflects the
+    # actual time the orchestrator subprocess spent in run_in_sandbox calls
+    # rather than always reporting 0s.
+    sandbox_marker = "__UAS_ORCH_SANDBOX__:"
+    for _line in (result.get("stderr") or "").splitlines():
+        if sandbox_marker in _line:
+            try:
+                result["sandbox_time"] = float(
+                    _line.split(sandbox_marker, 1)[1].strip()
+                )
+            except (ValueError, IndexError):
+                pass
+            break
+
     return result
 
 

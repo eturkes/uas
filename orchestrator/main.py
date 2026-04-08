@@ -30,7 +30,7 @@ from architect.git_state import (
 
 from .llm_client import get_llm_client
 from .parser import extract_code, extract_truncated_block
-from .sandbox import run_in_sandbox, run_pytest_in_sandbox
+from .sandbox import get_total_sandbox_time, run_in_sandbox, run_pytest_in_sandbox
 
 # Section 5d: Delimited output markers for reliable parsing by the architect.
 STDOUT_START = "===STDOUT_START==="
@@ -2013,6 +2013,7 @@ def main():
             logger.info("\nSUCCESS on attempt %d.", attempt)
             import json as _json
             logger.info("__UAS_ORCH_USAGE__:%s", _json.dumps(_orch_usage))
+            logger.info("__UAS_ORCH_SANDBOX__:%.6f", get_total_sandbox_time())
             sys.exit(0)
 
         previous_code = code
@@ -2042,6 +2043,7 @@ def main():
     logger.error("FAILED after %d attempts.", MAX_RETRIES)
     import json as _json
     logger.info("__UAS_ORCH_USAGE__:%s", _json.dumps(_orch_usage))
+    logger.info("__UAS_ORCH_SANDBOX__:%.6f", get_total_sandbox_time())
     sys.exit(1)
 
 

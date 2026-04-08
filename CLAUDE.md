@@ -52,6 +52,41 @@ principle below is a direct correction.
   phase starts, delete in a final `Remove completed PLAN file` commit
   when the phase closes.
 
+## Decision protocol
+
+### Execute without asking
+
+Any action explicitly specified in a `PLAN.md` section's Steps list
+is pre-approved. Do the work, append to the section's Results
+subheading, update the section's `**Status:**`, move on. Minimal
+session-opening prompts like `Continue UAS work per CLAUDE.md` or
+`Resume` mean "execute the next pending work" — do not ask "what
+should I work on?" when the answer is already in `ROADMAP.md` +
+`PLAN.md`.
+
+### Ask before executing
+
+- A PLAN step is ambiguous given state discovered during execution.
+- Discovered state contradicts a PLAN assumption (missing files,
+  unexpected shape, unexpected counts).
+- You want to deviate from the PLAN — either because a step is wrong
+  or because a better path has become obvious. Propose the deviation
+  in the current message; do not silently take it.
+- The next action has blast radius outside the active PLAN scope
+  (rebases, remote pushes, touching files unrelated to current
+  sections, destructive operations, interacting with the container
+  engine beyond what the PLAN specifies).
+
+### Phase transitions require a review gate
+
+When `ROADMAP.md` marks a phase as active but no `PLAN.md` exists:
+draft the new `PLAN.md`, commit it as a standalone commit with a
+subject matching `Add PLAN for Phase N`, then **stop and ask for
+user review** before executing Section 1. Phase planning is
+strategic work the user wants to see before execution starts. Do
+not chain "draft PLAN" and "execute Section 1" in the same session
+turn.
+
 ## Do not
 
 - Add new self-correction mechanisms until the eval harness (Phase 1)

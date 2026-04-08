@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import csv
 import glob as globmod
 import json
 import os
@@ -204,13 +205,14 @@ def collect_metrics(workspace) -> dict:
 def run_checks(case, workspace, invocation) -> list:
     """Run every check declared on a case and return the result list.
 
-    ``invocation`` is threaded through so future check types
-    (Section 3 will add ``exit_code``, which reads
-    ``invocation['exit_code']``) can consume it. ``run_check`` does
-    not yet accept it; Section 3 updates that signature.
+    ``invocation`` is threaded through so check types like ``exit_code``
+    can read the architect's return code without re-invoking the
+    subprocess.
     """
-    del invocation  # reserved for Section 3
-    return [run_check(check, workspace) for check in case.get("checks", [])]
+    return [
+        run_check(check, workspace, invocation=invocation)
+        for check in case.get("checks", [])
+    ]
 
 
 def build_result(case, workspace, invocation, metrics, checks) -> dict:
@@ -277,8 +279,58 @@ def run_case(case, verbose=False, local=False, engine=None):
     return build_result(case, workspace, invocation, metrics, checks)
 
 
-def run_check(check, workspace):
-    """Run a single check against the workspace."""
+def run_check(check, workspace, invocation=None):
+    """Run a single check against the workspace.
+
+    ``invocation`` is the dict returned by ``invoke_architect`` and is
+    consumed by check types that need the architect subprocess result
+    (currently only ``exit_code``). It is optional so the function can
+    be called from tests with synthetic data.
+
+    Supported check types
+    ---------------------
+
+    ``file_exists``
+        Required: ``path`` (workspace-relative). Passes iff the file
+        or directory exists.
+
+    ``file_contains``
+        Required: ``path``, ``pattern`` (Python regex). Passes iff
+        the file exists and the pattern matches anywhere in its
+        content.
+
+    ``glob_exists``
+        Required: ``pattern`` (workspace-relative glob, recursive).
+        Passes iff at least one path matches.
+
+    ``pytest_pass``
+        Required: ``path`` (test file or directory under workspace).
+        Optional: ``markers`` (pytest -m expression). Runs
+        ``python3 -m pytest <path> -q`` from the workspace; passes
+        iff exit code is 0. Returns ``passed=False, detail="pytest
+        unavailable"`` if pytest is not importable. Times out after
+        120s.
+
+    ``exit_code``
+        Optional: ``expected`` (int, default 0). Compares against
+        ``invocation['exit_code']``. Requires ``invocation`` to be
+        passed in (the orchestrator does this automatically via
+        ``run_checks``).
+
+    ``file_shape``
+        Required: ``path``, ``format`` (one of ``csv``, ``json``,
+        ``jsonl``). Optional shape predicates:
+        ``min_rows``, ``max_rows`` (all formats);
+        ``min_columns``, ``required_columns`` (CSV only);
+        ``required_keys`` (JSON / JSONL — checks first row).
+        Passes iff every supplied predicate holds.
+
+    ``command_succeeds``
+        Required: ``cmd`` (list of strings). Optional:
+        ``cwd_relative`` (workspace-relative subdir). Runs the
+        command via ``subprocess.run`` with ``timeout=60``; passes
+        iff exit code is 0.
+    """
     ctype = check["type"]
 
     if ctype == "file_exists":
@@ -320,6 +372,213 @@ def run_check(check, workspace):
             "pattern": check["pattern"],
             "passed": len(matches) > 0,
             "detail": f"found {len(matches)}: {[os.path.relpath(m, workspace) for m in matches[:5]]}" if matches else "no matches",
+        }
+
+    if ctype == "pytest_pass":
+        target = check.get("path", ".")
+        full_target = os.path.join(workspace, target)
+        if not os.path.exists(full_target):
+            return {
+                "type": ctype, "path": target,
+                "passed": False, "detail": "test path not found",
+            }
+        try:
+            import pytest  # noqa: F401
+        except ImportError:
+            return {
+                "type": ctype, "path": target,
+                "passed": False, "detail": "pytest unavailable",
+            }
+        cmd = [sys.executable, "-m", "pytest", target, "-q"]
+        markers = check.get("markers")
+        if markers:
+            cmd.extend(["-m", markers])
+        try:
+            proc = subprocess.run(
+                cmd, cwd=workspace, capture_output=True, text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "type": ctype, "path": target,
+                "passed": False, "detail": "pytest timed out (120s)",
+            }
+        if proc.returncode == 0:
+            return {
+                "type": ctype, "path": target,
+                "passed": True, "detail": "all tests passed",
+            }
+        failed = [
+            line.strip() for line in proc.stdout.splitlines()
+            if "FAILED" in line
+        ]
+        detail = f"exit {proc.returncode}"
+        if failed:
+            shown = failed[:3]
+            detail += f"; failed: {'; '.join(shown)}"
+            if len(failed) > 3:
+                detail += f" (+{len(failed) - 3} more)"
+        return {
+            "type": ctype, "path": target,
+            "passed": False, "detail": detail,
+        }
+
+    if ctype == "exit_code":
+        expected = check.get("expected", 0)
+        if invocation is None:
+            return {
+                "type": ctype, "expected": expected,
+                "passed": False,
+                "detail": "exit_code check requires invocation context",
+            }
+        actual = invocation.get("exit_code")
+        return {
+            "type": ctype, "expected": expected,
+            "passed": actual == expected,
+            "detail": f"exit_code={actual}",
+        }
+
+    if ctype == "file_shape":
+        rel_path = check["path"]
+        path = os.path.join(workspace, rel_path)
+        fmt = check.get("format", "json")
+        if not os.path.exists(path):
+            return {
+                "type": ctype, "path": rel_path, "format": fmt,
+                "passed": False, "detail": "file not found",
+            }
+        issues = []
+        try:
+            if fmt == "csv":
+                with open(path, newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    rows = list(reader)
+                    cols = reader.fieldnames or []
+                if "min_rows" in check and len(rows) < check["min_rows"]:
+                    issues.append(
+                        f"rows={len(rows)} < min_rows={check['min_rows']}"
+                    )
+                if "max_rows" in check and len(rows) > check["max_rows"]:
+                    issues.append(
+                        f"rows={len(rows)} > max_rows={check['max_rows']}"
+                    )
+                if (
+                    "min_columns" in check
+                    and len(cols) < check["min_columns"]
+                ):
+                    issues.append(
+                        f"cols={len(cols)} < min_columns={check['min_columns']}"
+                    )
+                if "required_columns" in check:
+                    missing = [
+                        c for c in check["required_columns"] if c not in cols
+                    ]
+                    if missing:
+                        issues.append(f"missing columns: {missing}")
+            elif fmt == "json":
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                rows = data if isinstance(data, list) else [data]
+                if "min_rows" in check and len(rows) < check["min_rows"]:
+                    issues.append(
+                        f"rows={len(rows)} < min_rows={check['min_rows']}"
+                    )
+                if "max_rows" in check and len(rows) > check["max_rows"]:
+                    issues.append(
+                        f"rows={len(rows)} > max_rows={check['max_rows']}"
+                    )
+                if "required_keys" in check:
+                    if rows and isinstance(rows[0], dict):
+                        missing = [
+                            k for k in check["required_keys"]
+                            if k not in rows[0]
+                        ]
+                        if missing:
+                            issues.append(f"missing keys: {missing}")
+                    elif not rows:
+                        issues.append("file empty, cannot check required_keys")
+                    else:
+                        issues.append(
+                            "first row is not an object, cannot check "
+                            "required_keys"
+                        )
+            elif fmt == "jsonl":
+                rows = []
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            rows.append(json.loads(line))
+                if "min_rows" in check and len(rows) < check["min_rows"]:
+                    issues.append(
+                        f"rows={len(rows)} < min_rows={check['min_rows']}"
+                    )
+                if "max_rows" in check and len(rows) > check["max_rows"]:
+                    issues.append(
+                        f"rows={len(rows)} > max_rows={check['max_rows']}"
+                    )
+                if "required_keys" in check:
+                    if rows and isinstance(rows[0], dict):
+                        missing = [
+                            k for k in check["required_keys"]
+                            if k not in rows[0]
+                        ]
+                        if missing:
+                            issues.append(f"missing keys: {missing}")
+                    elif not rows:
+                        issues.append("file empty, cannot check required_keys")
+            else:
+                return {
+                    "type": ctype, "path": rel_path, "format": fmt,
+                    "passed": False, "detail": f"unknown format: {fmt}",
+                }
+        except (OSError, json.JSONDecodeError, csv.Error,
+                UnicodeDecodeError) as e:
+            return {
+                "type": ctype, "path": rel_path, "format": fmt,
+                "passed": False, "detail": f"parse error: {e}",
+            }
+        if issues:
+            return {
+                "type": ctype, "path": rel_path, "format": fmt,
+                "passed": False, "detail": "; ".join(issues),
+            }
+        return {
+            "type": ctype, "path": rel_path, "format": fmt,
+            "passed": True, "detail": "shape ok",
+        }
+
+    if ctype == "command_succeeds":
+        cmd = check.get("cmd")
+        if not cmd or not isinstance(cmd, list):
+            return {
+                "type": ctype,
+                "passed": False,
+                "detail": "command_succeeds check requires 'cmd' as a list",
+            }
+        cwd_relative = check.get("cwd_relative", "")
+        cwd = (
+            os.path.join(workspace, cwd_relative)
+            if cwd_relative else workspace
+        )
+        try:
+            proc = subprocess.run(
+                cmd, cwd=cwd, capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            return {
+                "type": ctype, "cmd": cmd,
+                "passed": False, "detail": "timed out (60s)",
+            }
+        except FileNotFoundError as e:
+            return {
+                "type": ctype, "cmd": cmd,
+                "passed": False, "detail": f"command not found: {e}",
+            }
+        return {
+            "type": ctype, "cmd": cmd,
+            "passed": proc.returncode == 0,
+            "detail": f"exit_code={proc.returncode}",
         }
 
     return {"type": ctype, "passed": False, "detail": "unknown check type"}

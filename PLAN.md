@@ -302,7 +302,39 @@ are supported. Add `pytest_pass`, `exit_code`, `file_shape`,
 - `run_check` docstring lists every supported type and its required
   fields.
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+- `integration/eval.py`: added `csv` import; updated `run_checks()`
+  to thread `invocation` through; rewrote `run_check()` with new
+  optional `invocation` kwarg, expanded docstring listing all 7
+  supported types and their fields, and 4 new branches:
+  `pytest_pass`, `exit_code`, `file_shape`, `command_succeeds`.
+- `tests/test_eval_checks.py`: 34 tests across 8 classes covering
+  positive/negative/edge cases for every new check type plus a
+  regression block for the 3 existing types after the signature
+  change. **34/34 passed in 2.72s** — fully deterministic, no LLM,
+  no container.
+
+Implementation notes worth carrying forward:
+
+- `pytest_pass` runs `python3 -m pytest <path> -q` from the workspace
+  with a 120s timeout. Failed test names are extracted from stdout
+  `FAILED` lines, capped at 3 in the detail string with `(+N more)`
+  suffix.
+- `exit_code` returns a structured failure with
+  `detail="exit_code check requires invocation context"` when
+  `invocation` is not threaded in — exists so direct test invocations
+  fail loudly rather than silently passing on `None == 0`.
+- `file_shape` supports CSV (rows, columns, required_columns), JSON
+  (rows from list-or-singleton + required_keys against first row),
+  and JSONL (rows from non-blank lines + required_keys). Catches
+  `OSError`, `json.JSONDecodeError`, `csv.Error`, `UnicodeDecodeError`
+  uniformly with `detail="parse error: …"`.
+- `command_succeeds` validates `cmd` is a list, supports
+  `cwd_relative`, has 60s timeout, and surfaces `FileNotFoundError`
+  as a `command not found` detail.
 
 ## Section 4 — Capture reproducibility metadata
 

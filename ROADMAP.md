@@ -366,8 +366,11 @@ the codebase" above. Deliverables completed: 68-row mechanism
 catalog, 9-gap eval infrastructure assessment, 53-knob feature-flag
 inventory with discrepancy classification, 10-cluster dependency
 adjacency list with 11 required Phase 4 group ablations. No code
-changes — read-only audit. The full audit working set lived in
-`PLAN.md`, removed in the immediately-following commit per project
+changes — read-only audit. The summary above is the headline-level
+distillation; the full row-by-row tables live in
+[`phase0_audit.md`](phase0_audit.md), which Phase 3 (ablation flags)
+and Phase 4 (ablation study) read for the detail. The audit's
+working file `PLAN.md` was removed on phase close per project
 convention.
 
 ## Amending this roadmap

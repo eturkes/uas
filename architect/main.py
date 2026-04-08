@@ -64,6 +64,7 @@ from .executor import (
     parse_uas_result,
     scan_workspace_files,
     format_workspace_scan,
+    build_planner_workspace_context,
     MAX_CONTEXT_LENGTH,
 )
 from .git_state import (

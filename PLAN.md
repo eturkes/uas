@@ -77,7 +77,7 @@ that ship their own `config.py`.
 
 ## Section 1 — Add a planner-side workspace scan helper
 
-**Status:** pending
+**Status:** completed
 
 **Goal:** Provide a single helper that produces a planner-ready summary
 of pre-existing workspace files using the existing

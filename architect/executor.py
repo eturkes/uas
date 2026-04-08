@@ -792,6 +792,47 @@ def format_workspace_scan(ws_files: dict,
     return "\n".join(lines)
 
 
+def build_planner_workspace_context(workspace_path: str,
+                                     max_chars: int = 6000) -> str:
+    """Return a planner-ready summary of pre-existing workspace files.
+
+    Wraps scan_workspace_files() + format_workspace_scan() with the
+    JSON key extractor used elsewhere in the codebase, then caps the
+    result to *max_chars* characters. Returns an empty string when
+    the workspace is empty, missing, or contains only hidden /
+    framework-managed entries.
+
+    The output is intended to be embedded inside a <workspace_files>
+    XML-style block in planner prompts so the LLM can ground its
+    step descriptions in real file contents instead of invented
+    schemas.
+    """
+    try:
+        ws_files = scan_workspace_files(workspace_path)
+        if not ws_files:
+            return ""
+        json_key_extractor = None
+        try:
+            from architect.main import _extract_json_keys
+            json_key_extractor = _extract_json_keys
+        except ImportError:
+            json_key_extractor = None
+        formatted = format_workspace_scan(
+            ws_files, json_key_extractor=json_key_extractor
+        )
+        formatted = (formatted or "").strip()
+        if not formatted:
+            return ""
+        if len(formatted) > max_chars:
+            formatted = (
+                formatted[:max_chars]
+                + "\n... [planner workspace scan truncated]"
+            )
+        return formatted
+    except Exception:
+        return ""
+
+
 def extract_workspace_files(orchestrator_output: str) -> list[str]:
     """Extract file paths under /workspace/ mentioned in orchestrator output."""
     matches = _FILES_PATTERN.findall(orchestrator_output)

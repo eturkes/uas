@@ -13,6 +13,7 @@ from architect.executor import (
     parse_uas_result,
     truncate_output,
     find_engine,
+    build_planner_workspace_context,
     RUN_TIMEOUT,
     _STDOUT_PATTERN,
     _STDERR_PATTERN,
@@ -386,3 +387,43 @@ class TestDynamicClaudeMd:
         content = get_claude_md_content(step_context=ctx)
         assert "none (independent step)" in content
         assert "Prior Steps Output" not in content
+
+
+class TestBuildPlannerWorkspaceContext:
+    def test_build_planner_workspace_context_empty(self, tmp_path):
+        result = build_planner_workspace_context(str(tmp_path))
+        assert result == ""
+
+    def test_build_planner_workspace_context_with_json(self, tmp_path):
+        (tmp_path / "data.json").write_text(
+            '{"metadata": {"version": 1}, "anomalies": []}'
+        )
+        result = build_planner_workspace_context(str(tmp_path))
+        assert "data.json" in result
+        assert "keys:" in result
+        assert "metadata" in result
+
+    def test_build_planner_workspace_context_truncation(self, tmp_path):
+        (tmp_path / "a.txt").write_text("hello world")
+        (tmp_path / "b.txt").write_text("another file")
+        result = build_planner_workspace_context(str(tmp_path), max_chars=20)
+        assert "[planner workspace scan truncated]" in result
+
+    def test_build_planner_workspace_context_circular_import_safety(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / "data.json").write_text('{"k": "v"}')
+
+        import architect.main as architect_main
+
+        class _Raiser:
+            def __getattr__(self, name):
+                if name == "_extract_json_keys":
+                    raise ImportError("simulated circular import")
+                return getattr(architect_main, name)
+
+        import sys
+        monkeypatch.setitem(sys.modules, "architect.main", _Raiser())
+        result = build_planner_workspace_context(str(tmp_path))
+        assert result != ""
+        assert "data.json" in result

@@ -1,0 +1,14 @@
+{
+  "name": "cluster-F-tdd-lru-cache",
+  "goal": "Use test-driven development to implement lru_cache.py exposing an LRUCache class with constructor LRUCache(capacity: int) and methods get(key) -> value-or-None and put(key, value) -> None. Eviction policy: when len exceeds capacity, evict the least recently used entry. get() updates recency. Use TDD: write each test first in test_lru_cache.py before implementing the corresponding behavior. Required tests at minimum: get on missing key returns None, put then get returns value, capacity bound enforced, eviction order is correct after a sequence of get/put, get refreshes recency (entry survives an eviction round), put on existing key updates value AND refreshes recency. Run pytest and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "lru_cache.py"},
+    {"type": "file_exists", "path": "test_lru_cache.py"},
+    {"type": "pytest_pass", "path": "test_lru_cache.py"}
+  ],
+  "notes": {
+    "purpose": "Tier 2 second TDD-target case. LRU semantics are subtle (recency-on-get, recency-on-put-existing) and a common interview question — Opus 4.6 may pass it on first try, but 6 specified tests with two recency-related edges make a one-shot pass less likely. Same TDD planning gate stress as cluster-F-tdd-rate-limiter.",
+    "cluster_target": "F",
+    "expected_mechanism_rows": [8, 43, 67]
+  }
+}

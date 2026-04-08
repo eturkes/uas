@@ -1,0 +1,16 @@
+{
+  "name": "temperature-converter-cli",
+  "goal": "Build a Python CLI tool tempconv.py using argparse. Usage: 'python3 tempconv.py --from celsius --to fahrenheit 100'. Supported units (--from / --to): celsius, fahrenheit, kelvin. The script prints the converted numeric value to stdout (with up to 2 decimal places, no trailing units). Exit code 0 on success, non-zero on invalid unit. Also write test_tempconv.py with pytest tests using subprocess.run to invoke the CLI and check stdout for at least: C->F (100->212.00), F->C (32->0.00), C->K (0->273.15), K->C (273.15->0.00), and an invalid-unit failure path. Run pytest and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "tempconv.py"},
+    {"type": "file_exists", "path": "test_tempconv.py"},
+    {"type": "pytest_pass", "path": "test_tempconv.py"},
+    {
+      "type": "command_succeeds",
+      "cmd": ["python3", "tempconv.py", "--from", "celsius", "--to", "fahrenheit", "100"]
+    }
+  ],
+  "notes": {
+    "purpose": "Tier 1 CLI tool with both internal pytest test and an external command_succeeds smoke. The combination protects against a common LLM failure: passing internal mocks while breaking the actual CLI invocation."
+  }
+}

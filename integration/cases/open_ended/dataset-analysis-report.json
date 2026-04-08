@@ -1,0 +1,18 @@
+{
+  "name": "dataset-analysis-report",
+  "goal": "Read the fixture dataset at cars.csv (columns: make, model, year, mileage_km, price_eur). Write a Python analysis script analyze_cars.py that computes summary statistics and writes a Markdown analysis report at ANALYSIS.md. The report must contain: (1) a header and one-paragraph dataset overview citing the actual row count and column names; (2) a 'Summary statistics' section with the mean, median, and standard deviation of mileage_km and price_eur, computed from the actual fixture data; (3) at least 3 data-driven observations referencing specific numbers from the dataset (e.g., 'the most expensive car is …', 'cars from year YYYY have mean price …'); (4) a brief conclusion. Run analyze_cars.py as the final step so ANALYSIS.md is produced.",
+  "setup_files": ["cars.csv"],
+  "checks": [
+    {"type": "file_exists", "path": "analyze_cars.py"},
+    {"type": "file_exists", "path": "ANALYSIS.md"},
+    {
+      "type": "llm_judge",
+      "criteria": "Pass iff ALL of these are true: (1) ANALYSIS.md exists and is at least 25 lines long. (2) It contains a dataset overview paragraph that cites the actual row count (matching cars.csv) and lists the actual column names. (3) It contains a Summary Statistics section with numeric mean, median, and standard deviation for both mileage_km and price_eur — the numbers must be plausible given cars.csv (within a sane range, not all zeros, not all the same value). (4) It contains at least 3 data-driven observations each referencing a specific car or specific number from cars.csv. (5) Conclusions section present. (6) analyze_cars.py exists and computes statistics from cars.csv (not hard-coded). Any hallucinated numbers or missing section is a failure.",
+      "files": ["analyze_cars.py", "ANALYSIS.md", "cars.csv"],
+      "samples": 5
+    }
+  ],
+  "notes": {
+    "purpose": "Tier 3 open-ended data-analysis case. Pinning the report against the actual fixture (cars.csv is also passed to the judge) catches a model that hallucinates statistics. The case's value is testing the model's ability to read data, compute, and write a coherent report grounded in real numbers."
+  }
+}

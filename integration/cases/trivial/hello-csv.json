@@ -1,0 +1,19 @@
+{
+  "name": "hello-csv",
+  "goal": "Create a CSV file at greeting.csv with header row 'id,message' followed by exactly one data row with id=1 and message='Hello from UAS'.",
+  "checks": [
+    {"type": "file_exists", "path": "greeting.csv"},
+    {
+      "type": "file_shape",
+      "path": "greeting.csv",
+      "format": "csv",
+      "required_columns": ["id", "message"],
+      "min_rows": 1,
+      "max_rows": 1
+    },
+    {"type": "file_contains", "path": "greeting.csv", "pattern": "Hello from UAS"}
+  ],
+  "notes": {
+    "purpose": "Tier 0 smoke test for CSV file production. Exercises file_shape (csv format + required_columns + row-count bounds). The min_rows == max_rows == 1 constraint catches the common LLM tendency to add example rows beyond the spec."
+  }
+}

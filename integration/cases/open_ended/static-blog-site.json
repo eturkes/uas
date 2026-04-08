@@ -1,0 +1,21 @@
+{
+  "name": "static-blog-site",
+  "goal": "Build a small static blog under site/ consisting of: site/index.html (the home page listing all posts), site/posts/post-1.html, site/posts/post-2.html, site/posts/post-3.html (three blog posts on any topic), and site/style.css (a single shared stylesheet). Each post page must have a level-1 header with the post title, a date paragraph, the post body, and a 'Back to home' link to ../index.html. The home page must list all three posts as links. style.css must be referenced by every page and must define at least colors and a readable body font. No JavaScript.",
+  "checks": [
+    {
+      "type": "llm_judge",
+      "criteria": "Pass iff ALL of these are true: (1) site/index.html exists and contains at least 3 anchor tags whose href points to posts/post-1.html, posts/post-2.html, posts/post-3.html (or equivalent relative paths). (2) Each of site/posts/post-{1,2,3}.html exists, has an H1 header with the post title, contains a date paragraph (any format with at least year-month or month-year), has body content of at least 50 words, and has a 'Back to home' anchor pointing to ../index.html. (3) site/style.css exists and is referenced via <link rel=\"stylesheet\"> in every HTML file. (4) style.css defines at least one color rule and one font rule. Any missing element is a failure.",
+      "files": [
+        "site/index.html",
+        "site/posts/post-1.html",
+        "site/posts/post-2.html",
+        "site/posts/post-3.html",
+        "site/style.css"
+      ],
+      "samples": 5
+    }
+  ],
+  "notes": {
+    "purpose": "Tier 3 open-ended static-site case. The judge criteria are exhaustive enough to be quasi-deterministic: each requirement maps to a specific element to find, so the judge has clear ground truth even though the surface form is open-ended. Mirrors the should-pass smoke from PLAN §8."
+  }
+}

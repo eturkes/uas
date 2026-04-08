@@ -1,0 +1,18 @@
+{
+  "name": "cluster-E-multi-requirement-cli",
+  "goal": "Build a Python CLI tool fileinfo.py with the following requirements: (1) accepts a positional argument PATH (file or directory). (2) When PATH is a file, prints a single JSON object to stdout with keys: path, size_bytes, mtime_iso, sha256, mime_type. (3) When PATH is a directory, prints a JSON list of one such object per file (recursively). (4) Supports a --include EXT flag (repeatable) restricting to files with the given extension. (5) Supports a --max-depth N flag limiting directory recursion depth (0 = current directory only, default = unlimited). (6) Supports a --format flag accepting 'json' or 'csv', defaulting to 'json'. (7) Exits with code 0 on success, code 2 on missing PATH, code 3 on permission errors. (8) Includes a --version flag printing exactly 'fileinfo 0.1.0' and exiting 0. Also write test_fileinfo.py with at least 8 pytest tests covering the version flag, file mode, directory mode, --include filter, --max-depth, --format csv, missing PATH, and at least one happy-path JSON shape check. Run pytest and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "fileinfo.py"},
+    {"type": "file_exists", "path": "test_fileinfo.py"},
+    {"type": "pytest_pass", "path": "test_fileinfo.py"},
+    {
+      "type": "command_succeeds",
+      "cmd": ["python3", "fileinfo.py", "--version"]
+    }
+  ],
+  "notes": {
+    "purpose": "Tier 2 coverage replan target. 8 explicit numbered requirements stress requirement extraction (#9, #11) and coverage matrix (#9, #10) — first plan likely misses one requirement, triggering coverage gap fill (#10) or replan (#44). Pytest gates the impl correctness.",
+    "cluster_target": "E",
+    "expected_mechanism_rows": [9, 10, 11, 44, 45]
+  }
+}

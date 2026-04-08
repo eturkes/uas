@@ -1,0 +1,20 @@
+{
+  "name": "csv-to-json",
+  "goal": "Read the CSV file at sales.csv (a header row plus several data rows with columns id, region, amount). Write a JSON file at sales.json containing a list of objects, one per CSV data row, with the same column names as keys. Numeric columns (id, amount) must be JSON numbers, not strings.",
+  "setup_files": ["sales.csv"],
+  "checks": [
+    {"type": "file_exists", "path": "sales.json"},
+    {
+      "type": "file_shape",
+      "path": "sales.json",
+      "format": "json",
+      "min_rows": 5,
+      "required_keys": ["id", "region", "amount"]
+    },
+    {"type": "file_contains", "path": "sales.json", "pattern": "\"region\""},
+    {"type": "file_contains", "path": "sales.json", "pattern": "\"amount\":\\s*\\d"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 deterministic CSV→JSON conversion. The amount-as-number regex catches the common LLM mistake of leaving every value as a string after csv.DictReader."
+  }
+}

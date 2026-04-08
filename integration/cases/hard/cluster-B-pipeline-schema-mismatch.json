@@ -1,0 +1,34 @@
+{
+  "name": "cluster-B-pipeline-schema-mismatch",
+  "goal": "Build a three-step Python data pipeline. Step 1: Read sales_raw.csv (columns: order_id, customer_id, product, qty, unit_price) and write a normalized JSONL file at sales_normalized.jsonl where each line is an object with keys order_id (int), customer_id (int), product (str), qty (int), unit_price (float), line_total (float, computed as qty*unit_price). Step 2: Read sales_normalized.jsonl and aggregate by customer_id, writing customer_totals.json as a list of objects [{customer_id, total_orders, total_spend}, ...] sorted by total_spend descending. Step 3: Read customer_totals.json and write a CSV report at top_customers.csv containing only the customers whose total_spend exceeds 500, columns: customer_id, total_orders, total_spend. The fixture sales_raw.csv contains at least 3 distinct customers, and at least 2 of them must end up in top_customers.csv.",
+  "setup_files": ["sales_raw.csv"],
+  "checks": [
+    {"type": "file_exists", "path": "sales_normalized.jsonl"},
+    {"type": "file_exists", "path": "customer_totals.json"},
+    {"type": "file_exists", "path": "top_customers.csv"},
+    {
+      "type": "file_shape",
+      "path": "sales_normalized.jsonl",
+      "format": "jsonl",
+      "required_keys": ["order_id", "customer_id", "product", "qty", "unit_price", "line_total"]
+    },
+    {
+      "type": "file_shape",
+      "path": "customer_totals.json",
+      "format": "json",
+      "required_keys": ["customer_id", "total_orders", "total_spend"]
+    },
+    {
+      "type": "file_shape",
+      "path": "top_customers.csv",
+      "format": "csv",
+      "required_columns": ["customer_id", "total_orders", "total_spend"],
+      "min_rows": 2
+    }
+  ],
+  "notes": {
+    "purpose": "Tier 2 counterfactual+backtrack target. Three steps with cross-step schema dependencies: a missing 'line_total' in step 1 silently breaks step 2; an unsorted aggregate in step 2 silently breaks step 3's filtering. Failures in step 3's checks should lead the counterfactual root-cause tracer to finger step 1 or step 2 for backtracking.",
+    "cluster_target": "B",
+    "expected_mechanism_rows": [20, 25, 26, 32, 34]
+  }
+}

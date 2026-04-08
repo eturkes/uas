@@ -1,0 +1,11 @@
+{
+  "name": "hello-file",
+  "goal": "Create a file called hello.txt containing exactly the text: Hello from UAS",
+  "checks": [
+    {"type": "file_exists", "path": "hello.txt"},
+    {"type": "file_contains", "path": "hello.txt", "pattern": "Hello from UAS"}
+  ],
+  "notes": {
+    "purpose": "Smoke test that the harness, container engine, auth, and architect/orchestrator round-trip can produce a single text file. Failure here means the harness itself is broken, not the model."
+  }
+}

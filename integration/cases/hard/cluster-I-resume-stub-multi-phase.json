@@ -1,0 +1,25 @@
+{
+  "name": "cluster-I-resume-stub-multi-phase",
+  "goal": "Build a small data analysis project with these phases, each in its own Python file: (1) loader.py exposing load(path: str) that reads ratings.csv (columns: user_id, movie_id, rating, timestamp). (2) cleaner.py exposing clean(df) that drops rows with rating outside [1.0, 5.0] and rows with null user_id. (3) features.py exposing build_features(df) that adds columns 'user_avg' (per-user mean rating) and 'rating_z' (z-score of rating within user). (4) reporter.py exposing write_report(df, path) that writes a JSON report at report.json with keys total_users, total_ratings, mean_rating, top_user_by_count. (5) main.py that orchestrates loader → cleaner → features → reporter end-to-end, reading ratings.csv and writing report.json. Use pandas if available; otherwise pure Python. Run main.py as the final step.",
+  "setup_files": ["ratings.csv"],
+  "checks": [
+    {"type": "file_exists", "path": "loader.py"},
+    {"type": "file_exists", "path": "cleaner.py"},
+    {"type": "file_exists", "path": "features.py"},
+    {"type": "file_exists", "path": "reporter.py"},
+    {"type": "file_exists", "path": "main.py"},
+    {"type": "file_exists", "path": "report.json"},
+    {
+      "type": "file_shape",
+      "path": "report.json",
+      "format": "json",
+      "required_keys": ["total_users", "total_ratings", "mean_rating", "top_user_by_count"]
+    }
+  ],
+  "notes": {
+    "purpose": "Tier 2 Cluster I (resume + persistence) PLACEHOLDER case. Resume (#59) + progress file (#16) + attempt history (#63) only fire after a previous interrupted run. The eval harness has no facility to SIGTERM a run mid-execution, so this case cannot directly trigger the resume path. It is included as a Cluster I representative in the Phase 1 case set per PLAN §9 step 4: a long, multi-file, multi-phase project that WOULD exercise the resume machinery if interrupted. Phase 4 will need a separate interrupt-and-resume harness to actually measure Cluster I; this case provides the workload for that future test.",
+    "cluster_target": "I",
+    "expected_mechanism_rows": [16, 59, 63],
+    "limitation": "Resume cannot be triggered without mid-run interruption. Phase 1 includes this as workload only; Phase 4 needs an interrupt harness to measure the cluster."
+  }
+}

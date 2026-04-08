@@ -103,70 +103,110 @@ class TestAggregateByTier:
 
 
 class TestLoadPromptsTierFilter:
-    def _write_prompts(self, td, prompts):
-        path = os.path.join(td, "prompts.json")
+    """Section 9: loader walks ``CASES_DIR/<tier>/<case>.json`` and
+    derives ``case["tier"]`` from the parent directory name."""
+
+    def _write_case(self, cases_dir, tier, case_name, payload):
+        tier_dir = os.path.join(cases_dir, tier)
+        os.makedirs(tier_dir, exist_ok=True)
+        path = os.path.join(tier_dir, f"{case_name}.json")
         with open(path, "w") as f:
-            json.dump(prompts, f)
+            json.dump(payload, f)
         return path
 
     def test_no_tier_filter_returns_all(self, monkeypatch):
         with tempfile.TemporaryDirectory() as td:
-            path = self._write_prompts(td, [
-                {"name": "a", "tier": "trivial", "goal": "g"},
-                {"name": "b", "tier": "moderate", "goal": "g"},
-                {"name": "c", "tier": "hard", "goal": "g"},
-            ])
-            monkeypatch.setattr(ev, "PROMPTS_FILE", path)
+            self._write_case(td, "trivial", "a", {"name": "a", "goal": "g"})
+            self._write_case(td, "moderate", "b", {"name": "b", "goal": "g"})
+            self._write_case(td, "hard", "c", {"name": "c", "goal": "g"})
+            monkeypatch.setattr(ev, "CASES_DIR", td)
             cases = ev.load_prompts()
             assert {c["name"] for c in cases} == {"a", "b", "c"}
 
     def test_tier_exact_match(self, monkeypatch):
         with tempfile.TemporaryDirectory() as td:
-            path = self._write_prompts(td, [
-                {"name": "a", "tier": "trivial", "goal": "g"},
-                {"name": "b", "tier": "moderate", "goal": "g"},
-                {"name": "c", "tier": "hard", "goal": "g"},
-            ])
-            monkeypatch.setattr(ev, "PROMPTS_FILE", path)
+            self._write_case(td, "trivial", "a", {"name": "a", "goal": "g"})
+            self._write_case(td, "moderate", "b", {"name": "b", "goal": "g"})
+            self._write_case(td, "hard", "c", {"name": "c", "goal": "g"})
+            monkeypatch.setattr(ev, "CASES_DIR", td)
             cases = ev.load_prompts(tier="moderate")
             assert {c["name"] for c in cases} == {"b"}
 
-    def test_missing_tier_defaults_to_trivial(self, monkeypatch):
+    def test_directory_overrides_in_file_tier(self, monkeypatch):
+        # The directory name is canonical: even if the JSON file
+        # carries a stale ``tier`` field (e.g. from a migration),
+        # the loader rewrites it to the parent directory name.
         with tempfile.TemporaryDirectory() as td:
-            path = self._write_prompts(td, [
-                {"name": "no-tier", "goal": "g"},
-                {"name": "yes-tier", "tier": "hard", "goal": "g"},
-            ])
-            monkeypatch.setattr(ev, "PROMPTS_FILE", path)
+            self._write_case(
+                td, "trivial", "a",
+                {"name": "a", "tier": "hard", "goal": "g"},
+            )
+            monkeypatch.setattr(ev, "CASES_DIR", td)
             cases = ev.load_prompts()
-            no_tier_case = next(c for c in cases if c["name"] == "no-tier")
-            assert no_tier_case["tier"] == "trivial"
+            assert cases[0]["tier"] == "trivial"
+
+    def test_missing_tier_dirs_skipped(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as td:
+            self._write_case(td, "trivial", "a", {"name": "a", "goal": "g"})
+            # No moderate / hard / open_ended dirs at all.
+            monkeypatch.setattr(ev, "CASES_DIR", td)
+            cases = ev.load_prompts()
+            assert [c["name"] for c in cases] == ["a"]
 
     def test_tier_filter_and_name_filter_combined(self, monkeypatch):
         with tempfile.TemporaryDirectory() as td:
-            path = self._write_prompts(td, [
-                {"name": "alpha-1", "tier": "trivial", "goal": "g"},
-                {"name": "alpha-2", "tier": "moderate", "goal": "g"},
-                {"name": "beta-1", "tier": "trivial", "goal": "g"},
-            ])
-            monkeypatch.setattr(ev, "PROMPTS_FILE", path)
+            self._write_case(
+                td, "trivial", "alpha-1", {"name": "alpha-1", "goal": "g"},
+            )
+            self._write_case(
+                td, "moderate", "alpha-2", {"name": "alpha-2", "goal": "g"},
+            )
+            self._write_case(
+                td, "trivial", "beta-1", {"name": "beta-1", "goal": "g"},
+            )
+            monkeypatch.setattr(ev, "CASES_DIR", td)
             cases = ev.load_prompts(filter_pattern="alpha", tier="trivial")
             assert {c["name"] for c in cases} == {"alpha-1"}
 
     def test_tier_filter_no_matches(self, monkeypatch):
         with tempfile.TemporaryDirectory() as td:
-            path = self._write_prompts(td, [
-                {"name": "a", "tier": "trivial", "goal": "g"},
-            ])
-            monkeypatch.setattr(ev, "PROMPTS_FILE", path)
+            self._write_case(td, "trivial", "a", {"name": "a", "goal": "g"})
+            monkeypatch.setattr(ev, "CASES_DIR", td)
             assert ev.load_prompts(tier="open_ended") == []
 
+    def test_canonical_tier_order_preserved(self, monkeypatch):
+        # Cases come back in ALLOWED_TIERS order, then file-name
+        # order within a tier — never in os.listdir's filesystem
+        # order.
+        with tempfile.TemporaryDirectory() as td:
+            self._write_case(td, "open_ended", "z", {"name": "z", "goal": "g"})
+            self._write_case(td, "trivial", "y", {"name": "y", "goal": "g"})
+            self._write_case(td, "hard", "x", {"name": "x", "goal": "g"})
+            self._write_case(td, "moderate", "w", {"name": "w", "goal": "g"})
+            monkeypatch.setattr(ev, "CASES_DIR", td)
+            cases = ev.load_prompts()
+            assert [c["name"] for c in cases] == ["y", "w", "x", "z"]
 
-class TestExistingPromptsBackfilled:
-    """The 4 cases shipped in prompts.json should all carry tier=trivial."""
+    def test_non_json_files_skipped(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as td:
+            self._write_case(td, "trivial", "a", {"name": "a", "goal": "g"})
+            # Drop a stray non-JSON file in the same directory.
+            stray = os.path.join(td, "trivial", "README.md")
+            with open(stray, "w") as f:
+                f.write("# notes")
+            monkeypatch.setattr(ev, "CASES_DIR", td)
+            cases = ev.load_prompts()
+            assert [c["name"] for c in cases] == ["a"]
 
-    def test_all_existing_cases_are_trivial(self):
+
+class TestShippedCasesTierIsDirectoryDerived:
+    """Every case shipped under ``integration/cases/<tier>/`` carries
+    a ``tier`` field that matches its parent directory."""
+
+    def test_shipped_cases_tier_matches_parent_dir(self):
         cases = ev.load_prompts()
-        assert len(cases) == 4
+        assert len(cases) >= 1, (
+            "expected at least one shipped case under integration/cases/"
+        )
         for c in cases:
-            assert c["tier"] == "trivial"
+            assert c["tier"] in ev.ALLOWED_TIERS

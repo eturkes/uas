@@ -29,7 +29,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 WORKSPACES_DIR = os.path.join(SCRIPT_DIR, "workspace")
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
-PROMPTS_FILE = os.path.join(SCRIPT_DIR, "prompts.json")
+# Section 9: per-tier directory layout. Each case lives at
+# CASES_DIR/<tier>/<case_name>.json. The tier is taken from the
+# parent directory name and is the canonical source of truth.
+CASES_DIR = os.path.join(SCRIPT_DIR, "cases")
 # Legacy per-invocation summary file. Overwritten on every run. Kept
 # for one phase as a compatibility surface; Phase 5 removes it. New
 # consumers should read RESULTS_JSONL instead.
@@ -186,25 +189,47 @@ ALLOWED_TIERS = ("trivial", "moderate", "hard", "open_ended")
 
 
 def load_prompts(filter_pattern=None, tier=None):
-    """Load and filter cases from PROMPTS_FILE.
+    """Load and filter cases from ``CASES_DIR/<tier>/<case>.json``.
+
+    The directory layout is::
+
+        integration/cases/<tier>/<case_name>.json
+
+    where ``<tier>`` is one of ``ALLOWED_TIERS``. The tier is taken
+    from the parent directory name and overrides any ``"tier"`` field
+    inside the JSON file. Cases are returned in
+    ``ALLOWED_TIERS``-canonical order, sorted alphabetically by file
+    name within each tier, so iteration is deterministic across runs.
 
     ``filter_pattern`` is a case-insensitive regex against case name.
     ``tier`` is an exact-match filter against the case's ``tier``
-    field (default ``"trivial"`` if missing).
+    field. Tier directories that do not exist are silently skipped,
+    so a partially-populated ``cases/`` tree returns whatever is
+    present.
     """
-    with open(PROMPTS_FILE) as f:
-        prompts = json.load(f)
-    # Normalise: every case carries a tier (default trivial).
-    for p in prompts:
-        p.setdefault("tier", "trivial")
+    cases = []
+    for tier_name in ALLOWED_TIERS:
+        tier_dir = os.path.join(CASES_DIR, tier_name)
+        if not os.path.isdir(tier_dir):
+            continue
+        for entry in sorted(os.listdir(tier_dir)):
+            if not entry.endswith(".json"):
+                continue
+            path = os.path.join(tier_dir, entry)
+            with open(path) as f:
+                case = json.load(f)
+            # Directory name is the canonical tier; ignore any
+            # in-file tier field that disagrees.
+            case["tier"] = tier_name
+            cases.append(case)
     if filter_pattern:
-        prompts = [
-            p for p in prompts
-            if re.search(filter_pattern, p["name"], re.IGNORECASE)
+        cases = [
+            c for c in cases
+            if re.search(filter_pattern, c["name"], re.IGNORECASE)
         ]
     if tier:
-        prompts = [p for p in prompts if p.get("tier") == tier]
-    return prompts
+        cases = [c for c in cases if c.get("tier") == tier]
+    return cases
 
 
 class SetupFileMissing(Exception):
@@ -1152,7 +1177,10 @@ def main():
             checks = ", ".join(ch["type"] for ch in c.get("checks", []))
             setup = c.get("setup_files", [])
             tag = " (needs data/)" if setup else ""
-            print(f"  {c['name']:<25} [{checks}]{tag}")
+            tier_label = c.get("tier", "trivial")
+            print(
+                f"  [{tier_label:<10}] {c['name']:<32} [{checks}]{tag}"
+            )
             print(f"    {c['goal'][:80]}")
         return 0
 

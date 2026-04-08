@@ -1,0 +1,15 @@
+{
+  "name": "cluster-A-fixed-width-records",
+  "goal": "Read the CSV file at employees.csv (columns: id, name, department, salary) and produce a fixed-width text file at employees.txt with the following exact column layout, one record per line: columns 1-6 contain id (right-aligned, zero-padded to 6 chars), columns 7-30 contain name (left-aligned, space-padded to 24 chars), columns 31-50 contain department (left-aligned, space-padded to 20 chars), columns 51-60 contain salary (right-aligned, zero-padded to 10 chars). Every line must be exactly 60 characters wide. No header line. Use only ASCII characters. The first row of employees.csv has id=1, name='Alice Smith', department='Engineering', salary=95000.",
+  "setup_files": ["employees.csv"],
+  "checks": [
+    {"type": "file_exists", "path": "employees.txt"},
+    {"type": "file_contains", "path": "employees.txt", "pattern": "^000001Alice Smith {13}Engineering {9}0000095000$"},
+    {"type": "file_contains", "path": "employees.txt", "pattern": "^.{60}$"}
+  ],
+  "notes": {
+    "purpose": "Tier 2 reflection-target case. Strict layout (60-char lines, exact zero-padding, exact column widths) is highly likely to fail first-attempt and trigger reflection on a width / padding / alignment mistake. The first regex pins the exact byte layout of row 1.",
+    "cluster_target": "A",
+    "expected_mechanism_rows": [20, 21, 22, 23, 27, 32]
+  }
+}

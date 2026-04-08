@@ -1,0 +1,20 @@
+{
+  "name": "sqlite-etl-loader",
+  "goal": "Build a Python script load_cities.py that: (1) opens a SQLite database at cities.db, (2) creates a table 'cities' with columns id INTEGER PRIMARY KEY, name TEXT, country TEXT, population INTEGER, (3) reads the fixture cities.csv (columns: id,name,country,population) and inserts every row into the cities table, (4) runs a query to select the top 5 cities by population and writes them as a JSON array of objects to top5.json. Run the script as a final step so cities.db and top5.json both exist on disk.",
+  "setup_files": ["cities.csv"],
+  "checks": [
+    {"type": "file_exists", "path": "cities.db"},
+    {"type": "file_exists", "path": "top5.json"},
+    {
+      "type": "file_shape",
+      "path": "top5.json",
+      "format": "json",
+      "min_rows": 5,
+      "max_rows": 5,
+      "required_keys": ["name", "country", "population"]
+    }
+  ],
+  "notes": {
+    "purpose": "Tier 1 multi-step ETL case. Stresses the model's ability to chain SQLite + CSV + JSON in a single Python script. The min_rows == max_rows == 5 file_shape constraint catches the off-by-one common error of selecting top 4 or top 6."
+  }
+}

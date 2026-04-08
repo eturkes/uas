@@ -1,0 +1,12 @@
+{
+  "name": "caesar-cipher-tested",
+  "goal": "Implement a Python module caesar.py exposing two functions: encrypt(text: str, shift: int) -> str and decrypt(text: str, shift: int) -> str. The cipher must shift letters within the alphabet (preserving case), leave non-letter characters unchanged, and round-trip cleanly: decrypt(encrypt(t, n), n) == t for any text and shift. Also write test_caesar.py covering: encrypt('abc', 1) == 'bcd'; encrypt('XYZ', 3) == 'ABC' (wrap-around); encrypt('Hi, World!', 13) round-trips; non-letter punctuation preserved; shift of 0 is identity. Run pytest from the workspace and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "caesar.py"},
+    {"type": "file_exists", "path": "test_caesar.py"},
+    {"type": "pytest_pass", "path": "test_caesar.py"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 cryptography-style case. The wrap-around requirement and case preservation are the two non-trivial bits. The round-trip property check is a strong pattern the model has to internalize."
+  }
+}

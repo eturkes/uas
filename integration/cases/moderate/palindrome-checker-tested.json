@@ -1,0 +1,12 @@
+{
+  "name": "palindrome-checker-tested",
+  "goal": "Implement a Python module palindrome.py exposing is_palindrome(text: str) -> bool that returns True if text reads the same forward and backward, ignoring case, whitespace, and ASCII punctuation. Examples: is_palindrome('A man, a plan, a canal: Panama') -> True; is_palindrome('hello') -> False; is_palindrome('') -> True. Also write test_palindrome.py with at least 6 pytest test cases covering both directions, the empty string, mixed case, and a sentence with punctuation. Run pytest from the workspace and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "palindrome.py"},
+    {"type": "file_exists", "path": "test_palindrome.py"},
+    {"type": "pytest_pass", "path": "test_palindrome.py"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 string-processing + tests. Stresses normalization handling. The empty-string-is-palindrome edge case is the most common bug source."
+  }
+}

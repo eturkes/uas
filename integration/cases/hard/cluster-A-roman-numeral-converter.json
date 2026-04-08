@@ -1,0 +1,14 @@
+{
+  "name": "cluster-A-roman-numeral-converter",
+  "goal": "Implement roman.py exposing to_roman(n: int) -> str and from_roman(s: str) -> int. Both must handle the full range 1..3999 and use the standard subtractive notation (IV, IX, XL, XC, CD, CM). to_roman(0) and to_roman(4000) raise ValueError. from_roman raises ValueError on invalid strings (lowercase, empty, unknown chars, malformed sequences like 'IIII'). Write test_roman.py with at least 12 pytest tests covering: round-trip for n in [1, 4, 9, 40, 49, 90, 400, 900, 1994, 3999], the two ValueError boundaries, and at least one invalid-string ValueError. Run pytest and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "roman.py"},
+    {"type": "file_exists", "path": "test_roman.py"},
+    {"type": "pytest_pass", "path": "test_roman.py"}
+  ],
+  "notes": {
+    "purpose": "Tier 2 reflection-target case. Roman numeral conversion has many edge cases (subtractive notation, validation of 'IIII' as invalid). 12+ tests with specific value pinning means first attempt is likely to miss something and trigger pytest failure → reflection → rewrite.",
+    "cluster_target": "A",
+    "expected_mechanism_rows": [20, 21, 22, 27, 35]
+  }
+}

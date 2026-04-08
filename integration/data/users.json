@@ -1,0 +1,7 @@
+[
+  {"id": 1, "name": "Alice Chen", "email": "alice@example.com", "signup_date": "2024-01-15"},
+  {"id": 2, "name": "Bob Martinez", "email": "bob@example.com", "signup_date": "2024-02-08"},
+  {"id": 3, "name": "Carol Singh", "email": "carol@example.com", "signup_date": "2024-03-22"},
+  {"id": 4, "name": "David Okafor", "email": "david@example.com", "signup_date": "2024-04-11"},
+  {"id": 5, "name": "Erin Tanaka", "email": "erin@example.com", "signup_date": "2024-05-30"}
+]

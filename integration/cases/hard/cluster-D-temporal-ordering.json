@@ -1,0 +1,28 @@
+{
+  "name": "cluster-D-temporal-ordering",
+  "goal": "Build a Python script split_timeseries.py that reads timeseries.csv (columns: timestamp ISO-8601, sensor_id, value) and produces two files: train.csv and test.csv. The split must be temporal: train.csv contains the earliest 80% of rows by timestamp; test.csv contains the latest 20%. Both output files preserve the original column order and include a header. The maximum timestamp in train.csv must be strictly less than the minimum timestamp in test.csv (no leakage). Run the script as the final step. The fixture timeseries.csv contains at least 50 rows.",
+  "setup_files": ["timeseries.csv"],
+  "checks": [
+    {"type": "file_exists", "path": "train.csv"},
+    {"type": "file_exists", "path": "test.csv"},
+    {
+      "type": "file_shape",
+      "path": "train.csv",
+      "format": "csv",
+      "required_columns": ["timestamp", "sensor_id", "value"],
+      "min_rows": 30
+    },
+    {
+      "type": "file_shape",
+      "path": "test.csv",
+      "format": "csv",
+      "required_columns": ["timestamp", "sensor_id", "value"],
+      "min_rows": 5
+    }
+  ],
+  "notes": {
+    "purpose": "Tier 2 validation cascade target — specifically the data-leakage check (#32 output quality temporal-ordering subcheck). Random splitting passes execution but fails the temporal-ordering quality check, forcing a rewrite. file_shape min_rows confirm the split happened at all.",
+    "cluster_target": "D",
+    "expected_mechanism_rows": [32, 39, 40, 41, 42, 56]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "cluster-F-tdd-rate-limiter",
+  "goal": "Use test-driven development to implement rate_limiter.py exposing a TokenBucket class with constructor TokenBucket(capacity: int, refill_rate: float) where refill_rate is tokens per second. Methods: try_acquire(tokens: int = 1) -> bool (returns True and consumes tokens if available, else returns False without consuming), available() -> float (returns current token count, may be fractional). Use TDD: write each test first in test_rate_limiter.py before implementing the corresponding behavior. Required tests at minimum: starts at full capacity, try_acquire(1) reduces available by 1, try_acquire returns False when empty, available() refills over time (use time.monotonic-based clock injection or freezegun-equivalent), capacity is the upper bound for refill, multi-token acquire is atomic (no partial). Run pytest and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "rate_limiter.py"},
+    {"type": "file_exists", "path": "test_rate_limiter.py"},
+    {"type": "pytest_pass", "path": "test_rate_limiter.py"}
+  ],
+  "notes": {
+    "purpose": "Tier 2 TDD-target case. Goal explicitly says 'use test-driven development'. The TDD planning gate (#8) inspects the plan for test→impl pairs and fails any non-exempt impl step that lacks a preceding test step. The clock injection requirement is the non-trivial bit that may need rewriting.",
+    "cluster_target": "F",
+    "expected_mechanism_rows": [8, 43, 67]
+  }
+}

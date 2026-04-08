@@ -1,0 +1,19 @@
+{
+  "name": "json-to-csv",
+  "goal": "Read the JSON file at users.json (a list of objects each with keys: id, name, email, signup_date). Write a CSV file at users.csv with a header row 'id,name,email,signup_date' followed by one data row per object, in the same order they appear in the JSON.",
+  "setup_files": ["users.json"],
+  "checks": [
+    {"type": "file_exists", "path": "users.csv"},
+    {
+      "type": "file_shape",
+      "path": "users.csv",
+      "format": "csv",
+      "required_columns": ["id", "name", "email", "signup_date"],
+      "min_rows": 4
+    },
+    {"type": "file_contains", "path": "users.csv", "pattern": "@"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 deterministic JSON→CSV conversion. Inverse of csv-to-json. The @ regex confirms email addresses survived the transform."
+  }
+}

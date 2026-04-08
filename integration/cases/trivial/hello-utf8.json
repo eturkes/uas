@@ -1,0 +1,13 @@
+{
+  "name": "hello-utf8",
+  "goal": "Create a UTF-8 encoded text file at greetings.txt containing exactly these three lines, in this order, each on its own line: 'Hello, UAS', 'こんにちは UAS', 'Olá UAS'. The file must use UTF-8 encoding (no BOM).",
+  "checks": [
+    {"type": "file_exists", "path": "greetings.txt"},
+    {"type": "file_contains", "path": "greetings.txt", "pattern": "Hello, UAS"},
+    {"type": "file_contains", "path": "greetings.txt", "pattern": "こんにちは UAS"},
+    {"type": "file_contains", "path": "greetings.txt", "pattern": "Olá UAS"}
+  ],
+  "notes": {
+    "purpose": "Tier 0 smoke test for non-ASCII text handling. file_contains in this harness reads the file with the default UTF-8 codec; a model that writes Latin-1, ASCII-escapes the Japanese text, or emits a BOM will fail one of the three pattern checks."
+  }
+}

@@ -16,7 +16,9 @@ Sandbox.Dockerfile
 # Integration test runtime artifacts
 integration/workspace/
 integration/eval_results.json
-integration/data/
+integration/eval_results_aggregate.json
+# integration/data/ holds the Section 9 fixture set referenced by
+# eval cases via setup_files. Tracked since Phase 1 §9.
 integration/step*.txt
 integration/hello.txt
 integration/.uas_auth/

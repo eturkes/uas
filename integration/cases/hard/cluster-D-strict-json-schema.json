@@ -1,0 +1,22 @@
+{
+  "name": "cluster-D-strict-json-schema",
+  "goal": "Build a Python script generate_report.py that produces report.json conforming exactly to this schema: a top-level object with keys 'metadata' (object with keys 'generated_at' as ISO-8601 UTC string ending in 'Z', 'version' as the literal string '1.0.0', 'source' as the literal string 'uas-eval'), 'summary' (object with keys 'total_items' as int, 'mean_score' as float, 'category_counts' as object), 'items' (list of at least 3 objects each with keys 'id' as int, 'name' as str, 'score' as float in [0.0, 100.0], 'tags' as a non-empty list of strings). Run the script as the final step so report.json exists on disk. Every key listed above MUST be present.",
+  "checks": [
+    {"type": "file_exists", "path": "generate_report.py"},
+    {"type": "file_exists", "path": "report.json"},
+    {
+      "type": "file_shape",
+      "path": "report.json",
+      "format": "json",
+      "required_keys": ["metadata", "summary", "items"]
+    },
+    {"type": "file_contains", "path": "report.json", "pattern": "\"version\":\\s*\"1\\.0\\.0\""},
+    {"type": "file_contains", "path": "report.json", "pattern": "\"source\":\\s*\"uas-eval\""},
+    {"type": "file_contains", "path": "report.json", "pattern": "\"generated_at\":\\s*\"\\d{4}-\\d{2}-\\d{2}T.+Z\""}
+  ],
+  "notes": {
+    "purpose": "Tier 2 validation cascade target. Many constrained fields → exec-success but holistic validation catches missing required keys / wrong values. Triggers output quality checks (#32) and the validation cascade (#39-#42, #56). The literal-string-pinned regex checks make a fuzzy 'looks right' answer fail.",
+    "cluster_target": "D",
+    "expected_mechanism_rows": [32, 39, 40, 41, 42, 55, 56, 57]
+  }
+}

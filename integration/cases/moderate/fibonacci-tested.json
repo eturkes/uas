@@ -1,0 +1,12 @@
+{
+  "name": "fibonacci-tested",
+  "goal": "Implement a Python module fib.py that exposes a function fib(n: int) -> int returning the nth Fibonacci number, where fib(0) == 0 and fib(1) == 1. Also write a pytest test file test_fib.py covering at least these cases: fib(0)==0, fib(1)==1, fib(2)==1, fib(10)==55, and a negative-input case (raise ValueError for n<0). Run pytest from the workspace and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "fib.py"},
+    {"type": "file_exists", "path": "test_fib.py"},
+    {"type": "pytest_pass", "path": "test_fib.py"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 implementation + tests case. Model writes both impl and test. The pytest_pass check is the deterministic gate. The negative-input requirement disambiguates a model that would otherwise pass with a partial impl."
+  }
+}

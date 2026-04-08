@@ -1,0 +1,17 @@
+{
+  "name": "hello-json",
+  "goal": "Create a JSON file at greeting.json containing exactly the object {\"message\": \"Hello from UAS\"}.",
+  "checks": [
+    {"type": "file_exists", "path": "greeting.json"},
+    {
+      "type": "file_shape",
+      "path": "greeting.json",
+      "format": "json",
+      "required_keys": ["message"]
+    },
+    {"type": "file_contains", "path": "greeting.json", "pattern": "Hello from UAS"}
+  ],
+  "notes": {
+    "purpose": "Tier 0 smoke test for JSON file production. Exercises the file_shape check (json format + required_keys) and confirms the model can produce a single well-formed JSON object."
+  }
+}

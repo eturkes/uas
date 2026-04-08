@@ -1,0 +1,12 @@
+{
+  "name": "fastapi-hello-route",
+  "goal": "Build a minimal FastAPI app at app.py that exposes one route GET /hello/{name} returning a JSON body {\"message\": \"Hello, <name>!\"} where <name> is the path parameter. Also write test_app.py using fastapi.testclient.TestClient with at least three pytest tests: a happy-path call, a check that the response is JSON, and a check that the message field interpolates the path parameter. Run pytest from the workspace and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "app.py"},
+    {"type": "file_exists", "path": "test_app.py"},
+    {"type": "pytest_pass", "path": "test_app.py"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 web-framework case. Tests model's familiarity with FastAPI's TestClient pattern. Requires fastapi + httpx to be installable; the architect's pre-flight should pip install if not present."
+  }
+}

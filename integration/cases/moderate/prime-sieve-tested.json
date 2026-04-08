@@ -1,0 +1,12 @@
+{
+  "name": "prime-sieve-tested",
+  "goal": "Implement a Python module sieve.py exposing primes_up_to(n: int) -> list[int] using the Sieve of Eratosthenes (returns all primes <= n in ascending order, empty list for n < 2). Also write test_sieve.py with pytest tests covering: primes_up_to(1)==[], primes_up_to(2)==[2], primes_up_to(10)==[2,3,5,7], primes_up_to(30) has length 10, and primes_up_to(100)[-1] == 97. Run pytest from the workspace and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "sieve.py"},
+    {"type": "file_exists", "path": "test_sieve.py"},
+    {"type": "pytest_pass", "path": "test_sieve.py"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 algorithmic case. The 5 required test conditions discriminate the actual sieve from a brute-force trial-division shortcut, since the test names won't match what the model writes if it writes the wrong algorithm — but it'll still need to satisfy the named conditions."
+  }
+}

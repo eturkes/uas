@@ -1,0 +1,19 @@
+{
+  "name": "regex-log-parser",
+  "goal": "Read the Apache combined-format access log at access.log. Parse each line and write a JSON summary at log_summary.json with these top-level keys: total_requests (int), status_counts (object mapping HTTP status code strings like '200', '404', '500' to int counts), unique_ips (int, distinct client IPs), top_path (string, the request path that appears most often).",
+  "setup_files": ["access.log"],
+  "checks": [
+    {"type": "file_exists", "path": "log_summary.json"},
+    {
+      "type": "file_shape",
+      "path": "log_summary.json",
+      "format": "json",
+      "required_keys": ["total_requests", "status_counts", "unique_ips", "top_path"]
+    },
+    {"type": "file_contains", "path": "log_summary.json", "pattern": "\"200\""},
+    {"type": "file_contains", "path": "log_summary.json", "pattern": "\"total_requests\":\\s*\\d+"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 log parsing with regex / split parsing. Stresses the model's regex skills on a moderately structured input. The file_shape check pins the four required summary keys."
+  }
+}

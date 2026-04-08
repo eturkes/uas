@@ -1,0 +1,14 @@
+{
+  "name": "cluster-G-rollback-trigger",
+  "goal": "Build a Python script bigint_factorial.py that exposes factorial(n: int) -> int for arbitrary precision (Python ints already are arbitrary precision; this is a wrapper). The script must (1) refuse n < 0 with ValueError, (2) refuse non-integer types with TypeError, (3) compute factorial iteratively (no recursion — recursion is explicitly disallowed and the test enforces this via inspect.getsource or a static AST check), (4) be importable as a module without side effects, (5) when invoked as a script with `python3 bigint_factorial.py N` print the factorial to stdout. Also write test_bigint_factorial.py with at least 7 pytest tests including: factorial(0)==1, factorial(1)==1, factorial(10)==3628800, factorial(100) has exactly 158 digits, factorial(-1) raises ValueError, factorial(1.0) raises TypeError, AND a static AST inspection test that scans bigint_factorial.py source for any 'def factorial' that calls itself by name (must NOT find one). Run pytest and confirm all tests pass.",
+  "checks": [
+    {"type": "file_exists", "path": "bigint_factorial.py"},
+    {"type": "file_exists", "path": "test_bigint_factorial.py"},
+    {"type": "pytest_pass", "path": "test_bigint_factorial.py"}
+  ],
+  "notes": {
+    "purpose": "Tier 2 git rollback target. The 'no recursion' constraint with an AST-enforcement test is a non-obvious requirement Opus is likely to violate on the first attempt (default factorial is the textbook recursive definition). With multiple constraints likely to be violated in sequence (recursion ban, exact digit count, type check), this case is the most likely to consume all 3 spec rewrite slots and trigger 3-strike git rollback (#30) → reset to pre-step checkpoint (#31).",
+    "cluster_target": "G",
+    "expected_mechanism_rows": [30, 31, 20, 27]
+  }
+}

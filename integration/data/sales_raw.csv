@@ -1,0 +1,13 @@
+order_id,customer_id,product,qty,unit_price
+1001,5001,widget,3,49.99
+1002,5002,gadget,2,129.95
+1003,5001,sprocket,5,19.50
+1004,5003,widget,1,49.99
+1005,5002,thingamajig,4,75.00
+1006,5001,gadget,2,129.95
+1007,5003,sprocket,3,19.50
+1008,5002,widget,6,49.99
+1009,5004,gadget,1,129.95
+1010,5001,thingamajig,2,75.00
+1011,5003,gadget,3,129.95
+1012,5004,widget,2,49.99

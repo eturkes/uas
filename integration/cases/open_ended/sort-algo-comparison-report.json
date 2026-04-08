@@ -1,0 +1,22 @@
+{
+  "name": "sort-algo-comparison-report",
+  "goal": "Implement three sort algorithms in Python — bubble sort, merge sort, and quicksort — each in its own module file (bubble.py, merge.py, quicksort.py), each exposing a sort(lst) -> list function that does NOT mutate the input. Also write benchmark.py that generates random integer lists at sizes 100, 1000, and 5000 (using a fixed random seed of 42 for reproducibility), runs each sort algorithm against each size, measures wall time with time.perf_counter, and writes a Markdown report at REPORT.md. The report must include: an introduction, a table of measured times (algorithm × size), at least one paragraph of observations (e.g. about complexity, surprises, or fairness of the comparison), and a conclusion paragraph. Run benchmark.py as the final step so REPORT.md is produced.",
+  "checks": [
+    {"type": "file_exists", "path": "REPORT.md"},
+    {
+      "type": "llm_judge",
+      "criteria": "Pass iff ALL of these are true: (1) bubble.py, merge.py, quicksort.py each exist and define a working sort function. (2) benchmark.py exists, uses time.perf_counter, uses random seed 42, and runs each algorithm at sizes 100, 1000, 5000. (3) REPORT.md exists, contains a table with rows/columns for the algorithm × size matrix, has an introduction section, has at least one paragraph of analytical observations referencing the actual measured numbers in the table, and has a conclusion. (4) The measured times in the report are real (not placeholder zeros or N/A). Any missing element is a failure.",
+      "files": [
+        "bubble.py",
+        "merge.py",
+        "quicksort.py",
+        "benchmark.py",
+        "REPORT.md"
+      ],
+      "samples": 5
+    }
+  ],
+  "notes": {
+    "purpose": "Tier 3 open-ended algorithmic + report-writing case. The judge has both source files and the produced report to read. The 'real measured numbers' criterion catches a model that hard-codes a fake table; the seed=42 requirement makes runs reproducible across the 3 multi-runs."
+  }
+}

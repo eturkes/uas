@@ -1,0 +1,19 @@
+{
+  "name": "text-stats-report",
+  "goal": "Read the plain-text article at article.txt and write a JSON report at stats.json with these exact top-level keys: line_count (int, total lines including blank ones), word_count (int, whitespace-split tokens), char_count (int, total characters including whitespace and newlines), unique_words (int, count of distinct lowercase tokens after stripping punctuation).",
+  "setup_files": ["article.txt"],
+  "checks": [
+    {"type": "file_exists", "path": "stats.json"},
+    {
+      "type": "file_shape",
+      "path": "stats.json",
+      "format": "json",
+      "required_keys": ["line_count", "word_count", "char_count", "unique_words"]
+    },
+    {"type": "file_contains", "path": "stats.json", "pattern": "\"word_count\":\\s*\\d+"},
+    {"type": "file_contains", "path": "stats.json", "pattern": "\"unique_words\":\\s*\\d+"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 text-processing case. Tests cross-step reference: model must read a fixture file then produce a structured derived report. unique_words is the disambiguator — naive word_count != unique_words because the article has repetition."
+  }
+}

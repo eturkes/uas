@@ -1,0 +1,19 @@
+{
+  "name": "csv-filter-by-column",
+  "goal": "Read the CSV file at sales.csv (columns: id, region, amount). Write a new CSV at sales_high.csv containing only the rows where amount is strictly greater than 100. Preserve the original column order and the header row.",
+  "setup_files": ["sales.csv"],
+  "checks": [
+    {"type": "file_exists", "path": "sales_high.csv"},
+    {
+      "type": "file_shape",
+      "path": "sales_high.csv",
+      "format": "csv",
+      "required_columns": ["id", "region", "amount"],
+      "min_rows": 1
+    },
+    {"type": "file_contains", "path": "sales_high.csv", "pattern": "id,region,amount"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 CSV filtering. Reuses the sales.csv fixture from csv-to-json. Stresses comparison + write-back of a filtered subset, preserving header structure."
+  }
+}

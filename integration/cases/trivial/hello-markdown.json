@@ -1,0 +1,12 @@
+{
+  "name": "hello-markdown",
+  "goal": "Create a Markdown file at README.md whose first non-blank line is the level-1 header '# Hello from UAS' and which also contains a paragraph below the header introducing the project in one sentence.",
+  "checks": [
+    {"type": "file_exists", "path": "README.md"},
+    {"type": "file_contains", "path": "README.md", "pattern": "^# Hello from UAS$"},
+    {"type": "file_contains", "path": "README.md", "pattern": "[A-Za-z]+ [A-Za-z]+ [A-Za-z]+"}
+  ],
+  "notes": {
+    "purpose": "Tier 0 smoke test for Markdown production. The first regex pins the H1 form (anchored start/end) so a model that uses '## Hello' or 'Hello from UAS' without the hash fails. The second regex requires a multi-word paragraph somewhere in the file."
+  }
+}

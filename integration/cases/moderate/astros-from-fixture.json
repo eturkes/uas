@@ -1,0 +1,13 @@
+{
+  "name": "astros-from-fixture",
+  "goal": "Build a two-step data pipeline: (1) Read the local fixture file astros.json, which has the schema {\"number\": int, \"people\": [{\"name\": str, \"craft\": str}, ...], \"message\": str}. (2) Extract the astronaut count from the 'number' field and write 'There are currently N astronauts in space.' to summary.txt, where N is that integer (no leading zeros, no extra punctuation around N).",
+  "setup_files": ["astros.json"],
+  "checks": [
+    {"type": "file_exists", "path": "astros.json"},
+    {"type": "file_exists", "path": "summary.txt"},
+    {"type": "file_contains", "path": "summary.txt", "pattern": "There are currently \\d+ astronauts in space\\."}
+  ],
+  "notes": {
+    "purpose": "Tier 1 fixture-driven replacement for the retired live-data-pipeline case (audit §2 flagged the open-notify.org dependency as inherently flaky). Same multi-step pipeline shape, deterministic input."
+  }
+}

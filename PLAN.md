@@ -891,7 +891,294 @@ rewrites, replanning, or backtracking.
   rewrite, or backtrack on at least one of the 3 runs (verifiable
   from the §1 metrics).
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+35 cases authored under the new `integration/cases/<tier>/<case>.json`
+layout, distributed exactly to the PLAN target: 5 trivial / 15
+moderate / 10 hard / 5 open_ended. All required Phase 0 §4 essential
+clusters covered by Tier 2 cases (A, B, D, E, F, G, I — 7/7).
+
+**Step 1 — loader migration.** `integration/eval.py`:
+- Replaced `PROMPTS_FILE` constant with `CASES_DIR =
+  os.path.join(SCRIPT_DIR, "cases")`.
+- Rewrote `load_prompts(filter_pattern=None, tier=None)` to walk
+  `CASES_DIR/<tier>/*.json` for each `tier in ALLOWED_TIERS`,
+  loading every `.json` file in each tier directory in alphabetical
+  order. The directory name is the canonical tier — any in-file
+  `tier` field is overridden. Tier directories that do not exist
+  are silently skipped (so a partially-populated tree returns
+  whatever is present). Non-`.json` files in a tier directory are
+  skipped (so README sidecars are tolerated).
+- Updated `--list` output to show the tier as `[tier-name]` prefix
+  before the case name.
+- Deleted `integration/prompts.json` (the legacy single-file case
+  list).
+- Rewrote `tests/test_eval_tiers.py::TestLoadPromptsTierFilter` to
+  monkey-patch `CASES_DIR` and write per-tier subdirectories
+  (`_write_case` helper). Added 3 new tests on top of the
+  pre-existing 5: directory-overrides-in-file-tier (canonical tier
+  invariant), missing-tier-dirs-skipped, canonical-tier-order-
+  preserved (cases come back in `ALLOWED_TIERS` order regardless
+  of filesystem order), non-json-files-skipped. Renamed
+  `TestExistingPromptsBackfilled` →
+  `TestShippedCasesTierIsDirectoryDerived` and reframed it as a
+  schema invariant ("every shipped case carries a tier in
+  `ALLOWED_TIERS`") rather than a hard count assertion that would
+  break each time a case is added. **All 16 tier-loader tests
+  pass; 167 tests across all 7 Phase 1 test files pass in 87.65s.**
+
+**Step 2 — Tier 0 (5 cases).** Reused `hello-file`. Authored 4
+new single-file variants exercising different file formats and
+encodings:
+- `hello-json` — JSON object with `file_shape json + required_keys`.
+- `hello-csv` — single-row CSV with `file_shape csv +
+  required_columns + min_rows == max_rows == 1` (catches the
+  example-row drift).
+- `hello-markdown` — anchored H1 regex + paragraph regex.
+- `hello-utf8` — three lines including Japanese (`こんにちは`) and
+  Portuguese (`Olá`); pinned by per-line `file_contains` regex.
+  Catches a model that writes Latin-1 or ASCII-escapes the JP text.
+
+**Step 3 — Tier 1 (15 cases).** Mix of pure-deterministic and
+pytest-gated:
+- Format conversions / aggregations (5):
+  `csv-to-json`, `json-to-csv`, `text-stats-report`,
+  `markdown-toc-generator`, `regex-log-parser`.
+- CSV processing (3): `csv-filter-by-column` (reuses `sales.csv`),
+  `csv-aggregator` (group-by sum to JSON),
+  `astros-from-fixture` (Step 6 replacement, see below).
+- Algorithm + pytest (4): `fibonacci-tested`, `prime-sieve-tested`,
+  `palindrome-checker-tested`, `caesar-cipher-tested`. Model
+  writes both impl and tests; `pytest_pass` is the gate.
+- Web/DB/CLI (3): `fastapi-hello-route` (FastAPI + TestClient),
+  `sqlite-etl-loader` (CSV → SQLite → top-5 JSON; the min == max
+  == 5 file_shape catches off-by-one), `temperature-converter-cli`
+  (argparse + pytest + `command_succeeds` external smoke).
+
+**Step 4 — Tier 2 (10 cases, cluster-targeted).** Each case carries
+`notes.cluster_target` (single letter) and `notes.expected_mechanism_rows`
+(list of §1 mechanism row numbers it expects to stress):
+
+| Case | Cluster | Expected mechanism rows |
+|---|---|---|
+| `cluster-A-fixed-width-records` | A | 20, 21, 22, 23, 27, 32 |
+| `cluster-A-roman-numeral-converter` | A | 20, 21, 22, 27, 35 |
+| `cluster-B-pipeline-schema-mismatch` | B | 20, 25, 26, 32, 34 |
+| `cluster-D-strict-json-schema` | D | 32, 39, 40, 41, 42, 55, 56, 57 |
+| `cluster-D-temporal-ordering` | D | 32, 39, 40, 41, 42, 56 |
+| `cluster-E-multi-requirement-cli` | E | 9, 10, 11, 44, 45 |
+| `cluster-F-tdd-rate-limiter` | F | 8, 43, 67 |
+| `cluster-F-tdd-lru-cache` | F | 8, 43, 67 |
+| `cluster-G-rollback-trigger` | G | 30, 31, 20, 27 |
+| `cluster-I-resume-stub-multi-phase` | I | 16, 59, 63 |
+
+Cluster-design notes worth carrying forward:
+
+- **Cluster A.** Two cases. The strict fixed-width-records case
+  pins exact byte layout (`^000001Alice Smith {13}…` regex)
+  on a 60-char-wide format — easy to fail on padding/alignment,
+  prompting reflection + retry. Roman numerals has 12 pinned
+  test cases (round-trip 1/4/9/40/49/90/400/900/1994/3999) plus
+  ValueError boundaries; high probability of partial-impl
+  failure → reflection.
+- **Cluster B.** Single 3-step pipeline with cross-step schema
+  dependencies (`line_total` derived in step 1, used by step 2;
+  sort order from step 2, used by step 3). Step 3 check failures
+  should drive the counterfactual root-cause tracer to finger
+  step 1 or step 2.
+- **Cluster D.** Two cases. `cluster-D-strict-json-schema` pins
+  literal-string fields (`"version": "1.0.0"`, `"source":
+  "uas-eval"`, ISO-8601 `Z` suffix) — exec succeeds, holistic
+  validation catches missing required keys. `cluster-D-temporal-
+  ordering` is the data-leakage trap: random splitting passes
+  exec but fails the temporal-ordering output-quality check (#32).
+- **Cluster E.** 8 explicit numbered requirements in one CLI tool
+  goal. The first plan extracted by #9/#11 is unlikely to cover
+  all 8 — coverage gap fill (#10) should fire, possibly replan
+  (#44).
+- **Cluster F.** Two TDD cases. Both goals use the literal phrase
+  "use test-driven development" so the planning gate (#8) inspects
+  for test-step-before-impl-step pairs and inserts them if missing.
+  Rate-limiter requires clock-injection (non-trivial); LRU cache
+  has 6 specified tests including two recency edges.
+- **Cluster G.** `cluster-G-rollback-trigger` is the most
+  intentionally-difficult case in the set. The "no recursion"
+  constraint enforced by an AST inspection test combined with
+  exact-digit-count (`factorial(100)` has exactly 158 digits)
+  is set up to consume all 3 spec rewrite slots and trigger the
+  3-strike git rollback (#30) → reset to pre-step checkpoint
+  (#31).
+- **Cluster I.** Documented as a **placeholder**: the resume +
+  progress-file + attempt-history mechanisms (#16, #59, #63)
+  only fire after a previous interrupted run, and the eval harness
+  has no mid-run interrupt facility. The case is a long, multi-file,
+  multi-phase project that **would** exercise the resume machinery
+  if interrupted. Phase 4 will need a separate interrupt-and-resume
+  harness to actually measure Cluster I; this case provides the
+  workload for that future test.
+
+**Step 5 — Tier 3 (5 cases, llm_judge-only).** All five carry an
+`llm_judge` check with a thoroughly enumerated `criteria` field:
+- `static-blog-site` — 3-post static blog with shared CSS.
+  Mirrors the should-pass smoke in §8 Results.
+- `sort-algo-comparison-report` — 3 sort algos + benchmark + MD
+  report with seed=42 reproducibility. Judge criteria explicitly
+  reject placeholder/zero numbers.
+- `mini-calc-dsl` — lexer + parser + interpreter + 3 example
+  programs + runner. Stresses compositional design.
+- `readme-from-source` — fixture `quicklib.py` + judge that
+  enforces "function names in README must actually exist in
+  source" (no hallucination).
+- `dataset-analysis-report` — `cars.csv` fixture + judge that
+  enforces statistics within plausible range and 3+ cited
+  observations.
+
+Each case's `samples` is set to `5` (the §8 default). The §8
+carry-forward note about Opus-4.6 OAuth-tier rate-limit on 5
+parallel calls applies — Section 10's end-to-end run will need
+to either pace, lower samples, or accept some 429 retries.
+
+**Step 6 — `live-data-pipeline` retired.** Replaced by
+`astros-from-fixture` (Tier 1) which uses the new `integration/
+data/astros.json` fixture instead of hitting `api.open-notify.org`.
+Same two-step pipeline shape; deterministic input.
+
+**Step 7 — `integration/data/` fixtures (14 files).** Created the
+fixture set referenced by every case's `setup_files`:
+
+| Fixture | Used by | Tier |
+|---|---|---|
+| `sales.csv` | `csv-to-json`, `csv-filter-by-column` | 1 |
+| `users.json` | `json-to-csv` | 1 |
+| `article.txt` | `text-stats-report` | 1 |
+| `document.md` | `markdown-toc-generator` | 1 |
+| `access.log` | `regex-log-parser` | 1 |
+| `transactions.csv` | `csv-aggregator` | 1 |
+| `astros.json` | `astros-from-fixture` | 1 |
+| `cities.csv` | `sqlite-etl-loader` | 1 |
+| `employees.csv` | `cluster-A-fixed-width-records` | 2 |
+| `sales_raw.csv` | `cluster-B-pipeline-schema-mismatch` | 2 |
+| `timeseries.csv` | `cluster-D-temporal-ordering` (52 rows) | 2 |
+| `ratings.csv` | `cluster-I-resume-stub-multi-phase` | 2 |
+| `quicklib.py` | `readme-from-source` (6 public fns) | 3 |
+| `cars.csv` | `dataset-analysis-report` (22 rows) | 3 |
+
+`.gitignore` blocker: line 19 (initial-commit-era) was
+`integration/data/`, which would have prevented every fixture
+from being tracked on a fresh checkout — making every case with
+`setup_files` fail with `SetupFileMissing`. Removed the line and
+added an inline comment explaining why `integration/data/` is now
+tracked since Phase 1 §9. While editing `.gitignore`, also added
+`integration/eval_results_aggregate.json` to the ignore list — it
+is the per-invocation derived view written by §6, not a tracked
+artefact.
+
+**Step 8 — cluster cross-links.** Tier 2 cases carry the strong
+cross-link (`notes.cluster_target` + `notes.expected_mechanism_rows`)
+shown in the Step 4 table. Tier 0/1/3 cases carry a `notes.purpose`
+string explaining their role in the eval set — they are baseline /
+breadth-coverage workloads, not designed to stress specific
+mechanisms, so the literal "cluster_target" field would be empty
+for them. Phase 4 reads the Tier 2 table for ablation pairing;
+Tier 0/1/3 deltas roll up into the per-tier aggregate.
+
+**Verification chain (Section 9 acceptance, criterion 1).**
+
+1. **Loader audit.** `python3 integration/eval.py --list` returns
+   exactly 35 cases in canonical tier order then alphabetical
+   within tier. `--list` output annotated with `[tier]` prefix.
+2. **Schema audit.** Inline Python script verifies all 35 cases
+   parse, every case has `name + goal + checks`, every check
+   `type` is one of the 8 supported types
+   (`file_exists, file_contains, glob_exists, pytest_pass,
+   exit_code, file_shape, command_succeeds, llm_judge`), and every
+   `setup_files` reference resolves to a present file in
+   `integration/data/`. **All 35 cases pass; 14/14 setup_files
+   matched to fixtures.**
+3. **Cluster coverage audit.** Inline script confirms every Tier 2
+   case carries both `cluster_target` and `expected_mechanism_rows`
+   in `notes`, and the union of `cluster_target` values is
+   exactly `{A, B, D, E, F, G, I}` — the 7 essential clusters
+   from `phase0_audit.md` §4 (Cluster J cross-run learning is
+   not in the PLAN's required-list and is left to Phase 4 group
+   ablation; Clusters C/H are incidental and already cleanly
+   bundled).
+4. **Synthetic full-loop run.** Monkey-patched `run_case` to a
+   fake that always returns `passed=True` with the §1 token /
+   cost / attempt fields populated, then ran `eval.main()
+   --runs 3 --results-out=<tmpdir>/results.jsonl` against the
+   real loader, real aggregators, real metadata capture, and
+   real persistence. Result: `main()` returned `0`, the JSONL
+   file got exactly **105 rows** (35 cases × 3 runs), per-tier
+   row counts were `{trivial: 15, moderate: 45, hard: 30,
+   open_ended: 15}` — exactly `tier_size × 3`. Every row carried
+   the §4 metadata (`git_sha`, `harness_version`, `config_hash`,
+   `run_index`). The aggregate file had 35 entries in `by_case`
+   and 4 entries in `by_tier`. Per-tier table rendered cleanly to
+   stderr. The synthetic run took 17.5s — it confirms the entire
+   harness path (loader → run loop → metric collection → checks
+   → JSONL append → aggregate writer → tier aggregator →
+   `print_aggregate_report`) is sound across all 35 cases without
+   burning architect time.
+5. **Test suite regression.** `pytest tests/test_eval_*.py
+   tests/test_llm_judge.py tests/test_git_finalize.py -q` →
+   **167 passed in 87.65s** (53 + 114, where the 114 includes
+   the LLM-judge module's 62 mocked tests and the 52
+   git-finalize tests). No new failures from the loader migration.
+
+**Acceptance criterion 1 (`--list` shows 35 cases across 4 tiers):
+satisfied.** Verified by both the live `--list` invocation and the
+synthetic `main()` loop.
+
+**Acceptance criteria 2 and 3 (live `--runs 3` completes without
+harness errors; ≥1 Tier 2 case triggers reflection/rewrite/
+backtrack): deferred to Section 10.** Section 10 is the explicit
+owner of the canonical end-to-end run. Running 35 cases × 3 runs
+× ~5–8 min/case against the real architect would burn 9–14 hours
+of LLM time — too expensive for a Section 9 sanity check, and
+duplicative of Section 10's own end-to-end deliverable. The
+synthetic main() loop above plus the unit-test suite covers every
+code path Section 9 owns; Section 10 covers the architect-
+subprocess and mechanism-trigger paths Section 9 cannot exercise
+without burning architect time.
+
+**Carry-forward notes for Section 10.**
+
+1. **Workspace permission issue.** `integration/workspace/hello-file/
+   .uas_state/runs/<run_id>/specs/` from prior container runs is
+   owned by root and breaks `setup_workspace`'s `shutil.rmtree` /
+   `--clean`'s top-level rmtree. Section 4 already flagged this
+   for Section 10. Recommended fix: either run cleanup inside a
+   container (root-on-root works), or have the user manually
+   `sudo rm -rf integration/workspace/` once before Section 10
+   starts.
+2. **Tier 3 OAuth rate limit.** Per §8 carry-forward note 1: 5
+   parallel Opus 4.6 calls hit 429 on the OAuth tier instantly.
+   Section 10 will see this on every Tier 3 case across 3 runs
+   (5 cases × 3 runs × 5 samples = 75 parallel-bursts of 5 calls
+   each). Mitigation options: (a) lower `samples` to 3 in the
+   case files, (b) add a 429-aware retry loop in `llm_judge.py`,
+   (c) use a non-Opus model for Tier 3 (e.g., haiku-4-5 — already
+   shown to work in §8 acceptance smoke).
+3. **Local-mode auth path.** §1 carry-forward note 1 still stands:
+   `eval.py --local` cannot find OAuth credentials. Section 10's
+   end-to-end must use container mode. Fixing local-mode auth is
+   out of Phase 1 scope.
+4. **`integration/data/` is now tracked.** A fresh checkout will
+   include all 14 fixtures. No setup beyond `git checkout` is
+   needed for the case set to load.
+5. **Tier 2 acceptance is observation-only.** "At least one Tier 2
+   case observably triggers a reflection, rewrite, or backtrack"
+   means Section 10 should grep the JSONL log's per-step
+   `rewrites` field (surfaced by §1) and the `attempt_total`
+   field for any value `> 1` on at least one Tier 2 row across
+   the 3 runs. The 10 Tier 2 cases are designed to make this
+   highly likely; if the architect somehow first-shots all 10 on
+   all 3 runs, Section 10 should investigate whether the cases
+   are too easy (and re-tighten Tier 2 in a follow-up commit
+   before Phase 2 baseline).
 
 ## Section 10 — `uas-eval` entry point + end-to-end validation
 

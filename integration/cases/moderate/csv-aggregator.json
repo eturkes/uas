@@ -1,0 +1,18 @@
+{
+  "name": "csv-aggregator",
+  "goal": "Read the CSV file at transactions.csv (columns: id, category, amount). Compute the sum of amount per distinct category and write the result as a JSON file at category_totals.json. The JSON must be a single object whose keys are the category names and whose values are numbers (the per-category sums).",
+  "setup_files": ["transactions.csv"],
+  "checks": [
+    {"type": "file_exists", "path": "category_totals.json"},
+    {
+      "type": "file_shape",
+      "path": "category_totals.json",
+      "format": "json",
+      "required_keys": ["food"]
+    },
+    {"type": "file_contains", "path": "category_totals.json", "pattern": "\"food\":\\s*\\d+"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 group-by aggregation. The fixture transactions.csv contains a 'food' category, pinned by the file_shape required_keys check. Required_keys against an aggregation output ensures the model walked every category, not just the first row."
+  }
+}

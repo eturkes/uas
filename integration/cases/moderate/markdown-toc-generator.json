@@ -1,0 +1,14 @@
+{
+  "name": "markdown-toc-generator",
+  "goal": "Read the Markdown document at document.md. Generate a table of contents at toc.md containing one bullet line per H2 (## ...) header found, in document order, formatted as: '- [Header Text](#header-anchor)' where header-anchor is the GitHub-style anchor (lowercase, spaces replaced with hyphens, punctuation stripped). Do not include H1 or H3+ headers.",
+  "setup_files": ["document.md"],
+  "checks": [
+    {"type": "file_exists", "path": "toc.md"},
+    {"type": "file_contains", "path": "toc.md", "pattern": "^- \\[.+\\]\\(#.+\\)$"},
+    {"type": "file_contains", "path": "toc.md", "pattern": "introduction"},
+    {"type": "file_contains", "path": "toc.md", "pattern": "conclusion"}
+  ],
+  "notes": {
+    "purpose": "Tier 1 Markdown parsing. Stresses the model's understanding of the GitHub anchor convention. The two anchored content checks pin specific H2 headers from the fixture so the model can't skip rows."
+  }
+}

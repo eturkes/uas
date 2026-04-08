@@ -1367,7 +1367,7 @@ remains `[PENDING]` until that end-to-end re-run is performed.
 
 ---
 
-### Section 7: Stop the architect's full-pytest gate from failing on pre-existing test files referencing not-yet-built modules  [PENDING]
+### Section 7: Stop the architect's full-pytest gate from failing on pre-existing test files referencing not-yet-built modules  [COMPLETED]
 
 **Why:** Section 6 fixed the orchestrator's lint pre-check so that
 pre-existing `.py` files committed to `uas-wip` from a prior failed
@@ -1650,6 +1650,58 @@ the previously-missing module) will catch genuine regressions.
 `[COMPLETED]`, append a one-paragraph result summary at the
 bottom of the section, then re-run Section 3's verification and
 update Section 3 accordingly.
+
+**Result (2026-04-07):** Implemented option 3 (git-diff-against-`uas-wip`
+scoping) as recommended. Added `changed_test_files_since_uas_wip(workspace)`
+to `architect/git_state.py`, mirroring `changed_py_files_since_uas_wip`
+and filtering its output to basenames matching pytest's discovery
+convention (`test_*.py` or `*_test.py`, with `conftest.py` excluded —
+see the inline `_is_test_filename` helper to keep `git_state` free of
+cross-module imports). Rewrote `_run_full_pytest_suite` at
+`architect/main.py:4546` to call the new helper first: when scoping
+returns a non-empty list, pytest runs only on those files; when it
+returns an empty list (this attempt did not touch any test files),
+the gate skips pytest entirely and returns `None`; when it returns
+`None` (no git repo / no `uas-wip` ref), the gate falls back to
+`_discover_all_test_files` so non-git workspaces and unit-test mocks
+behave exactly as before. Added `from .git_state import
+changed_test_files_since_uas_wip` to the existing `git_state` import
+block at `architect/main.py:69`. Added 11 new helper tests
+(`tests/test_git_state.py::TestChangedTestFilesSinceUasWip`) and 6 new
+gate-integration regression tests
+(`tests/test_tdd_contract.py::TestRunFullPytestSuiteSection7Regression`)
+covering the rehab/-style orphan scenario, attempt-added passing/failing
+tests, attempt-modified pre-existing tests, and the no-git fallback in
+both passing and failing modes. Verification: `python3 -m pytest
+tests/test_git_state.py tests/test_tdd_contract.py
+tests/test_verification_loop.py tests/test_orchestrator_main.py
+tests/test_git_repair.py tests/test_git_finalize.py
+tests/test_git_state_integration.py` is green (258 passed). The new
+`test_pre_existing_orphan_test_does_not_fail_step` test is the
+self-contained reproduction of the rehab/ failure mode: it builds a
+real git workspace with `tests/test_orphan.py` importing
+`from notyetbuilt.module import VALUE` committed to `uas-wip`,
+sanity-checks that direct `python -m pytest tests/test_orphan.py`
+exits non-zero on its own (proving the scenario is genuinely broken),
+then asserts `_run_full_pytest_suite(workspace)` returns `None`
+(proving the scope-by-diff fix neutralizes the orphan). All 5
+pre-existing `TestRunFullPytestSuite` tests still pass unchanged,
+confirming the legacy fallback path is intact for non-git workspaces.
+The third acceptance criterion (re-run `cd rehab && uas --resume
+--goal-file goal_001.txt` and confirm step 1 records as completed in
+`progress.md`) requires Docker, OAuth, and a long end-to-end run
+against the rehab/ workspace; that re-verification belongs to
+Section 3 and is out of scope for Section 7's local fix. Note for the
+Section 3 re-runner: the existing
+`rehab/.uas_state/runs/fa0d38fa9ef6/state.json` records `Run status:
+blocked` and `Step 1 status: failed` from the prior failed runs. The
+architect's `try_resume()` at `architect/main.py:5773-5796` only
+resets `executing` → `pending`, so Section 3's re-verification will
+likely require either (a) deleting the existing run state and
+starting a fresh run, or (b) manually editing
+`state.json` to flip step 1 back to `pending` and run status back to
+`active`. This was flagged in Section 3's fifth status note and
+remains a process concern, not a Section 7 design requirement.
 
 ---
 

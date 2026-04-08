@@ -7,6 +7,7 @@ import pytest
 
 from architect.git_state import (
     changed_py_files_since_uas_wip,
+    changed_test_files_since_uas_wip,
     commit_attempt,
     create_attempt_branch,
     promote_attempt,
@@ -366,3 +367,129 @@ class TestChangedPyFilesSinceUasWip:
             f.write("y = 2\n")
         result = changed_py_files_since_uas_wip(workspace)
         assert result == ["a.py", "b.py"]
+
+
+# ---------------------------------------------------------------------------
+# changed_test_files_since_uas_wip
+# ---------------------------------------------------------------------------
+
+
+class TestChangedTestFilesSinceUasWip:
+    """Section 7 of PLAN.md: the architect scopes its full-pytest gate to
+    test files that differ from ``uas-wip``. Pre-existing test files
+    committed to ``uas-wip`` MUST NOT show up in the diff, otherwise the
+    legacy "pytest everything" failure mode that fails on test files
+    referencing not-yet-built modules comes back.
+    """
+
+    def test_returns_none_without_git(self, tmp_path):
+        assert changed_test_files_since_uas_wip(str(tmp_path)) is None
+
+    def test_returns_none_without_uas_wip_branch(self, tmp_path):
+        ws = str(tmp_path)
+        (tmp_path / "f.txt").write_text("x", encoding="utf-8")
+        _git(ws, "init", "-b", "main")
+        _git(ws, "add", "-A")
+        _git(ws, "commit", "-m", "Init")
+        # No uas-wip branch yet.
+        assert changed_test_files_since_uas_wip(ws) is None
+
+    def test_empty_diff_for_clean_workspace(self, workspace):
+        # The fixture sets up uas-wip identical to HEAD. No test files
+        # have been added or changed.
+        assert changed_test_files_since_uas_wip(workspace) == []
+
+    def test_empty_diff_with_pre_existing_orphan_test(self, tmp_path):
+        """The exact bug Section 7 fixes: a pre-existing test file that
+        references a not-yet-built module, committed to ``uas-wip`` from a
+        prior failed run, must NOT show up as a changed file when nothing
+        has been touched since. The architect's gate must therefore skip
+        it for the current attempt.
+        """
+        ws = str(tmp_path)
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_config.py").write_text(
+            "from rehab.config import PROJECT_ROOT\n"
+            "def test_project_root_is_path():\n"
+            "    assert PROJECT_ROOT is not None\n",
+            encoding="utf-8",
+        )
+        _git(ws, "init", "-b", "main")
+        _git(ws, "add", "-A")
+        _git(ws, "commit", "-m", "Initial workspace state")
+        _git(ws, "tag", "-f", "uas-main")
+        _git(ws, "checkout", "-b", "uas-wip")
+
+        # Architect-side: nothing has been changed since uas-wip; the
+        # pre-existing orphan test must NOT be reported as changed.
+        assert changed_test_files_since_uas_wip(ws) == []
+
+    def test_includes_untracked_test_files(self, workspace):
+        # A test file added by the current attempt (untracked).
+        with open(os.path.join(workspace, "test_new.py"), "w") as f:
+            f.write("def test_x():\n    assert True\n")
+        result = changed_test_files_since_uas_wip(workspace)
+        assert result == ["test_new.py"]
+
+    def test_includes_modified_tracked_test_files(self, workspace):
+        # Add a tracked test file to uas-wip.
+        with open(os.path.join(workspace, "test_existing.py"), "w") as f:
+            f.write("def test_a():\n    assert True\n")
+        _git(workspace, "add", "-A")
+        _git(workspace, "commit", "-m", "Add test_existing.py")
+        # Move HEAD off uas-wip onto an attempt branch and modify it.
+        branch = create_attempt_branch(workspace, step_id=1, attempt=1)
+        assert branch
+        with open(os.path.join(workspace, "test_existing.py"), "w") as f:
+            f.write("def test_a():\n    assert True\n\ndef test_b():\n    assert True\n")
+        _git(workspace, "add", "-A")
+        _git(workspace, "commit", "-m", "Modify test_existing.py on attempt")
+
+        result = changed_test_files_since_uas_wip(workspace)
+        assert result == ["test_existing.py"]
+
+    def test_excludes_non_test_python_files(self, workspace):
+        """Non-test ``.py`` files (source modules, helpers, conftest) must
+        not appear in the test-file diff even when they are part of the
+        attempt's changes.
+        """
+        with open(os.path.join(workspace, "module.py"), "w") as f:
+            f.write("x = 1\n")
+        with open(os.path.join(workspace, "conftest.py"), "w") as f:
+            f.write("import pytest\n")
+        result = changed_test_files_since_uas_wip(workspace)
+        assert result == []
+
+    def test_excludes_non_python_files(self, workspace):
+        with open(os.path.join(workspace, "test_data.json"), "w") as f:
+            f.write("{}\n")
+        with open(os.path.join(workspace, "README.md"), "w") as f:
+            f.write("# hi\n")
+        result = changed_test_files_since_uas_wip(workspace)
+        assert result == []
+
+    def test_returns_sorted_unique_paths(self, workspace):
+        with open(os.path.join(workspace, "test_b.py"), "w") as f:
+            f.write("def test_b():\n    assert True\n")
+        with open(os.path.join(workspace, "test_a.py"), "w") as f:
+            f.write("def test_a():\n    assert True\n")
+        result = changed_test_files_since_uas_wip(workspace)
+        assert result == ["test_a.py", "test_b.py"]
+
+    def test_recognizes_underscore_test_suffix(self, workspace):
+        """``*_test.py`` is the second pytest naming convention. Must be
+        recognized alongside ``test_*.py``.
+        """
+        with open(os.path.join(workspace, "thing_test.py"), "w") as f:
+            f.write("def test_x():\n    assert True\n")
+        result = changed_test_files_since_uas_wip(workspace)
+        assert result == ["thing_test.py"]
+
+    def test_includes_nested_test_files(self, workspace):
+        nested = os.path.join(workspace, "tests")
+        os.makedirs(nested)
+        with open(os.path.join(nested, "test_unit.py"), "w") as f:
+            f.write("def test_x():\n    assert True\n")
+        result = changed_test_files_since_uas_wip(workspace)
+        assert result == [os.path.join("tests", "test_unit.py")]

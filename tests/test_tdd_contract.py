@@ -1,6 +1,8 @@
 """Tests for TDD test-step contract enforcement (Tasks 4.3, 4.4, 4.6)."""
 
 import os
+import subprocess
+import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -505,3 +507,166 @@ class TestRunFullPytestSuite:
         result = _run_full_pytest_suite("/fake/workspace")
         assert result is not None
         assert "timed out" in result
+
+
+class TestRunFullPytestSuiteSection7Regression:
+    """Section 7 of PLAN.md: the architect's full-pytest gate must scope
+    to test files this attempt actually touched, instead of every test
+    file ``_discover_all_test_files`` finds. Pre-existing test files
+    committed to ``uas-wip`` from a prior failed run that reference
+    modules built by not-yet-run steps must NOT fail the current step.
+
+    These tests build a real git workspace with a ``uas-wip`` baseline so
+    they exercise the scope-by-diff path of ``_run_full_pytest_suite``
+    end-to-end.
+    """
+
+    @staticmethod
+    def _git(workspace, *args):
+        subprocess.run(
+            ["git"] + list(args),
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    @pytest.fixture()
+    def real_workspace_with_orphan(self, tmp_path, monkeypatch):
+        """Real git workspace with a pre-existing orphan test file
+        (``tests/test_orphan.py``) that imports a module which does not
+        exist. Mirrors the rehab/ failure mode where
+        ``tests/test_config.py`` was committed to ``uas-wip`` from the
+        user's original failed run and imports
+        ``from rehab.config import PROJECT_ROOT`` even though
+        ``rehab/config.py`` is scheduled for a later step.
+        """
+        monkeypatch.setenv("GIT_AUTHOR_NAME", "Test")
+        monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@test.com")
+        monkeypatch.setenv("GIT_COMMITTER_NAME", "Test")
+        monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@test.com")
+
+        ws = str(tmp_path)
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_orphan.py").write_text(
+            "from notyetbuilt.module import VALUE\n\n"
+            "def test_value_is_set():\n"
+            "    assert VALUE is not None\n",
+            encoding="utf-8",
+        )
+        self._git(ws, "init", "-b", "main")
+        self._git(ws, "add", "-A")
+        self._git(ws, "commit", "-m", "Initial workspace state")
+        self._git(ws, "tag", "-f", "uas-main")
+        self._git(ws, "checkout", "-b", "uas-wip")
+        return ws
+
+    def test_pre_existing_orphan_test_does_not_fail_step(
+        self, real_workspace_with_orphan,
+    ):
+        """The exact rehab/ failure mode: an orphan test importing a
+        not-yet-built module is committed to ``uas-wip``, nothing else
+        has changed since. Direct pytest invocation against the orphan
+        would error with ``ModuleNotFoundError`` and exit non-zero.
+        ``_run_full_pytest_suite`` must scope it out and return ``None``.
+        """
+        from architect.main import _run_full_pytest_suite
+
+        # Sanity check: direct pytest against the orphan does fail.
+        # This proves the orphan is genuinely broken — the gate's
+        # success below must come from scoping, not a healthy file.
+        direct = subprocess.run(
+            [sys.executable, "-m", "pytest", "tests/test_orphan.py", "-q",
+             "--tb=no", "-p", "no:cacheprovider"],
+            cwd=real_workspace_with_orphan,
+            capture_output=True,
+            text=True,
+        )
+        assert direct.returncode != 0, (
+            "Orphan test unexpectedly passed; the regression scenario is "
+            "not actually broken and the gate test below is meaningless."
+        )
+
+        # The architect's scoped gate must NOT fail the step.
+        assert _run_full_pytest_suite(real_workspace_with_orphan) is None
+
+    def test_test_file_added_by_step_runs_pytest_passing(
+        self, real_workspace_with_orphan,
+    ):
+        """A new passing test file added by the current attempt
+        (untracked vs ``uas-wip``) IS included in the gate's pytest
+        run. Result: gate returns None (success).
+        """
+        with open(
+            os.path.join(real_workspace_with_orphan, "tests", "test_new.py"),
+            "w",
+        ) as f:
+            f.write("def test_passes():\n    assert True\n")
+
+        from architect.main import _run_full_pytest_suite
+        assert _run_full_pytest_suite(real_workspace_with_orphan) is None
+
+    def test_test_file_added_by_step_failure_propagates(
+        self, real_workspace_with_orphan,
+    ):
+        """A new FAILING test file added by the current attempt produces
+        the canonical failure string from the gate. This proves the
+        gate still catches genuine regressions caused by this attempt.
+        """
+        with open(
+            os.path.join(real_workspace_with_orphan, "tests", "test_new.py"),
+            "w",
+        ) as f:
+            f.write("def test_fails():\n    assert False\n")
+
+        from architect.main import _run_full_pytest_suite
+        result = _run_full_pytest_suite(real_workspace_with_orphan)
+        assert result is not None
+        assert "Full test suite FAILED" in result
+
+    def test_modified_pre_existing_test_runs_pytest(
+        self, real_workspace_with_orphan,
+    ):
+        """A pre-existing test file MODIFIED by the current attempt
+        is included in the gate's pytest run. Replacing the orphan
+        contents with a passing test should let the gate return None.
+        """
+        with open(
+            os.path.join(
+                real_workspace_with_orphan, "tests", "test_orphan.py",
+            ),
+            "w",
+        ) as f:
+            f.write("def test_passes():\n    assert True\n")
+
+        from architect.main import _run_full_pytest_suite
+        assert _run_full_pytest_suite(real_workspace_with_orphan) is None
+
+    def test_no_git_falls_back_to_legacy_discovery(self, tmp_path):
+        """A non-git workspace must use the legacy
+        ``_discover_all_test_files`` path so non-git callers and
+        unit-test mocks keep working. A passing test file in the
+        workspace must be picked up and the gate must return None.
+        """
+        (tmp_path / "test_legacy.py").write_text(
+            "def test_passes():\n    assert True\n",
+            encoding="utf-8",
+        )
+
+        from architect.main import _run_full_pytest_suite
+        assert _run_full_pytest_suite(str(tmp_path)) is None
+
+    def test_no_git_legacy_discovery_propagates_failure(self, tmp_path):
+        """In the no-git fallback path, a failing test in the workspace
+        is still surfaced. Confirms the legacy code path is intact.
+        """
+        (tmp_path / "test_legacy.py").write_text(
+            "def test_fails():\n    assert False\n",
+            encoding="utf-8",
+        )
+
+        from architect.main import _run_full_pytest_suite
+        result = _run_full_pytest_suite(str(tmp_path))
+        assert result is not None
+        assert "Full test suite FAILED" in result

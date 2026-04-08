@@ -260,6 +260,48 @@ def changed_py_files_since_uas_wip(workspace: str) -> list[str] | None:
         return None
 
 
+def _is_test_filename(basename: str) -> bool:
+    """Return True if *basename* matches pytest's naming convention.
+
+    Mirrors :func:`architect.planner._is_test_file` to keep ``git_state``
+    free of cross-module imports. Accepted patterns: ``test_*.py`` or
+    ``*_test.py``. ``conftest.py`` is intentionally excluded.
+    """
+    return (basename.startswith("test_") and basename.endswith(".py")) or (
+        basename.endswith("_test.py")
+    )
+
+
+def changed_test_files_since_uas_wip(workspace: str) -> list[str] | None:
+    """Return test files in *workspace* that differ from the ``uas-wip`` tip.
+
+    Used by the architect's full-pytest gate (Section 7 of PLAN.md) to scope
+    pytest to test files this attempt actually touched, instead of every
+    test file discovered in the workspace. Pre-existing test files
+    committed to ``uas-wip`` from a prior failed run that reference modules
+    built by not-yet-run steps must NOT be the architect's authoritative
+    gate — they were not this attempt's fault and re-running them every
+    attempt creates an infinite failure loop. This mirrors the analogous
+    Section 6 fix for the orchestrator's lint pre-check.
+
+    Test files are identified by basename: ``test_*.py`` or ``*_test.py``
+    (matching pytest's discovery rules and
+    :func:`architect.planner._is_test_file`).
+
+    Returns:
+
+    - a list of workspace-relative test file paths (possibly empty) when
+      the diff was computed successfully, or
+    - ``None`` when the diff could not be computed (no git repo, no
+      ``uas-wip`` ref, or git command failure). Callers should treat
+      ``None`` as "scoping unavailable; fall back to legacy discovery".
+    """
+    py_files = changed_py_files_since_uas_wip(workspace)
+    if py_files is None:
+        return None
+    return [p for p in py_files if _is_test_filename(os.path.basename(p))]
+
+
 def promote_attempt(workspace: str, branch: str) -> None:
     """Fast-forward merge a successful attempt branch into ``uas-wip``.
 

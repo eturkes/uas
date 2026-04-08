@@ -66,7 +66,11 @@ from .executor import (
     format_workspace_scan,
     MAX_CONTEXT_LENGTH,
 )
-from .git_state import promote_attempt, rollback_to_checkpoint
+from .git_state import (
+    changed_test_files_since_uas_wip,
+    promote_attempt,
+    rollback_to_checkpoint,
+)
 from uas.janitor import format_workspace
 from .events import EventType, get_event_log, reset_event_log
 from .provenance import get_provenance_graph, reset_provenance_graph
@@ -4544,12 +4548,38 @@ def _discover_all_test_files(workspace: str) -> list[str]:
 
 
 def _run_full_pytest_suite(workspace: str) -> str | None:
-    """Run pytest on the full test suite in the workspace.
+    """Run pytest on the test files this attempt actually touched.
 
-    Returns None if all tests pass (or no test files exist),
+    Section 7 of PLAN.md: scope pytest to test files that differ from the
+    ``uas-wip`` checkpoint, instead of every test file
+    :func:`_discover_all_test_files` finds. Pre-existing test files
+    committed to ``uas-wip`` from a prior failed run that reference modules
+    built by not-yet-run steps must NOT be the architect's authoritative
+    gate — re-running them every attempt creates an infinite failure loop.
+
+    Selection rules:
+
+    - When :func:`changed_test_files_since_uas_wip` returns a non-empty
+      list, run pytest on those files only.
+    - When it returns an empty list (this attempt did not add or modify
+      any test files), skip pytest entirely and return ``None``. The
+      architect's per-step verifier already covered the step's outputs;
+      regressions in *other* tests will surface on the next step that
+      actually touches them.
+    - When it returns ``None`` (no git repo or no ``uas-wip`` ref), fall
+      back to the legacy :func:`_discover_all_test_files` discovery so
+      non-git workspaces and unit-test mocks behave the same as before.
+
+    Returns ``None`` if all selected tests pass (or none were selected),
     or an error string describing the failures.
     """
-    test_files = _discover_all_test_files(workspace)
+    changed_tests = changed_test_files_since_uas_wip(workspace)
+    if changed_tests is None:
+        # Scoping unavailable — legacy fallback for non-git workspaces.
+        test_files = _discover_all_test_files(workspace)
+    else:
+        test_files = changed_tests
+
     if not test_files:
         return None
 

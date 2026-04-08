@@ -79,7 +79,83 @@ per-step `token_usage`, per-step `cost_usd`, and per-step `rewrites`
   fields with non-`None` values.
 - All existing tests under `tests/` still pass.
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+Edit landed at `architect/main.py:2037-2113`: new helper
+`_compute_workspace_size()` plus `_WORKSPACE_SIZE_SKIP_DIRS` constant,
+and a rewritten `write_json_output()` body that surfaces 8 new fields.
+
+Validation chain:
+
+1. **Tightly-bound test audit.** Searched `tests/` for `output.json`
+   loaders. Only `tests/test_git_finalize.py::TestWriteJsonOutputProvenance`
+   actually loads the file written by `write_json_output()`. Both
+   tests assert presence/absence of `git_provenance` only; the
+   additive change is safe.
+2. **Full unit suite green.** `python3 -m pytest tests/` →
+   **1637 passed, 3 deselected** (integration markers skipped per
+   `pytest.ini`).
+3. **Synthetic-state shape check.** Built a `state` dict with
+   realistic non-zero values for every accumulator field, called
+   `write_json_output()`, parsed the result, asserted all 8 new
+   fields present, `attempt_total` math correct
+   (`sum(rewrites + 1)`), `step_status_counts` aggregation correct,
+   default zeros work, and `workspace_size_bytes` returns `0`
+   cleanly when WORKSPACE is unset.
+4. **Live run inside container.** Bypassed `eval.py` (see runtime
+   notes below) and invoked `python3 -m architect.main` directly
+   inside `uas-engine:latest` against the `hello-file` goal with
+   `UAS_OUTPUT=/workspace/output.json`. Run completed in 331s,
+   architect reached `write_json_output()` successfully (`JSON
+   output written to /workspace/output.json` log line confirmed),
+   and the produced JSON contained all 8 new fields populated with
+   real values:
+
+   | Field | Live value |
+   |---|---|
+   | `step_count` | `2` |
+   | `step_status_counts` | `{"failed": 2}` |
+   | `attempt_total` | `4` (= `(2+1) + (0+1)`) |
+   | `total_tokens` | `{"input": 24, "output": 3577}` |
+   | `total_cost_usd` | `0.26863` |
+   | `workspace_size_bytes` | `489` |
+   | per-step `token_usage` | step 1: `{input: 24, output: 3577}` |
+   | per-step `cost_usd` | step 1: `0.26863` |
+   | per-step `rewrites` | step 1: `2` |
+
+   The architect run itself didn't complete the goal (Opus tried to
+   TDD `hello.txt`, hardcoded `/workspace` in the test, and the
+   output-quality guardrail killed the step three times before
+   3-strike git rollback). That is noise about the existing scaffold,
+   **not a Section 1 issue**. Section 1's job is observability, which
+   is satisfied.
+
+**Runtime notes (deferred to Section 2, do not regress).**
+
+Two pre-existing eval-runtime issues surfaced during live verification.
+Both are unrelated to Section 1 and both fall in Section 2's natural
+scope (refactor of `run_case()` and its subprocess invocation):
+
+1. **Local mode auth path.** `eval.py --local` invokes the host-side
+   Claude CLI with `CLAUDE_CONFIG_DIR=.uas_auth/`, but the host CLI
+   does not pick up the OAuth credentials in
+   `.uas_auth/.credentials.json` and returns 401. Only the
+   container-mode auth path (which mounts `.uas_auth/` as
+   `/root/.claude` inside `uas-engine`) works. Users running the
+   eval today need container mode.
+2. **Container mode `-P` flag.** `eval.py` invokes the container with
+   `python3 -P -m architect.main` from `WORKDIR /uas`. The `-P` flag
+   suppresses cwd-prepending, so Python cannot find the `architect`
+   module inside the container (`ModuleNotFoundError: No module
+   named 'architect'`). Either drop `-P`, set `PYTHONPATH=/uas` in
+   the container env, or install the framework as a package.
+   Section 2 should pick one and fix it as part of the
+   `invoke_architect()` extraction.
+
+These are logged here so they are not lost; do not address them
+inside Section 1.
 
 ## Section 2 — Refactor `run_case()` into named phases
 

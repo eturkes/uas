@@ -2034,22 +2034,73 @@ def print_summary(state: dict):
     )
 
 
+_WORKSPACE_SIZE_SKIP_DIRS = frozenset({
+    ".uas_state", ".git", ".uas_goals",
+    "__pycache__", ".ruff_cache", ".pytest_cache",
+})
+
+
+def _compute_workspace_size(workspace_root) -> int:
+    """Sum total bytes of files under workspace_root.
+
+    Skips state, cache, and VCS directories listed in
+    ``_WORKSPACE_SIZE_SKIP_DIRS``. Returns ``0`` on any error
+    (missing workspace, permission denied, etc.) — this is a
+    best-effort metric, not a correctness signal.
+    """
+    if not workspace_root or not os.path.isdir(workspace_root):
+        return 0
+    total = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(workspace_root):
+            dirnames[:] = [
+                d for d in dirnames if d not in _WORKSPACE_SIZE_SKIP_DIRS
+            ]
+            for fn in filenames:
+                fp = os.path.join(dirpath, fn)
+                try:
+                    total += os.path.getsize(fp)
+                except OSError:
+                    continue
+    except Exception:
+        return 0
+    return total
+
+
 def write_json_output(state: dict, output_path: str):
     """Write a structured JSON summary of the run to the given path."""
+    steps_summary = [
+        {
+            "id": s["id"],
+            "title": s["title"],
+            "status": s["status"],
+            "elapsed": s.get("elapsed", 0.0),
+            "timing": s.get("timing", {}),
+            "token_usage": s.get(
+                "token_usage", {"input": 0, "output": 0}
+            ),
+            "cost_usd": s.get("cost_usd", 0.0),
+            "rewrites": s.get("rewrites", 0),
+        }
+        for s in state.get("steps", [])
+    ]
+    status_counts: dict[str, int] = {}
+    for s in steps_summary:
+        status_counts[s["status"]] = status_counts.get(s["status"], 0) + 1
+    attempt_total = sum(s["rewrites"] + 1 for s in steps_summary)
     summary = {
         "goal": state.get("goal", ""),
         "status": state.get("status", "unknown"),
-        "steps": [
-            {
-                "id": s["id"],
-                "title": s["title"],
-                "status": s["status"],
-                "elapsed": s.get("elapsed", 0.0),
-                "timing": s.get("timing", {}),
-            }
-            for s in state.get("steps", [])
-        ],
+        "steps": steps_summary,
+        "step_count": len(steps_summary),
+        "step_status_counts": status_counts,
+        "attempt_total": attempt_total,
         "total_elapsed": state.get("total_elapsed", 0.0),
+        "total_tokens": state.get(
+            "total_tokens", {"input": 0, "output": 0}
+        ),
+        "total_cost_usd": state.get("total_cost_usd", 0.0),
+        "workspace_size_bytes": _compute_workspace_size(WORKSPACE),
     }
     git_provenance = state.get("git_provenance")
     if git_provenance:

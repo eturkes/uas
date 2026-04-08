@@ -372,7 +372,46 @@ be cross-referenced to a commit.
 - Re-running on a clean tree at the same commit yields identical
   `git_sha` and `config_hash`.
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+- `integration/eval.py`: added `HARNESS_VERSION = "phase1"` and
+  `_SECRET_ENV_PATTERN` constants near the existing module-level
+  block; new helpers `_git_capture()`, `_hash_active_config()`,
+  `capture_run_metadata()`. Wired into `main()` after the `--list`
+  short-circuit. Stderr summary line:
+  `uas-eval phase1 | sha=<8> [(dirty)] | branch=<b> | config=<8>`.
+- `_hash_active_config()` loads `uas_config.py` via `importlib.util`
+  from `REPO_ROOT/uas_config.py` so the hash works without
+  `uas_config` being on `sys.path` and without any global state
+  mutation. Falls back to `"unavailable"` on any error.
+- `tests/test_eval_metadata.py`: 16 tests across 3 classes covering
+  shape, harness version, git capture, secret-suffix filter
+  (`_TOKEN`, `_KEY`, `_SECRET`, `_PASSWORD`, case-insensitive), the
+  ANTHROPIC_API_KEY exclusion, the no-overmatch `UAS_KEY_NAME` case,
+  config-hash reproducibility, and the `_git_capture` /
+  `_hash_active_config` helper contracts. **16/16 passed in 0.15s.**
+
+Acceptance verification:
+
+1. **`--list` skips capture.** `python3 integration/eval.py --list`
+   prints just the case list with no metadata line.
+2. **Normal run prints summary.** A short-timeout run produced
+   `uas-eval phase1 | sha=77e6725f (dirty) | branch=main |
+   config=e3ed7766` on stderr at startup, before the case loop.
+3. **Reproducibility.** `test_config_hash_is_reproducible` asserts
+   `m1["config_hash"] == m2["config_hash"]` across two consecutive
+   captures on the same tree.
+
+**Carry-forward note for Section 10.** The
+`integration/workspace/hello-file/.uas_state/runs/<run_id>/specs/`
+subtree from earlier container verification runs is owned by root
+and breaks `--clean` rmtree. Section 10 should either run cleanup
+inside a container (so root-on-root works) or the user should
+manually `sudo rm -rf integration/workspace/` once before Section 10
+starts. Not a Section 4 blocker — only matters for end-to-end
+validation runs.
 
 ## Section 5 — Append-only JSONL persistence
 

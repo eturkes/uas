@@ -21,6 +21,7 @@ integration/step*.txt
 integration/hello.txt
 integration/.uas_auth/
 integration/.uas_state/
+integration/.judge_cache.json
 
 # Past run workspaces (contain large generated artifacts)
 rehab/

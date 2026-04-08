@@ -366,10 +366,12 @@ def run_checks(case, workspace, invocation) -> list:
 
     ``invocation`` is threaded through so check types like ``exit_code``
     can read the architect's return code without re-invoking the
-    subprocess.
+    subprocess. ``case`` is threaded through so check types like
+    ``llm_judge`` can read the case goal and name for prompt assembly
+    and cache keying.
     """
     return [
-        run_check(check, workspace, invocation=invocation)
+        run_check(check, workspace, invocation=invocation, case=case)
         for check in case.get("checks", [])
     ]
 
@@ -438,13 +440,53 @@ def run_case(case, verbose=False, local=False, engine=None):
     return build_result(case, workspace, invocation, metrics, checks)
 
 
-def run_check(check, workspace, invocation=None):
+def _import_llm_judge():
+    """Lazy-import the ``judge`` callable from the sibling llm_judge module.
+
+    Handles three invocation contexts in order of preference:
+
+    1. ``llm_judge`` already in ``sys.modules`` (tests import it
+       directly via ``sys.path`` injection — reuse that instance so
+       monkey-patches the test set up still apply).
+    2. ``python3 -m integration.eval`` (Phase 1 §10's planned
+       wrapper) — the package context exists, the sibling import
+       succeeds.
+    3. ``python3 integration/eval.py`` — no package context; load by
+       absolute file location and cache into ``sys.modules`` so
+       subsequent calls reuse the same instance.
+    """
+    if "llm_judge" in sys.modules:
+        return sys.modules["llm_judge"].judge
+    try:
+        from integration.llm_judge import judge as judge_fn
+        return judge_fn
+    except ImportError:
+        pass
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "llm_judge",
+        os.path.join(SCRIPT_DIR, "llm_judge.py"),
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("cannot locate integration/llm_judge.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["llm_judge"] = mod
+    spec.loader.exec_module(mod)
+    return mod.judge
+
+
+def run_check(check, workspace, invocation=None, case=None):
     """Run a single check against the workspace.
 
     ``invocation`` is the dict returned by ``invoke_architect`` and is
     consumed by check types that need the architect subprocess result
     (currently only ``exit_code``). It is optional so the function can
     be called from tests with synthetic data.
+
+    ``case`` is the full case dict (name, goal, checks, …). It is
+    threaded through by ``run_checks`` and consumed by check types
+    that need case-level metadata (currently only ``llm_judge``).
+    Optional for the same testing reason.
 
     Supported check types
     ---------------------
@@ -489,6 +531,18 @@ def run_check(check, workspace, invocation=None):
         ``cwd_relative`` (workspace-relative subdir). Runs the
         command via ``subprocess.run`` with ``timeout=60``; passes
         iff exit code is 0.
+
+    ``llm_judge``
+        Required: ``criteria`` (str — explicit success criteria the
+        judge prompt is built around). Optional: ``files`` (list of
+        workspace-relative paths to include verbatim in the prompt;
+        defaults to auto-discovery of every ``.py``, ``.md``,
+        ``.json``, ``.txt``, ``.csv`` file under the workspace),
+        ``samples`` (int, default 5), ``model`` (default
+        ``claude-opus-4-6``). Calls ``integration/llm_judge.judge``
+        with N parallel samples and majority-votes the result.
+        Requires ``case`` to be passed in (the orchestrator does this
+        automatically via ``run_checks``).
     """
     ctype = check["type"]
 
@@ -738,6 +792,64 @@ def run_check(check, workspace, invocation=None):
             "type": ctype, "cmd": cmd,
             "passed": proc.returncode == 0,
             "detail": f"exit_code={proc.returncode}",
+        }
+
+    if ctype == "llm_judge":
+        criteria = check.get("criteria")
+        if not criteria:
+            return {
+                "type": ctype, "passed": False,
+                "detail": "llm_judge check requires 'criteria' field",
+            }
+        if case is None:
+            return {
+                "type": ctype, "passed": False,
+                "detail": "llm_judge check requires case context",
+            }
+        try:
+            judge_fn = _import_llm_judge()
+        except Exception as e:
+            return {
+                "type": ctype, "passed": False,
+                "detail": f"llm_judge import failed: {e}",
+            }
+        files = check.get("files")
+        samples = check.get("samples", 5)
+        model = check.get("model", "claude-opus-4-6")
+        try:
+            result = judge_fn(
+                case_goal=case.get("goal", ""),
+                workspace=workspace,
+                criteria=criteria,
+                files=files,
+                samples=samples,
+                model=model,
+                case_name=case.get("name"),
+            )
+        except Exception as e:
+            return {
+                "type": ctype, "passed": False,
+                "detail": f"judge error: {type(e).__name__}: {e}",
+            }
+        votes = result.get("votes") or []
+        pass_votes = sum(1 for v in votes if v)
+        detail_parts = [
+            f"majority={result.get('majority', 0.0):.2f}",
+            f"votes={pass_votes}/{result.get('samples_used', len(votes))}",
+        ]
+        if result.get("cached"):
+            detail_parts.append("(cached)")
+        reasons = result.get("reasons") or []
+        if reasons and reasons[0]:
+            detail_parts.append(f"reason: {reasons[0][:120]}")
+        return {
+            "type": ctype,
+            "passed": bool(result.get("passed")),
+            "detail": "; ".join(detail_parts),
+            "majority": result.get("majority", 0.0),
+            "votes": votes,
+            "samples_used": result.get("samples_used", len(votes)),
+            "cached": bool(result.get("cached")),
         }
 
     return {"type": ctype, "passed": False, "detail": "unknown check type"}

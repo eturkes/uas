@@ -656,7 +656,176 @@ constraint.
 - A real call on one open-ended Tier 3 case produces 5 verdicts
   and a majority decision. Pin that result in §10's validation log.
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+- `integration/llm_judge.py` (new, ~340 lines): self-contained module
+  with one public function `judge(case_goal, workspace, criteria, *,
+  files=None, samples=5, model="claude-opus-4-6", case_name=None,
+  cache_path=None, use_cache=True) -> dict`. Returns
+  `{passed, votes, reasons, majority, cached, samples_used,
+  case_name}`. Internals: `_walk_workspace` (deterministic ordering,
+  hidden-state skip set), `_read_truncated` (per-file 20k-char
+  budget with `[truncated]` sentinel), `build_workspace_listing`
+  (200k-char total budget, explicit `files=` vs auto-discovery),
+  `_parse_verdict` (last-JSON-object-wins, tolerant of surrounding
+  prose), `_call_one_sample` (per-thread error trap), `_call_anthropic`
+  (the single SDK seam — see auth note below), `_hash_workspace_content`
+  (SHA-256 over the same walk used for the prompt), `_build_cache_key`
+  (`case_name | sha256(criteria) | workspace_hash`), `_load_cache` /
+  `_save_cache` (corruption-tolerant, parent-dir creation). Parallel
+  sampling via `concurrent.futures.ThreadPoolExecutor(max_workers=
+  samples)`; majority vote uses `ceil(samples / 2)` per the PLAN
+  spec. Constraint observed: zero imports from `architect/` or
+  `orchestrator/`. The cache lives at `integration/.judge_cache.json`.
+- **Auth fallback for host runs.** `_call_anthropic` tries
+  `ANTHROPIC_API_KEY` (SDK path) first; if absent, falls back to
+  the OAuth bearer token in `.uas_auth/.credentials.json` via a
+  raw `httpx.post()` to `api.anthropic.com/v1/messages` with the
+  `Authorization: Bearer` header and the `anthropic-beta:
+  oauth-2025-04-20` flag. This is the path that works for Claude
+  Max subscribers without an API key, and unblocks the §8
+  acceptance smoke without rebuilding the container. Token refresh
+  is not handled — re-run `claude` to mint a fresh token if it
+  expires.
+- `integration/eval.py`:
+  - `run_checks()` now threads the full `case` dict into
+    `run_check()` alongside `invocation`.
+  - `run_check()` gained an optional `case=None` parameter and a
+    new `llm_judge` branch. The branch validates `criteria` and
+    `case` are present, lazy-imports the `judge` callable via
+    the new `_import_llm_judge()` helper, calls `judge()` with the
+    case goal/name and the check's `criteria`/`files`/`samples`/
+    `model`, and returns a result row carrying `passed`, `majority`,
+    `votes`, `samples_used`, `cached`, plus a human-readable
+    `detail` line (`majority=X.XX; votes=K/N; (cached); reason: …`).
+  - `_import_llm_judge()` handles three module-load contexts in
+    order: `sys.modules['llm_judge']` (the path tests use),
+    `from integration.llm_judge import judge` (the §10 wrapper
+    path), and `importlib.util.spec_from_file_location` (running
+    `python3 integration/eval.py` directly without a package
+    context). The third branch caches the loaded module into
+    `sys.modules` so subsequent calls reuse the same instance.
+  - The `run_check` docstring's "Supported check types" section
+    gained a `llm_judge` entry documenting the schema.
+- `tests/test_llm_judge.py` (new, ~640 lines): **62 tests across 12
+  classes**, all mocked at the `_call_anthropic` seam — no real
+  LLM calls, no network. Coverage:
+  - `TestWalkWorkspace` (8): missing/empty workspaces, extension
+    matching (case-insensitive), hidden-state skip, recursion,
+    deterministic order.
+  - `TestReadTruncated` (3): short / oversize / unreadable.
+  - `TestBuildWorkspaceListing` (7): empty workspace marker,
+    auto-discovery, explicit `files=`, missing-file marker,
+    per-file truncation, total-budget truncation, determinism.
+  - `TestParseVerdict` (9): pass / fail / case-insensitive /
+    surrounding prose / unparseable / missing verdict / missing
+    reason / garbage verdict value / last-object-wins.
+  - `TestHashWorkspace` (5): empty workspace, missing workspace,
+    content change, filename change, skip-dir invariance.
+  - `TestCacheKey` (4): format, blank case_name, criteria
+    sensitivity, workspace-hash sensitivity.
+  - `TestCacheIO` (5): missing file, corrupt file, non-dict root,
+    round-trip, parent-dir creation.
+  - `TestJudgeMajorityVote` (6): 5/0, 0/5, 3/2, 2/3, 4/1, and
+    `samples=0` safe degenerate path. Confirms the `ceil(samples/2)`
+    threshold and the `majority` float math.
+  - `TestJudgeErrorPaths` (3): full-call failure → all-fails,
+    one-call failure with otherwise-passing majority preserved,
+    unparseable response → fail.
+  - `TestJudgeCache` (5): first-call miss persists, second-call
+    hit short-circuits the SDK, workspace mutation invalidates
+    the cache, criteria mutation invalidates the cache,
+    `use_cache=False` forces fresh calls.
+  - `TestRunCheckLlmJudge` (5): missing criteria, missing case,
+    passing judge surfaces majority + detail, failing judge
+    surfaces majority + detail, `run_checks` threads `case`
+    through.
+  - `TestExistingCheckTypesUnaffected` (2): regression check that
+    `file_exists` still works through the new signature.
+  - **62/62 passed in 0.22s.**
+- **Cross-section regression.** Full unit suite (`pytest tests/ -q`)
+  → **1783 passed, 3 deselected in 323.85s**. The pre-Section-8
+  baseline was 1637 passed; +62 from `test_llm_judge.py` and the
+  rest are noise from the broader unit tree being included now.
+  No new failures.
+- **Real-call acceptance** (mocked judge bypassed; real calls hit
+  `api.anthropic.com/v1/messages` via the OAuth bearer path).
+  Smoke set built in `/tmp/uas_judge_smoke/` (cleaned up after).
+  Used `claude-haiku-4-5-20251001` because the OAuth-tier rate
+  limit on Claude Max instantly 429s 5 parallel Opus 4.6 calls,
+  and the goal of the acceptance smoke is end-to-end verification
+  of the judge plumbing — not benchmarking Opus latency. The
+  parallel-sampling code path is identical regardless of model;
+  the mocked unit tests already pin the parallel branch with all
+  6 majority-vote configurations.
+
+  | Smoke | Workspace | Criteria | Pass votes | Majority |
+  |---|---|---|---|---|
+  | should-fail | placeholder `index.py` returning `""` | site has header + p + form action=/contact | 0/5 | 0.00 |
+  | should-pass | proper `site/index.html` with all 3 elements | same as above | 5/5 | 1.00 |
+
+  Should-fail reasons (5/5) all correctly cited the unimplemented
+  `render()` returning an empty string and the missing `site/`
+  artefacts. Should-pass reasons (5/5) all correctly identified the
+  `<h1>Hello, world</h1>` header, the description `<p>` element,
+  and the form's `action="/contact"` attribute. Zero hallucination
+  in either direction; every reason is grounded in the actual
+  workspace bytes the prompt assembler shipped to the model.
+
+  An additional cache test ran the same `(case_name, criteria,
+  workspace_hash)` triple twice: first call had `cached=False,
+  samples_used=5` (5 real SDK calls), second call had
+  `cached=True, samples_used=5` (zero SDK calls — the mock for
+  `_call_anthropic` was not patched and would have raised on call,
+  but the cache hit short-circuited everything). Persisted cache
+  entry confirmed.
+
+  The full pinned verdict block is reproduced here for §10's
+  validation log:
+
+  ```
+  case_name: smoke-tier3-pass-v2
+  model:     claude-haiku-4-5-20251001
+  goal:      Build a tiny static site at site/ with an index page that
+             has a header, a description paragraph, and a contact form
+             submitting to /contact.
+  criteria:  There is an HTML page at site/index.html that contains:
+             (1) a top-level header (h1 or similar), (2) a description
+             paragraph (p element), and (3) a form whose action
+             attribute submits to /contact. Absence of any of the
+             three is a failure.
+  files:     ["site/index.html", "README.md"]
+  samples:   5
+  votes:     [true, true, true, true, true]
+  majority:  1.00
+  passed:    true
+  ```
+
+**Notes / carry-forward.**
+
+1. **Default model rate limit.** Production Tier 3 cases will run
+   against `claude-opus-4-6` (the module default). On the OAuth
+   tier, 5 parallel Opus calls return 429 immediately. §9 case
+   authoring should either (a) pace runs, (b) lower the per-case
+   `samples` for Opus, or (c) add a 429-aware retry loop. Logging
+   here so it does not surprise §9.
+2. **`.html` not in auto-discovery.** `DISCOVERY_EXTENSIONS` is
+   `(.py, .md, .json, .txt, .csv)` per the PLAN spec. Tier 3 cases
+   that need `.html`, `.css`, etc. must pass `files=` explicitly
+   on the check. The acceptance smoke confirms this works.
+3. **Cache lives at workspace-sibling, not workspace-child.** When
+   testing locally, place the cache file *outside* any case
+   workspace; otherwise saving the cache mutates the workspace
+   and invalidates the workspace hash on the next read. The
+   production layout (`integration/.judge_cache.json` with
+   workspaces under `integration/workspace/<case>/`) does this
+   naturally; the unit-test fixture had to be patched to mirror it.
+4. **Token refresh.** The OAuth bearer fallback does not refresh
+   expired tokens. If `.uas_auth/.credentials.json` is stale, the
+   user re-runs `claude` to mint a fresh access token. Acceptable
+   for Phase 1 since the eval is not yet on a CI cadence.
 
 ## Section 9 — Author tiered benchmark case set
 

@@ -461,6 +461,184 @@ lands and this verification can be re-attempted. The current rehab
 workspace is left on branch `uas/step-1/attempt-1` with the failed run
 state intact for forensics; do NOT delete it without user confirmation.
 
+**Status note (2026-04-07, after Section 6 landed — fifth attempt):**
+Section 6 was committed as `41fe5cf` ("Scope lint pre-check via git
+diff vs uas-wip"). Verified the container image at
+`uas-engine:latest` (timestamp `2026-04-07 09:57:46 EDT`, after the
+Section 6 commit) actually contains the new code:
+
+- `docker run --rm --entrypoint /bin/bash uas-engine:latest -c "grep -l
+  changed_py_files_since_uas_wip /uas/architect/git_state.py"` prints
+  the path.
+- `grep -n "changed_py_files_since_uas_wip\|files_to_lint"
+  /uas/orchestrator/main.py` inside the container returns the
+  Section-6 helper import at line 26 plus the rewritten
+  `files_to_lint` block at lines 1914-1925.
+
+Re-ran end-to-end against the same `fa0d38fa9ef6` run state by
+invoking the engine directly (the `~/.local/bin/uas` wrapper still
+requires `-it`):
+
+```
+docker run -d --privileged --name uas-run-section3-final \
+  -e IS_SANDBOX=1 -e UAS_SANDBOX_MODE=local \
+  -e UAS_HOST_UID=$(id -u) -e UAS_HOST_GID=$(id -g) \
+  -v /home/eturkes/pro/uas/rehab/.uas_auth:/root/.claude:Z \
+  -v /home/eturkes/pro/uas/rehab/.uas_auth/claude.json:/root/.claude.json:Z \
+  -v /home/eturkes/pro/uas/rehab:/workspace:Z \
+  -w /workspace uas-engine:latest --resume --goal-file goal_001.txt
+```
+
+Process artifact (not a code bug, but worth recording so the next
+person doesn't waste an hour on it): the rehab workspace's OAuth
+token at `rehab/.uas_auth/.credentials.json` had `expiresAt =
+2026-04-07T14:06:23 UTC`, which is in the past relative to the run
+time of `2026-04-07T23:30 UTC`. The first docker invocation died
+within 60s with three `401 Invalid authentication credentials`
+errors (one per orchestrator attempt) followed by the same in the
+planner role. Remediation: copy the host's freshly-issued token
+into the workspace via
+`cp ~/.claude/.credentials.json
+rehab/.uas_auth/.credentials.json`. The host token at the time of
+this run was issued `Apr  7 19:17` with `expiresAt =
+2026-04-08T07:17 UTC`. Re-running the docker command after the
+copy proceeded past auth.
+
+Five of the six things being verified worked exactly as the prior
+sections promised. One did not:
+
+- **Git failure (Section 1): STILL FIXED.** No "Failed to create
+  attempt branch" warnings on the resumed run. The orchestrator
+  subprocess for step 1 attempt 1 successfully created a fresh
+  attempt branch from `uas-wip`.
+- **Code-block extraction (Sections 2 + 4): STILL FIXED.** Step 1
+  attempt 1 produced an extractable Python script. The script ran
+  in the sandbox, performed `uv sync`, installed all 11 expected
+  dependencies (pandas, numpy, lightgbm, scikit-learn, shap, dash,
+  plotly, scipy, statsmodels, etc.), and printed
+  `UAS_RESULT: {"status": "ok", "files_written": [...]}` listing
+  the 11 expected scaffold files (`pyproject.toml`, `.python-version`,
+  `.gitignore`, `CLAUDE.md`, `README.md`, six `__init__.py` files
+  under `src/rehab/`).
+- **Main-step lint pre-check (Section 5): STILL FIXED.** No
+  `Lint pre-check found ... fatal error(s)` warning fired against
+  `tests/test_config.py:4 F401`. The orchestrator's main step
+  subprocess exited 0.
+- **Verifier-side lint pre-check (Section 6): STILL FIXED.** The
+  architect's `verify_step_output` spawned the verifier
+  orchestrator subprocess; the verifier script printed
+  `VERIFICATION PASSED`; the verifier orchestrator's lint
+  pre-check correctly skipped (UAS_RESULT empty + no `.py` files
+  changed since `uas-wip` → no files to lint); the verifier
+  subprocess exited 0. The "Step N FAILED. Error: VERIFICATION
+  PASSED" surface symptom from the fourth attempt does NOT recur.
+- **First completed step (Section 3 acceptance criterion 1): STILL
+  NOT MET.** Immediately after the verifier subprocess returned
+  success and the architect logged
+  `Removed 11866 step artifact(s)` (the `.venv/` files installed
+  by `uv sync`, which the architect's artifact cleanup correctly
+  identified as not part of the step's intended outputs), it
+  proceeded to its next post-step gate: the **full pytest suite**.
+
+That gate is implemented at `architect/main.py:5175-5190`:
+
+```
+# Phase 4.6: Run full test suite after corrections.
+# Only for non-test steps — test steps just write tests.
+if config.get("tdd_enforce") and failure_reason is None and not step.get(
+    "title", ""
+).strip().lower().startswith("test:"):
+    logger.info("  Running full pytest suite...")
+    ...
+    full_suite_err = _run_full_pytest_suite(PROJECT_DIR)
+    if full_suite_err:
+        logger.error(
+            "  Full test suite failed after step %s.", step["id"]
+        )
+        failure_reason = full_suite_err
+```
+
+`_run_full_pytest_suite` at `architect/main.py:4546-4581` calls
+`_discover_all_test_files(workspace)` and runs `python -m pytest`
+unconditionally on every test file the discoverer returns. There is
+no scoping by which tests this attempt actually wrote, which tests
+were committed to `uas-wip` from the user's earlier failed run, or
+which modules the current step is supposed to have built.
+
+In the rehab workspace, `tests/test_config.py` was committed to
+`uas-wip` from the user's original run before `uas` was even
+invoked again. It imports `from rehab.config import PROJECT_ROOT,
+DATA_DIR, TRANSLATIONS_DIR` — but `rehab/config.py` is **not** part
+of step 1's outputs; it is scheduled for a later step in the
+plan. The full pytest suite collects `tests/test_config.py`,
+runs it, and gets:
+
+```
+__________________________ test_project_root_is_path ___________________
+tests/test_config.py:12: in test_project_root_is_path
+    from rehab.config import PROJECT_ROOT
+E   ModuleNotFoundError: No module named 'rehab'
+... (5 more identical-root-cause failures)
+6 failed in 0.04s
+```
+
+The architect interprets the pytest failure as step 1's failure,
+records the error verbatim
+(`"Full test suite FAILED after this step's corrections..."`), and
+enters its rewrite loop. I observed two consecutive rewrites
+(`rewrite 1/4`, `rewrite 2/4`) re-execute step 1, each producing a
+clean main-step + verifier pass and then dying on the same
+`_run_full_pytest_suite` failure for the same reason. After the
+fourth rewrite + retry budget exhausted, the architect set
+`state["status"] = "blocked"` and `step 1 status = "failed"`,
+deleted the `uas/step-1/attempt-N` branches, hard-reset the
+working tree to `uas-wip`, and the entrypoint subprocess exited 1.
+
+Final state.json snapshot recorded in
+`rehab/.uas_state/runs/fa0d38fa9ef6/state.json`:
+
+```
+Run status: blocked
+Step 1 status: failed
+Step 1 rewrites: 2
+Step 1 reflections: 9
+error: "Full test suite FAILED after this step's corrections.\n
+        pytest exit code: 1\n
+        stdout (last 3000 chars):\nFFFFFF ...\n
+        ModuleNotFoundError: No module named 'rehab'\n..."
+```
+
+Section 3's first acceptance criterion (`progress.md shows at
+least one completed step`) is **STILL NOT MET**, because the
+architect's full-pytest gate is now the deterministic blocker on
+this workspace. Section 3's second criterion (no git failure) is
+met. Section 3's third criterion (no extract-code-block failure)
+is met.
+
+This is a **new, distinct failure mode** unrelated to anything
+previously captured. Per step 5 of this section, it is captured
+as **Section 7** below: "Stop the architect's full-pytest gate
+from failing on pre-existing test files referencing not-yet-built
+modules". Section 3 stays `[PENDING]` until Section 7's fix lands
+and this verification can be re-attempted.
+
+Note for whoever ships Section 7: the architect's
+`try_resume()` at `architect/main.py:5773-5796` only resets steps
+in `executing` status to `pending`. The current rehab state has
+step 1 in `failed` status and run status `blocked`. A clean
+re-verification will likely require either (a) extending
+`try_resume` to also reset `failed` → `pending` when the run is
+`blocked`, or (b) manually clearing
+`rehab/.uas_state/runs/fa0d38fa9ef6/state.json`'s step 1 status
+back to `pending` before re-running. This is a follow-up concern,
+not a Section 7 design requirement, but worth flagging.
+
+The current rehab workspace was rolled back **by the architect's
+own failure handler** to `uas-wip` (clean working tree, no orphan
+attempt branches), with only `state.json` carrying the failed run
+record. Do not delete `rehab/.uas_state/runs/fa0d38fa9ef6/`
+without user confirmation.
+
 ---
 
 ### Section 4: Stop the LLM from creating files via Bash redirection  [COMPLETED]
@@ -1186,6 +1364,292 @@ left for Section 3's verification re-run, per the workflow note
 ("flipping Section 6 to `[COMPLETED]` and re-running this
 verification is what finally unblocks Section 3"). Section 3
 remains `[PENDING]` until that end-to-end re-run is performed.
+
+---
+
+### Section 7: Stop the architect's full-pytest gate from failing on pre-existing test files referencing not-yet-built modules  [PENDING]
+
+**Why:** Section 6 fixed the orchestrator's lint pre-check so that
+pre-existing `.py` files committed to `uas-wip` from a prior failed
+run are no longer blamed on the current attempt. With Sections 1, 2,
+4, 5, and 6 all in place, the rehab workspace's step 1 main
+orchestrator subprocess and verifier orchestrator subprocess BOTH
+now run cleanly to exit code 0 (verified during the fifth attempt
+at Section 3, see Section 3's fifth status note above).
+
+But the architect has a third post-step validation gate that has
+the same architectural bug Sections 5 and 6 fixed for the
+orchestrator's lint pre-check: `architect/main.py:5175-5190` calls
+`_run_full_pytest_suite(PROJECT_DIR)` after every non-test step,
+and `_run_full_pytest_suite` at `architect/main.py:4546-4581` runs
+`python -m pytest` unconditionally on every test file
+`_discover_all_test_files(workspace)` finds in the workspace.
+There is no scoping by:
+
+- Which test files are part of the *current* step's outputs.
+- Which test files were committed to `uas-wip` from a prior failed
+  run before the current run started.
+- Which modules the current step is supposed to have built.
+- Whether a failing test was passing before the current step (which
+  would indicate a regression genuinely caused by this step) or
+  was already broken (referencing a module from a not-yet-run step).
+
+End-to-end consequence (observed during the Section 3
+fifth status note's verification re-run):
+
+1. Step 1's main orchestrator subprocess runs the LLM-generated
+   Python script. It creates the project skeleton, runs
+   `uv sync`, prints `UAS_RESULT: {"status":"ok",...}`. Section
+   5's lint scoping passes. Orchestrator exits 0.
+2. Architect logs `Removed 11866 step artifact(s)` (the `.venv/`
+   files installed by `uv sync` — correctly cleaned up by the
+   architect's artifact filter).
+3. Architect runs `verify_step_output(step, PROJECT_DIR)`. The
+   verifier orchestrator subprocess generates a Python script that
+   asserts `pyproject.toml` exists, prints `VERIFICATION PASSED`,
+   exits 0. Section 6's lint scoping passes (no `.py` files
+   changed since `uas-wip`). Verifier subprocess exits 0.
+4. Architect proceeds to `_run_full_pytest_suite(PROJECT_DIR)` at
+   `architect/main.py:5185`.
+5. `_discover_all_test_files` returns `tests/test_config.py`
+   (and potentially others) — files committed to `uas-wip` from
+   the user's original `uas` run before step 1 was even attempted
+   in the prior failed runs.
+6. Pytest collects `tests/test_config.py`, which contains:
+   ```python
+   import os
+   from pathlib import Path
+   import pytest
+
+   def test_project_root_is_path():
+       from rehab.config import PROJECT_ROOT
+       ...
+   ```
+   The `from rehab.config import PROJECT_ROOT` import fails with
+   `ModuleNotFoundError: No module named 'rehab'` because step 1
+   ("Project skeleton and dependency installation") only creates
+   the empty `src/rehab/__init__.py` files — the actual
+   `rehab/config.py` module is scheduled for a later step in the
+   plan.
+7. Six tests fail with the same root cause. Pytest exits 1.
+8. `_run_full_pytest_suite` returns the formatted error string
+   `"Full test suite FAILED after this step's corrections..."`.
+9. Architect's `failure_reason = full_suite_err`. Step 1 is marked
+   as failed even though both the main pipeline and the
+   verification pipeline succeeded.
+10. Architect logs `Step 1 FAILED. Error: Full test suite
+    FAILED after this step's corrections.` and enters the rewrite
+    loop. The planner LLM rewrites the step description; the
+    rewritten attempt re-executes the same script (which writes
+    the same files); the same pre-existing test still fails the
+    same way; the cycle repeats until `MAX_SPEC_REWRITES` is
+    exhausted; then the architect marks
+    `state["status"] = "blocked"`, `step 1 status = "failed"`,
+    rolls back the workspace to `uas-wip`, and exits 1.
+
+The cycle is deterministic. As long as `tests/test_config.py`
+exists in `uas-wip` (which it does — it was committed by
+`ensure_git_repo`'s `_init_fresh_git_repo` flow on the user's
+very first `uas` invocation), every step that runs before
+`rehab/config.py` is built will trip this gate. Step 1 will
+**never** complete on this workspace.
+
+Direct reproduction (against the current `rehab/` workspace):
+
+```
+docker run --rm -v /home/eturkes/pro/uas/rehab:/workspace:Z \
+  -e IS_SANDBOX=1 -e UAS_SANDBOX_MODE=local \
+  -w /workspace --entrypoint /bin/bash uas-engine:latest \
+  -c "cd /workspace && python3 -m pytest tests/test_config.py --tb=short -q"
+```
+
+prints (deterministically):
+
+```
+FFFFFF                                                          [100%]
+=================================== FAILURES ====================
+__________________________ test_project_root_is_path ___________
+tests/test_config.py:12: in test_project_root_is_path
+    from rehab.config import PROJECT_ROOT
+E   ModuleNotFoundError: No module named 'rehab'
+... (5 more identical-root-cause failures)
+6 failed in 0.04s
+```
+
+The `tests/test_config.py` file is part of the `uas-wip` initial
+commit (verified via `git ls-tree -r uas-wip | grep test_config`)
+and predates today's work.
+
+**Files to modify:**
+
+- `architect/main.py:4546-4581` — `_run_full_pytest_suite`. The
+  helper that runs pytest unconditionally on every discovered test
+  file. Decide what scoping to apply.
+- `architect/main.py:5175-5190` — the call site. May need to
+  thread additional context (e.g., the current step's
+  `files_written`, the dependency graph, the `uas-wip` commit
+  reference) into the helper.
+- `architect/main.py:4520-?` — `_discover_all_test_files`. May
+  need to be replaced or augmented with a "test files this attempt
+  actually touched" discoverer that mirrors
+  `architect.git_state.changed_py_files_since_uas_wip` (Section 6).
+- `architect/git_state.py` — possibly add a sibling helper
+  `changed_test_files_since_uas_wip(workspace) -> list[str] | None`
+  that returns the union of (a) tracked `tests/**/*.py` files
+  differing between the working tree and `refs/heads/uas-wip` and
+  (b) untracked `tests/**/*.py` files via
+  `git ls-files --others --exclude-standard`. Same return-type
+  contract as `changed_py_files_since_uas_wip` (returns `None`
+  when scoping is unavailable).
+- `tests/test_main.py` (or wherever `_run_full_pytest_suite` is
+  exercised — see also `tests/test_orchestrator_main.py` and
+  `tests/test_verification_loop.py` for analogous Section 5/6
+  tests). Add a regression test that builds a temporary git
+  workspace with a pre-existing `tests/test_orphan.py` importing
+  a non-existent module, asserts the helper does not fail the
+  step.
+- `architect/main.py:5773-5796` — `try_resume`. Currently only
+  resets `executing` → `pending`. The current rehab state has
+  `Run status: blocked` and `Step 1 status: failed`. Re-running
+  `--resume` against this state will refuse to retry step 1
+  unless `try_resume` also handles the `blocked`/`failed`
+  combination, OR the verifier of Section 7 manually clears
+  `state.json` first. Decide whether to expand `try_resume` or
+  document the manual reset as a process step.
+
+**Possible fixes (pick one or combine):**
+
+1. **Skip the full pytest gate when no test files were written
+   by this step.** Mirrors Section 6's option 1 (skip lint when
+   `UAS_RESULT.files_written` reports no `.py` files). Smallest
+   change. Risk: a step that modifies a source module without
+   adding/changing a test could break a previously-passing test
+   and the gate would not catch it. Mitigate by combining with
+   option 3.
+
+2. **Scope pytest to test files that import modules built by
+   this step or its already-completed dependencies.** Most
+   semantically correct, but expensive: requires building an
+   import graph between every `tests/**/*.py` and every
+   `src/**/*.py`, and intersecting with the current step's
+   `files_written` plus the transitive closure of completed
+   step outputs. Risk: dynamic imports and `importlib` calls are
+   not statically analyzable.
+
+3. **Use the same git-diff-against-`uas-wip` approach Section 6
+   used.** Add `changed_test_files_since_uas_wip(workspace)` to
+   `architect/git_state.py`, returning `git diff --name-only
+   uas-wip -- 'tests/**/*.py'` plus untracked `tests/**/*.py`.
+   Pass that file list to pytest instead of every discovered
+   test file. Pro: mirrors Section 6's pattern, doesn't require
+   trusting the LLM, doesn't require an import graph. Con: a
+   pre-existing test file that the current step *should* be
+   making pass (because the step is supposed to build the
+   missing module) won't be checked.
+
+4. **Distinguish "pre-existing broken test" from "regression."**
+   At the start of every run, snapshot the result of the full
+   pytest suite (which tests pass, which fail). Treat tests that
+   were already failing on `uas-wip` as "expected failures —
+   ignore" until a step's `files_written` overlaps with the
+   modules they import. Treat tests that were passing on
+   `uas-wip` and now fail as genuine regressions. Pro: most
+   accurate. Con: most complex; needs persistent snapshot
+   storage in `.uas_state/runs/<run_id>/`.
+
+5. **Quarantine pre-existing test files at run start.** During
+   `ensure_git_repo`/`try_resume`, scan `tests/**/*.py` for
+   files that fail to import on `uas-wip`'s clean checkout. Move
+   them to a `.uas_state/quarantine/` directory until a later
+   step's `files_written` provides their missing dependencies,
+   then move them back. Pro: pytest's discoverer doesn't even
+   see them so option 1's risk is mitigated. Con: invasive
+   (touches the workspace), needs careful state management.
+
+**Recommendation:** Start with option **3** (git-diff scoping)
+plus option **1** as a fallback. This mirrors Section 6's exact
+pattern for the analogous bug, keeps the change small, and reuses
+the helper-style infrastructure already in
+`architect/git_state.py`. Specifically:
+
+- Add `changed_test_files_since_uas_wip(workspace) -> list[str] |
+  None` to `architect/git_state.py`, modeled exactly on
+  `changed_py_files_since_uas_wip` but with the path filter
+  `'tests/**/*.py'` (or a configurable glob).
+- Rewrite `_run_full_pytest_suite` to take a `step` argument or
+  call the new helper directly. When the helper returns a
+  non-empty list, run pytest on those files only. When it
+  returns an empty list (no test files changed by this attempt),
+  skip pytest entirely. When it returns `None` (scoping
+  unavailable — no git repo or no `uas-wip` ref), fall back to
+  the legacy `_discover_all_test_files` behavior.
+- Update the call site at `architect/main.py:5175-5190` to pass
+  the step / workspace context the helper needs.
+
+If option 3 turns out to require more refactoring than expected,
+fall back to option **1** (skip when no `UAS_RESULT.files_written`
+overlaps with `tests/**/*.py`). The risk of option 1 is bounded:
+the architect's existing per-step verifier (`verify_step_output`)
+plus the next step's own pytest gate (when it runs after building
+the previously-missing module) will catch genuine regressions.
+
+**Tests to add or update:**
+
+- `tests/test_main.py` — new
+  `TestRunFullPytestSuiteSection7Regression` class. At minimum:
+  - `test_pre_existing_test_referencing_unbuilt_module_does_not_fail_step`
+    — build a temp git workspace, commit a `tests/test_orphan.py`
+    that does `from notyetbuilt.module import X` to `uas-wip`,
+    invoke `_run_full_pytest_suite` (or its replacement), assert
+    it returns `None` (success).
+  - `test_pre_existing_passing_test_still_runs_after_step` — same
+    setup but the test imports something that exists; assert the
+    helper does run pytest and reports success.
+  - `test_test_file_added_by_step_runs_pytest` — assert that a
+    `tests/test_new.py` written by the current step's script (so
+    it shows up as untracked or as a diff vs `uas-wip`) IS
+    included in the pytest run.
+  - `test_no_git_falls_back_to_full_discovery` — assert the
+    legacy fallback path still works for non-git workspaces.
+- `tests/test_git_state.py` — add a `TestChangedTestFilesSinceUasWip`
+  class mirroring the existing `TestChangedPyFilesSinceUasWip`
+  Section 6 tests, exercising the new helper across the same
+  edge cases (no git, no uas-wip, clean workspace, pre-existing
+  test files committed to uas-wip, untracked test files,
+  modified tracked test files, non-test `.py` files, sorted
+  unique output).
+- `tests/test_verification_loop.py` — add a Section 7 regression
+  test that builds a real git workspace with a pre-existing
+  `tests/test_orphan.py` importing a non-existent module, runs
+  the architect's full step lifecycle (or a stripped-down
+  version), and asserts the step completes rather than failing.
+
+**Acceptance criteria:**
+
+- `python3 -m pytest tests/test_main.py tests/test_git_state.py
+  tests/test_orchestrator_main.py tests/test_verification_loop.py`
+  passes including the new regression test(s).
+- Direct manual reproduction (the `python3 -m pytest
+  tests/test_config.py` command in the **Why** section above) is
+  no longer the architect's authoritative gate — the architect
+  runs only the test files actually changed by this attempt and
+  the step does not fail when the unchanged-pre-existing test
+  file fails on its own.
+- Re-run `cd rehab && uas --resume --goal-file goal_001.txt`
+  against the existing `fa0d38fa9ef6` run state (after
+  manually clearing or extending `try_resume` to handle
+  `blocked`/`failed`, see "Files to modify" above). Step 1
+  records as completed in `.uas_state/runs/fa0d38fa9ef6/progress.md`.
+  The architect log no longer shows
+  `Error: Full test suite FAILED after this step's corrections.`
+  (This is the same final acceptance criterion as Section 3's
+  #1; flipping Section 7 to `[COMPLETED]` and re-running this
+  verification is what finally unblocks Section 3.)
+
+**When complete:** change the section header from `[PENDING]` to
+`[COMPLETED]`, append a one-paragraph result summary at the
+bottom of the section, then re-run Section 3's verification and
+update Section 3 accordingly.
 
 ---
 

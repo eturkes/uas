@@ -32,6 +32,9 @@ rehab/
 # Project-level auth (contains secrets; created by setup_auth.sh)
 .uas_auth
 
+# Local Claude Code settings
+.claude/settings.local.json
+
 # Python
 __pycache__/
 *.py[cod]

@@ -266,7 +266,7 @@ execution.
 ├── entrypoint.sh             # Two-stage entrypoint (setup then run)
 ├── Containerfile             # Image (Podman + Python + Claude Code CLI)
 ├── requirements.txt          # Python dependencies
-├── config.py                 # Layered config (TOML + env vars)
+├── uas_config.py             # Layered config (TOML + env vars)
 ├── hooks.py                  # Lifecycle hook system
 ├── uas.example.toml          # Sample config file with all keys
 ├── architect/                # Architect Agent (installed to /uas)

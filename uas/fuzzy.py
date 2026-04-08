@@ -31,7 +31,7 @@ import typing
 import anthropic
 from pydantic import BaseModel
 
-import config
+import uas_config as config
 
 logger = logging.getLogger(__name__)
 

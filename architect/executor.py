@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time as _time
 
-import config
+import uas_config as config
 
 from uas.fuzzy import fuzzy_function
 from uas.fuzzy_models import SandboxOutput

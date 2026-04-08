@@ -539,15 +539,16 @@ class TestRunLocalDashPFlag:
         def intercepted_run(cmd, *args, **kwargs):
             captured_cmds.append(list(cmd))
             # Replace the orchestrator invocation with a controlled probe:
-            # import the framework's top-level ``config`` module (the only
-            # actually-bare-imported module today, and the original Root
-            # Cause B trigger). Verify it resolves to the framework copy
-            # and not the workspace shadow file. The -P flag (preserved
-            # from the original cmd at index 1) is what makes this work.
+            # import the framework's top-level ``uas_config`` module (the
+            # framework's only bare-imported top-level module). Verify it
+            # resolves to the framework copy. The -P flag (preserved from
+            # the original cmd at index 1) plus the unique name make this
+            # structurally safe even when the workspace contains a junk
+            # ``config.py``.
             probe = (
-                "import config; "
-                "assert hasattr(config, 'get'), "
-                "f'wrong module: {config.__file__}'; "
+                "import uas_config; "
+                "assert hasattr(uas_config, 'get'), "
+                "f'wrong module: {uas_config.__file__}'; "
                 "print('OK')"
             )
             new_cmd = [cmd[0], cmd[1], "-c", probe]

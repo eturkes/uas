@@ -9,7 +9,7 @@ import tempfile
 import time
 import typing
 
-import config
+import uas_config as config
 
 from uas.fuzzy import fuzzy_function
 from uas.fuzzy_models import ErrorClassification

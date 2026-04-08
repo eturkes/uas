@@ -81,7 +81,7 @@ from .report import generate_report
 from .trace_export import TraceExporter
 from .explain import RunExplainer, classify_failure, classify_failure_heuristic
 
-import config
+import uas_config as config
 from hooks import HookEvent, load_hooks, run_hook
 
 from orchestrator.llm_client import (

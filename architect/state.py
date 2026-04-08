@@ -13,7 +13,7 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 
-import config
+import uas_config as config
 
 logger = logging.getLogger(__name__)
 

@@ -15,7 +15,7 @@ import logging
 import shutil
 import subprocess
 
-import config
+import uas_config as config
 
 logger = logging.getLogger(__name__)
 

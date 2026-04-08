@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Literal
 
-import config
+import uas_config as config
 
 from pydantic import ValidationError
 

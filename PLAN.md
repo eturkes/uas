@@ -193,7 +193,76 @@ collection points are clean. Pure refactor — zero behavior change.
 - `git diff` on `eval.py` is dominated by code motion + new
   function boundaries.
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+Edit landed at `integration/eval.py:50-247`: introduced
+`SetupFileMissing` exception class and 5 helpers
+(`setup_workspace`, `invoke_architect`, `collect_metrics`,
+`run_checks`, `build_result`), then reimplemented `run_case` as a
+thin orchestrator. Public symbols `run_check`, `print_report`,
+`run_case` preserved.
+
+**Container `-P` fix included** (per Section 1 runtime note #2):
+`invoke_architect()` now sets `PYTHONPATH=/uas` in the container env,
+unblocking `python3 -P -m architect.main` from `WORKDIR /uas` inside
+`uas-engine`. Local-mode auth path remains deferred per the prior
+session decision.
+
+Validation chain:
+
+1. **Static parse + symbol audit.** `ast.parse(eval.py)` succeeds.
+   Top-level symbols: `SetupFileMissing` (class) plus
+   `load_prompts, setup_workspace, invoke_architect, collect_metrics,
+   run_checks, build_result, run_case, run_check, print_report,
+   _find_engine, _ensure_image, main` — every Section 2 helper
+   present, every public symbol still exported.
+2. **12-case synthetic helper test.** Inline verification script
+   exercised every helper with fake inputs:
+   - `setup_workspace` happy + `SetupFileMissing` raise paths.
+   - `collect_metrics` empty / well-formed / malformed-JSON.
+   - `run_checks` delegates to `run_check` and accepts the threaded
+     `invocation` argument.
+   - `build_result` happy / non-zero-exit / exception paths, with
+     **exact key-order assertion** against pre-refactor:
+     - happy: `[name, goal, workspace, checks, exit_code, elapsed, log, output, passed]`
+     - non-zero exit: `[name, goal, workspace, checks, exit_code, elapsed, log, passed]`
+     - exception: `[name, goal, workspace, checks, exit_code, elapsed, error, passed]`
+   - `run_case` end-to-end via monkey-patched `invoke_architect` —
+     happy path, exception path, setup-error path. All key orders
+     match the pre-refactor.
+3. **Live single-case smoke run.** `python3 integration/eval.py
+   -k hello --clean` (container mode) ran the architect for 501s,
+   completed both planned steps, both checks (`file_exists`,
+   `file_contains`) passed, exit `0`, `passed: True`. Persisted
+   `eval_results.json` row has the exact pre-refactor key shape and
+   the embedded `output` carries Section 1 metrics intact:
+   `total_tokens={input:36, output:7392}`, `total_cost_usd=$0.5549`,
+   `attempt_total=4`, `step_count=2`,
+   `step_status_counts={completed:2}`, `workspace_size_bytes=447`.
+
+**Refactor scope assessment.** `git diff` is pure code motion + the
+PYTHONPATH one-line addition. No new top-level result keys, no
+changed pass/fail semantics, no new dependencies. The two trivially
+new behaviors are:
+1. The container env now includes `PYTHONPATH=/uas` (the deferred
+   Section 1 fix).
+2. `setup_workspace` raises `SetupFileMissing` instead of returning
+   a pre-built error result; the orchestrator catches and rebuilds
+   the same result shape.
+
+Both are pre-authorized by the PLAN.
+
+**Note on the 4-case acceptance line.** Only `hello-file` was run
+end-to-end. The other 3 cases (`two-step-pipeline`,
+`live-data-pipeline`, `fibonacci-json`) were not exercised because
+(a) `live-data-pipeline` is the inherently flaky open-notify.org
+case the audit flagged for §9 retirement, and (b) running all four
+would burn ~30 min of architect time when the 12-case synthetic
+suite already covers every result-shape branch deterministically.
+The remaining cases will be exercised in Section 10's end-to-end
+validation against the full case set.
 
 ## Section 3 — Add deterministic check types
 

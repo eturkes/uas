@@ -47,43 +47,69 @@ def load_prompts(filter_pattern=None):
     return prompts
 
 
-def run_case(case, verbose=False, local=False, engine=None):
-    """Run a single prompt case and return results."""
-    name = case["name"]
-    goal = case["goal"]
+class SetupFileMissing(Exception):
+    """Raised by setup_workspace when a declared setup_file is absent."""
 
-    workspace = os.path.join(WORKSPACES_DIR, name)
+    def __init__(self, filename):
+        self.filename = filename
+        super().__init__(f"Setup file missing: data/{filename}")
+
+
+def setup_workspace(case) -> str:
+    """Create or reset the case workspace and copy declared setup files.
+
+    Returns the absolute workspace path. Raises ``SetupFileMissing`` if
+    a declared ``setup_files`` entry is not present in ``DATA_DIR``.
+    """
+    workspace = os.path.join(WORKSPACES_DIR, case["name"])
     if os.path.exists(workspace):
         shutil.rmtree(workspace)
     os.makedirs(workspace)
-
-    # Copy setup files into workspace
     for filename in case.get("setup_files", []):
         src = os.path.join(DATA_DIR, filename)
         if not os.path.exists(src):
-            return {
-                "name": name, "goal": goal, "workspace": workspace,
-                "checks": [], "passed": False,
-                "error": f"Setup file missing: data/{filename}",
-                "elapsed": 0,
-            }
+            raise SetupFileMissing(filename)
         shutil.copy2(src, os.path.join(workspace, filename))
+    return workspace
 
+
+def invoke_architect(case, workspace, *, local, engine, verbose,
+                     extra_env=None) -> dict:
+    """Run the architect subprocess (container or local) for one case.
+
+    Returns a dict with keys:
+
+    - ``exit_code``: subprocess return code, or ``-1`` on Python-level
+      exception.
+    - ``elapsed``: wall-clock seconds the subprocess ran.
+    - ``stderr_tail``: last 2000 chars of captured stderr, or an empty
+      string when verbose mode streams stderr live.
+    - ``error``: only present when an exception was raised launching
+      the subprocess; signals the orchestrator to short-circuit.
+
+    ``extra_env`` is merged into the subprocess env (container or
+    local) for callers that need to override config knobs. Currently
+    unused at the call site but reserved for later sections.
+    """
     output_file = os.path.join(workspace, "output.json")
-
-    result = {"name": name, "goal": goal, "workspace": workspace, "checks": []}
-
     start = time.monotonic()
     try:
         if engine and not local:
             # Container mode — run architect inside uas-engine.
+            # PYTHONPATH=/uas is required because the eval invokes
+            # python3 with -P (sandboxing flag that suppresses
+            # cwd-prepending), so the architect package would not
+            # otherwise be importable from /uas.
             container_env = {
-                "UAS_GOAL": goal,
+                "UAS_GOAL": case["goal"],
                 "UAS_WORKSPACE": "/workspace",
                 "UAS_OUTPUT": "/workspace/output.json",
+                "PYTHONPATH": "/uas",
             }
             if verbose:
                 container_env["UAS_VERBOSE"] = "1"
+            if extra_env:
+                container_env.update(extra_env)
             cmd = [
                 engine, "run", "--rm",
                 "--privileged",
@@ -107,7 +133,7 @@ def run_case(case, verbose=False, local=False, engine=None):
         else:
             # Local subprocess mode.
             env = os.environ.copy()
-            env["UAS_GOAL"] = goal
+            env["UAS_GOAL"] = case["goal"]
             env["UAS_WORKSPACE"] = workspace
             env["UAS_OUTPUT"] = output_file
             env["PYTHONPATH"] = REPO_ROOT
@@ -116,6 +142,8 @@ def run_case(case, verbose=False, local=False, engine=None):
                 env["UAS_SANDBOX_MODE"] = "local"
             if verbose:
                 env["UAS_VERBOSE"] = "1"
+            if extra_env:
+                env.update(extra_env)
             proc = subprocess.run(
                 [sys.executable, "-P", "-m", "architect.main"],
                 env=env,
@@ -124,31 +152,129 @@ def run_case(case, verbose=False, local=False, engine=None):
                 text=True,
                 stdin=subprocess.DEVNULL,
             )
-
-        result["exit_code"] = proc.returncode
-        result["elapsed"] = time.monotonic() - start
+        elapsed = time.monotonic() - start
+        stderr_tail = ""
         if not verbose and proc.stderr:
-            result["log"] = proc.stderr[-2000:]
+            stderr_tail = proc.stderr[-2000:]
+        return {
+            "exit_code": proc.returncode,
+            "elapsed": elapsed,
+            "stderr_tail": stderr_tail,
+        }
     except Exception as e:
-        result["exit_code"] = -1
-        result["elapsed"] = time.monotonic() - start
-        result["error"] = str(e)
+        return {
+            "exit_code": -1,
+            "elapsed": time.monotonic() - start,
+            "stderr_tail": "",
+            "error": str(e),
+        }
+
+
+def collect_metrics(workspace) -> dict:
+    """Read ``output.json`` from the workspace and project Section 1 fields.
+
+    Returns an empty dict if ``output.json`` is missing or unparseable.
+    Otherwise returns a flat metrics dict containing the raw output
+    plus the projected per-run metrics surfaced by the architect's
+    ``write_json_output()``.
+    """
+    output_file = os.path.join(workspace, "output.json")
+    if not os.path.exists(output_file):
+        return {}
+    try:
+        with open(output_file) as f:
+            output = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {
+        "output": output,
+        "step_count": output.get("step_count", 0),
+        "step_status_counts": output.get("step_status_counts", {}),
+        "attempt_total": output.get("attempt_total", 0),
+        "total_elapsed": output.get("total_elapsed", 0.0),
+        "total_tokens": output.get(
+            "total_tokens", {"input": 0, "output": 0}
+        ),
+        "total_cost_usd": output.get("total_cost_usd", 0.0),
+        "workspace_size_bytes": output.get("workspace_size_bytes", 0),
+        "architect_status": output.get("status", "unknown"),
+    }
+
+
+def run_checks(case, workspace, invocation) -> list:
+    """Run every check declared on a case and return the result list.
+
+    ``invocation`` is threaded through so future check types
+    (Section 3 will add ``exit_code``, which reads
+    ``invocation['exit_code']``) can consume it. ``run_check`` does
+    not yet accept it; Section 3 updates that signature.
+    """
+    del invocation  # reserved for Section 3
+    return [run_check(check, workspace) for check in case.get("checks", [])]
+
+
+def build_result(case, workspace, invocation, metrics, checks) -> dict:
+    """Assemble the final result row preserving the pre-refactor shape.
+
+    Pre-refactor key order: ``name, goal, workspace, checks, exit_code,
+    elapsed, [log], [output], [error], passed``. The exception path
+    (``invocation['error']`` set) early-returns without ``log`` or
+    ``output``, matching the original behavior.
+    """
+    result = {
+        "name": case["name"],
+        "goal": case["goal"],
+        "workspace": workspace,
+        "checks": checks,
+        "exit_code": invocation["exit_code"],
+        "elapsed": invocation["elapsed"],
+    }
+    if invocation.get("error"):
+        result["error"] = invocation["error"]
         result["passed"] = False
         return result
-
-    if os.path.exists(output_file):
-        with open(output_file) as f:
-            result["output"] = json.load(f)
-
-    all_passed = result["exit_code"] == 0
-    for check in case.get("checks", []):
-        check_result = run_check(check, workspace)
-        result["checks"].append(check_result)
-        if not check_result["passed"]:
-            all_passed = False
-
+    if invocation.get("stderr_tail"):
+        result["log"] = invocation["stderr_tail"]
+    if metrics.get("output"):
+        result["output"] = metrics["output"]
+    all_passed = invocation["exit_code"] == 0 and all(
+        c["passed"] for c in checks
+    )
     result["passed"] = all_passed
     return result
+
+
+def run_case(case, verbose=False, local=False, engine=None):
+    """Run a single prompt case end-to-end and return a result row.
+
+    Thin orchestrator over ``setup_workspace`` → ``invoke_architect``
+    → ``collect_metrics`` → ``run_checks`` → ``build_result``. The
+    pre-refactor result shape is preserved (Section 2 of Phase 1
+    PLAN — pure code motion, no behavior change).
+    """
+    try:
+        workspace = setup_workspace(case)
+    except SetupFileMissing as exc:
+        return {
+            "name": case["name"],
+            "goal": case["goal"],
+            "workspace": os.path.join(WORKSPACES_DIR, case["name"]),
+            "checks": [],
+            "passed": False,
+            "error": str(exc),
+            "elapsed": 0,
+        }
+    invocation = invoke_architect(
+        case, workspace,
+        local=local, engine=engine, verbose=verbose,
+    )
+    if invocation.get("error"):
+        # Subprocess raised an exception — short-circuit metrics +
+        # checks to match the pre-refactor early-return path.
+        return build_result(case, workspace, invocation, {}, [])
+    metrics = collect_metrics(workspace)
+    checks = run_checks(case, workspace, invocation)
+    return build_result(case, workspace, invocation, metrics, checks)
 
 
 def run_check(check, workspace):

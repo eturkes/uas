@@ -13,14 +13,54 @@ from hooks import HookEvent, load_hooks, run_hook
 MAX_ERROR_LENGTH = int(os.environ.get("UAS_MAX_ERROR_LENGTH", "0"))
 _DEFAULT_REWRITE_TRIM = 3000
 
+# Defensive cap on workspace context embedded into planner prompts. The
+# helper in architect/executor.py already caps its output at 6000 chars by
+# default; this is a belt-and-braces guard against giant inputs from future
+# callers.
+MAX_PLANNER_WORKSPACE_CONTEXT = 4000
+
 logger = logging.getLogger(__name__)
 
 MINIMAL_MODE = os.environ.get("UAS_MINIMAL", "").lower() in ("1", "true", "yes")
 
 
+def _build_workspace_section(
+    workspace_context: str,
+    max_chars: int = MAX_PLANNER_WORKSPACE_CONTEXT,
+) -> str:
+    """Format a workspace summary for embedding into a planner prompt.
+
+    Returns an empty string when *workspace_context* is empty so the
+    surrounding prompt template renders cleanly. When non-empty, the
+    summary is wrapped in a ``<workspace_files>`` block with an
+    instruction to treat the listed files as authoritative. Inputs
+    longer than *max_chars* are truncated with a marker so the planner
+    is told the view is partial.
+    """
+    if not workspace_context:
+        return ""
+
+    body = workspace_context
+    if len(body) > max_chars:
+        body = (
+            body[:max_chars]
+            + "\n... [planner workspace section truncated]"
+        )
+
+    return (
+        "\n<workspace_files>\n"
+        "The following files already exist in the project workspace. "
+        "Treat them as authoritative — your research, specifications, "
+        "and step descriptions must not assume different file names, "
+        "schemas, or contents than what is shown here.\n"
+        f"{body}\n"
+        "</workspace_files>\n"
+    )
+
+
 SPEC_GENERATION_PROMPT = """\
 <goal>{goal}</goal>
-{research_context}
+{research_context}{workspace_section}
 <instructions>
 You are a technical architect. Given the goal above, produce a structured \
 project specification that will guide an autonomous coding agent through \
@@ -29,6 +69,10 @@ implementation.
 Scale the depth to the project's complexity:
 - For simple projects (1-3 components), keep sections brief.
 - For complex projects (many components, data pipelines, UIs), be thorough.
+
+If a file in `<workspace_files>` already provides a contract (schema, \
+columns, keys, value distributions), section 5 (Data Model) MUST quote \
+those exact names rather than inventing alternatives.
 
 Write the spec as a Markdown document with these sections:
 </instructions>
@@ -106,9 +150,7 @@ def generate_project_spec(
         workspace_context: Optional formatted summary of pre-existing
             workspace files. When non-empty, embedded into the prompt
             under ``<workspace_files>`` so the planner can ground
-            decisions in real file contents. Currently plumbed in but
-            not yet wired into the prompt template (Section 3 of
-            PLAN.md).
+            decisions in real file contents.
 
     Returns:
         The specification as a Markdown string, or empty string for
@@ -124,8 +166,11 @@ def generate_project_spec(
         rc_section = (
             f"\n<research_findings>\n{research_context}\n</research_findings>\n"
         )
+    workspace_section = _build_workspace_section(workspace_context)
     prompt = SPEC_GENERATION_PROMPT.format(
-        goal=goal, research_context=rc_section,
+        goal=goal,
+        research_context=rc_section,
+        workspace_section=workspace_section,
     )
 
     event_log = get_event_log()
@@ -143,7 +188,7 @@ def generate_project_spec(
 
 RESEARCH_PROMPT = """\
 <goal>{goal}</goal>
-
+{workspace_section}
 <instructions>
 Before planning implementation, research this domain. Use web search to find \
 current best practices, relevant standards, and authoritative sources.
@@ -182,12 +227,13 @@ def research_goal(goal: str, workspace_context: str = "") -> str:
         workspace_context: Optional formatted summary of pre-existing
             workspace files. When non-empty, embedded into the prompt
             under ``<workspace_files>`` so the planner can ground
-            decisions in real file contents. Currently plumbed in but
-            not yet wired into the prompt template (Section 3 of
-            PLAN.md).
+            decisions in real file contents.
     """
     client = get_llm_client(role="planner")
-    prompt = RESEARCH_PROMPT.format(goal=goal)
+    workspace_section = _build_workspace_section(workspace_context)
+    prompt = RESEARCH_PROMPT.format(
+        goal=goal, workspace_section=workspace_section,
+    )
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "research_goal"})
     try:
@@ -219,6 +265,14 @@ Always specify the most modern, widely-adopted tools and libraries for the job.
 </research>
 {spec}
 <goal>{goal}</goal>
+{workspace_section}
+<workspace_files_guidance>
+If a file in `<workspace_files>` already exists, do NOT generate a step to \
+create it. Generate steps that *use* the file as-is, referencing the exact \
+keys, columns, and values shown in the summary. Test steps that validate \
+such files MUST assert against the actual schema visible in \
+`<workspace_files>`, never against an invented one.
+</workspace_files_guidance>
 
 <examples>
 Example 1 — Trivial (single step):
@@ -507,6 +561,9 @@ implementation step's description MUST instruct the code generator to make all t
 in the test file pass. Steps that are purely data-processing (downloading, cleaning), \
 configuration, or integration checkpoints do NOT require preceding test steps — only \
 steps that produce reusable code modules or libraries do.
+17. Pre-existing files in `<workspace_files>` are immutable inputs unless the goal \
+explicitly requests overwriting them. Step descriptions that touch these files must \
+reference the exact field names, key paths, and value ranges visible in the scan.
 </rules>
 
 <output_format>
@@ -871,9 +928,7 @@ def decompose_goal(goal: str, spec: str = "",
         workspace_context: Optional formatted summary of pre-existing
             workspace files. When non-empty, embedded into the prompt
             under ``<workspace_files>`` so the planner can ground
-            decisions in real file contents. Currently plumbed in but
-            not yet wired into the prompt template (Section 3 of
-            PLAN.md).
+            decisions in real file contents.
     """
     _hooks = hooks or []
 
@@ -889,9 +944,11 @@ def decompose_goal(goal: str, spec: str = "",
             )
 
     client = get_llm_client(role="planner")
+    workspace_section = _build_workspace_section(workspace_context)
     prompt = DECOMPOSITION_PROMPT.format(
         goal=goal,
         spec=_format_spec(spec),
+        workspace_section=workspace_section,
     )
     event_log = get_event_log()
     event_log.emit(EventType.LLM_CALL_START, data={"purpose": "decompose_goal"})
@@ -1333,9 +1390,7 @@ def decompose_goal_with_voting(
         workspace_context: Optional formatted summary of pre-existing
             workspace files. When non-empty, embedded into the prompt
             under ``<workspace_files>`` so the planner can ground
-            decisions in real file contents. Currently plumbed in but
-            not yet wired into the prompt template (Section 3 of
-            PLAN.md).
+            decisions in real file contents.
 
     Returns (steps, complexity) tuple-style via the steps list, with the
     estimated complexity stored in the module-level for the caller to read.
@@ -1375,6 +1430,7 @@ def decompose_goal_with_voting(
     logger.info("  Generating %d plans for voting...", n_samples)
 
     spec_formatted = _format_spec(spec)
+    workspace_section = _build_workspace_section(workspace_context)
 
     def _generate_plan(suffix_idx: int) -> list[dict] | None:
         """Generate a single plan variant. Returns None on failure."""
@@ -1382,7 +1438,9 @@ def decompose_goal_with_voting(
             client = get_llm_client(role="planner")
             suffix = _VOTING_SUFFIXES[suffix_idx] if suffix_idx < len(_VOTING_SUFFIXES) else ""
             prompt = DECOMPOSITION_PROMPT.format(
-                goal=goal, spec=spec_formatted,
+                goal=goal,
+                spec=spec_formatted,
+                workspace_section=workspace_section,
             ) + suffix
             response, _usage = client.generate(prompt)
             steps = parse_steps_json(response)

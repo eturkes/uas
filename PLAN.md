@@ -210,7 +210,7 @@ is to keep the diff small and reviewable in isolation.
 
 ## Section 3 — Inject workspace context into planner prompt templates
 
-**Status:** pending
+**Status:** completed
 
 **Goal:** Make the planner LLM actually see and act on the workspace
 summary by adding a `<workspace_files>` block to the three prompt

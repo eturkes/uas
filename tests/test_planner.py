@@ -571,3 +571,122 @@ class TestWorkspaceContextKwarg:
         )
         assert len(result) == 1
         assert result[0]["title"] == "s1"
+
+
+class TestWorkspaceContextPromptInjection:
+    """Section 3: workspace_context is wired into planner prompt templates.
+
+    Each test patches ``get_llm_client`` to capture the prompt the LLM
+    receives, then asserts the expected ``<workspace_files>`` block is
+    present (or absent) in that prompt.
+    """
+
+    @patch("architect.planner.get_llm_client")
+    def test_decompose_goal_includes_workspace_files_block(
+        self, mock_get_client,
+    ):
+        steps_json = json.dumps(
+            [{"title": "s1", "description": "d1", "depends_on": []}]
+        )
+        client = MagicMock()
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
+        mock_get_client.return_value = client
+
+        decompose_goal("noop", workspace_context="<file_x.json>")
+
+        prompts = [c.args[0] for c in client.generate.call_args_list]
+        assert prompts, "expected at least one LLM call"
+        prompt = prompts[0]
+        assert "<workspace_files>" in prompt
+        assert "<file_x.json>" in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_decompose_goal_omits_block_when_context_empty(
+        self, mock_get_client,
+    ):
+        steps_json = json.dumps(
+            [{"title": "s1", "description": "d1", "depends_on": []}]
+        )
+        client = MagicMock()
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
+        mock_get_client.return_value = client
+
+        decompose_goal("noop")
+
+        prompts = [c.args[0] for c in client.generate.call_args_list]
+        assert prompts, "expected at least one LLM call"
+        prompt = prompts[0]
+        # The closing tag only appears when the block is actually emitted;
+        # the instructional copy references the open tag literally inside
+        # backticks but never the closing tag.
+        assert "</workspace_files>" not in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_research_goal_includes_workspace_files_block(
+        self, mock_get_client,
+    ):
+        client = MagicMock()
+        client.generate.return_value = (
+            "research summary", {"input": 0, "output": 0},
+        )
+        mock_get_client.return_value = client
+
+        research_goal("noop", workspace_context="<file_x.json>")
+
+        prompts = [c.args[0] for c in client.generate.call_args_list]
+        assert prompts, "expected at least one LLM call"
+        prompt = prompts[0]
+        assert "<workspace_files>" in prompt
+        assert "<file_x.json>" in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_research_goal_omits_block_when_context_empty(
+        self, mock_get_client,
+    ):
+        client = MagicMock()
+        client.generate.return_value = (
+            "research summary", {"input": 0, "output": 0},
+        )
+        mock_get_client.return_value = client
+
+        research_goal("noop")
+
+        prompts = [c.args[0] for c in client.generate.call_args_list]
+        assert prompts, "expected at least one LLM call"
+        prompt = prompts[0]
+        assert "</workspace_files>" not in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_generate_project_spec_includes_workspace_files_block(
+        self, mock_get_client,
+    ):
+        client = MagicMock()
+        client.generate.return_value = (
+            "spec markdown", {"input": 0, "output": 0},
+        )
+        mock_get_client.return_value = client
+
+        generate_project_spec("noop", workspace_context="<file_x.json>")
+
+        prompts = [c.args[0] for c in client.generate.call_args_list]
+        assert prompts, "expected at least one LLM call"
+        prompt = prompts[0]
+        assert "<workspace_files>" in prompt
+        assert "<file_x.json>" in prompt
+
+    @patch("architect.planner.get_llm_client")
+    def test_generate_project_spec_omits_block_when_context_empty(
+        self, mock_get_client,
+    ):
+        client = MagicMock()
+        client.generate.return_value = (
+            "spec markdown", {"input": 0, "output": 0},
+        )
+        mock_get_client.return_value = client
+
+        generate_project_spec("noop")
+
+        prompts = [c.args[0] for c in client.generate.call_args_list]
+        assert prompts, "expected at least one LLM call"
+        prompt = prompts[0]
+        assert "</workspace_files>" not in prompt

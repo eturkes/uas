@@ -502,6 +502,213 @@ for regression comparison.
 
 ---
 
+## Section 6 — Eliminate workspace-shadowing of framework modules
+
+**Status:** pending
+
+**Goal:** Structurally eliminate Root Cause B from Background — the
+entire *class* of bug where a top-level workspace file (`config.py`,
+`state.py`, `executor.py`, `events.py`, `hooks.py`, etc.) shadows a
+same-named framework module on `sys.path[0]`. The fix uses two
+complementary mechanisms:
+
+1. Pass `-P` to every framework subprocess invocation that runs with
+   `cwd=workspace`. The `-P` flag (Python 3.11+; this repo runs 3.13)
+   tells the interpreter not to prepend the unsafe path to
+   `sys.path[0]`. It is process-local: it does NOT propagate to
+   grandchild processes (e.g. `pytest` spawned by the orchestrator),
+   so user tests still see their workspace modules normally. This is
+   the critical advantage over `PYTHONSAFEPATH=1` which would
+   propagate via env inheritance and break user test discovery.
+
+2. Add a defensive `sys.path` scrub at the very top of
+   `architect/__init__.py` and `orchestrator/__init__.py` that
+   removes any leading empty-string entry. This catches direct user
+   invocations (`python3 -m architect.main` from a workspace cwd)
+   that bypass framework-controlled entry points and forget the
+   `-P` flag. Belt-and-braces: if either mechanism is missed at a
+   call site, the other still protects.
+
+After this section the framework will tolerate ANY top-level
+workspace module name without import shadowing, making UAS safe for
+brownfield projects that already ship their own `config.py`,
+`state.py`, `hooks.py`, etc.
+
+**Files to edit**
+
+- `architect/executor.py`
+- `architect/__init__.py` (currently empty)
+- `orchestrator/__init__.py` (currently empty)
+- `run_local.sh`
+- `entrypoint.sh`
+- `tests/test_integration.py`
+- `integration/eval.py`
+- `README.md`
+
+**Changes**
+
+1. **`architect/executor.py:_run_local()`** — two subprocess sites
+   around lines 247 and 253. Insert `"-P"` between `sys.executable`
+   and `"-m"`:
+
+   ```python
+   [sys.executable, "-P", "-m", "orchestrator.main"]
+   ```
+
+   Both the streaming branch (line 247) and the non-streaming
+   branch (line 253) must be updated.
+
+2. **`architect/executor.py:_run_container()`** — line 488, inside
+   the `cmd = _podman_cmd(...) + env_args + [...]` list. Insert
+   `"-P"` between `"python3"` and `"-m"`:
+
+   ```python
+   container_name,
+   "python3", "-P", "-m", "orchestrator.main",
+   ```
+
+3. **`architect/__init__.py`** — currently 0 bytes. Replace the
+   empty file with:
+
+   ```python
+   """UAS Architect package.
+
+   The first two lines below scrub the empty-string entry that
+   Python prepends to sys.path when this package is imported via
+   ``python -m architect.X`` from an arbitrary working directory.
+   This prevents a workspace-local file (e.g. ``config.py``,
+   ``state.py``, ``hooks.py``) from shadowing a same-named
+   framework module on import. See PLAN.md Section 6.
+   """
+   import sys as _sys
+   if _sys.path and _sys.path[0] == "":
+       _sys.path.pop(0)
+   ```
+
+   These three lines must be the first executable code in the file
+   so the scrub runs before any framework import resolves.
+
+4. **`orchestrator/__init__.py`** — currently 0 bytes. Replace with
+   the same scrub pattern:
+
+   ```python
+   """UAS Orchestrator package.
+
+   See ``architect/__init__.py`` and PLAN.md Section 6 for the
+   rationale behind the sys.path scrub below.
+   """
+   import sys as _sys
+   if _sys.path and _sys.path[0] == "":
+       _sys.path.pop(0)
+   ```
+
+5. **`run_local.sh`** — line 29. Replace
+   `python3 -m architect.main "$@"` with
+   `python3 -P -m architect.main "$@"`. The script does not `cd`
+   into the framework root before invoking python, so without
+   `-P` an unlucky cwd would shadow.
+
+6. **`entrypoint.sh`** — three sites (lines 20, 31, 81). Replace
+   each `python3 -m architect.X "$@"` with
+   `python3 -P -m architect.X "$@"`. The script does `cd /uas`
+   first so this is defense-in-depth, but adding `-P` makes the
+   intent explicit and protects against future refactors that
+   might drop the `cd`.
+
+7. **`tests/test_integration.py`** — lines 55 and 79. The two
+   subprocess command lists invoke `architect.main` and
+   `orchestrator.main` respectively from tmp workspace cwds.
+   Insert `"-P"` between the interpreter and `"-m"` in each list.
+
+8. **`integration/eval.py`** — lines 99 and 120. Insert `"-P"`
+   in both `architect.main` invocation lists.
+
+9. **`README.md`** — update every documented invocation that runs
+   `python3 -m architect.X` or `python3 -m orchestrator.main` to
+   show the `-P` flag (lines 225-229, 236, 239-240, 592, 595,
+   598). Users will copy-paste these commands; without `-P` they
+   could reproduce the bug from a brownfield workspace cwd. The
+   `__init__.py` scrub from change 3/4 protects them anyway, but
+   showing the explicit flag in docs reinforces the convention.
+
+10. **No change** to pip-install or pytest subprocess sites
+    (`orchestrator/sandbox.py:47`, `orchestrator/sandbox.py:52`,
+    `architect/main.py:2114`, `architect/main.py:4589`,
+    `tests/test_tdd_contract.py:580`). These run user-test or
+    package-management subprocesses; they intentionally need
+    workspace files on `sys.path` and must NOT receive `-P`.
+
+**Tests to add (`tests/test_executor.py`)**
+
+- `test_run_local_passes_dash_p_flag` — patch `subprocess.run` to
+  capture its first positional argument (the command list), call
+  `_run_local("noop")` with the LLM client patched out, assert
+  `"-P"` appears in the captured command immediately after
+  `sys.executable`.
+
+- `test_run_local_streaming_passes_dash_p_flag` — same as above
+  but for the streaming branch: pass an `output_callback` so
+  `_run_streaming` is exercised, and patch the streaming entry
+  point to capture its command argument.
+
+- `test_run_local_does_not_shadow_framework_modules` — create a
+  tmp workspace containing five junk files named `config.py`,
+  `state.py`, `executor.py`, `events.py`, and `hooks.py`. Each
+  junk file's body is `raise ImportError("workspace shadow")`
+  so any accidental shadowing fails immediately on import.
+  Patch `config.get("workspace")` to return the tmp path, patch
+  the LLM client so the orchestrator does not call the model,
+  call `_run_local("noop")`, and assert that the result's
+  `stderr` does NOT contain `"workspace shadow"` and the
+  process did not crash on `ImportError` (i.e. exit_code is the
+  expected value for a no-op task, not the catch-all -1).
+
+- `test_run_local_safe_path_does_not_propagate_to_grandchildren`
+  — justify the choice of `-P` flag over `PYTHONSAFEPATH=1` env
+  var. Patch `subprocess.run` to capture the `env=` kwarg, call
+  `_run_local`, assert `PYTHONSAFEPATH` is not set in the captured
+  env (so any pytest the orchestrator spawns will see its normal
+  workspace-relative imports).
+
+**Tests to add (`tests/test_package_init.py`, new file)**
+
+- `test_architect_init_scrubs_empty_sys_path` — invoke a tiny
+  python subprocess: `python3 -c "import sys;
+  sys.path.insert(0, ''); import architect; print('' in
+  sys.path)"`. Assert the captured stdout is `"False\n"`.
+  This proves the `__init__.py` scrub fires before the import
+  completes.
+
+- `test_orchestrator_init_scrubs_empty_sys_path` — same pattern
+  for the `orchestrator` package.
+
+**Definition of done**
+
+- All call sites listed in changes 1-9 carry the `-P` flag (or
+  the `__init__.py` scrub for changes 3-4).
+- All six new tests pass.
+- `python -m pytest tests/test_executor.py tests/test_package_init.py
+  -q` reports zero failures.
+- `python -m pytest tests/ -q` (the full existing suite) reports
+  zero failures — confirming the `__init__.py` scrub does not
+  break any existing test discovery or import path.
+- Manual regression smoke check: create `/tmp/uas_shadow_test/`
+  containing a junk `config.py` whose body is `raise
+  ImportError("shadow detected")`, then run
+  `UAS_WORKSPACE=/tmp/uas_shadow_test PYTHONPATH=/home/eturkes/pro/uas
+  python3 -m architect.main --dry-run "noop"` from
+  `/tmp/uas_shadow_test` (i.e. with the workspace as the cwd).
+  Verify the architect starts without raising
+  `ImportError: shadow detected` and reaches the planner phase.
+  Without the fix this crashes on the very first `import config`;
+  with the fix the `__init__.py` scrub strips the unsafe path
+  prepend before any framework import resolves.
+- After this section is `completed`, Root Cause B is structurally
+  eliminated: any workspace file with a top-level framework module
+  name is harmless to the architect/orchestrator pipeline.
+
+---
+
 ## Reusable agent prompt
 
 When picking up this PLAN.md in a fresh coding agent session, paste the

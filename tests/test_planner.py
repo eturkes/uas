@@ -11,6 +11,7 @@ from architect.planner import (
     reflect_and_rewrite,
     decompose_failing_step,
     research_goal,
+    generate_project_spec,
     decompose_goal,
     decompose_goal_with_voting,
     _is_confused_output,
@@ -498,3 +499,75 @@ class TestSpecInDecomposition:
         # Only one generate call (decompose), not two (complexity + decompose)
         prompts = [c.args[0] for c in client.generate.call_args_list]
         assert not any("Rate the complexity" in p for p in prompts)
+
+
+class TestWorkspaceContextKwarg:
+    """Section 2: planner entry points accept workspace_context kwarg.
+
+    These are smoke tests verifying the new parameter does not blow up
+    any of the four planner entry points. Section 3 of PLAN.md will wire
+    the value into the prompt templates; for now it is plumbed but
+    ignored.
+    """
+
+    @patch("architect.planner.get_llm_client")
+    def test_research_goal_accepts_workspace_context_kwarg(self, mock_get_client):
+        client = MagicMock()
+        client.generate.return_value = (
+            "fixed research summary", {"input": 0, "output": 0},
+        )
+        mock_get_client.return_value = client
+
+        result = research_goal("noop", workspace_context="ignored")
+        assert result == "fixed research summary"
+
+    @patch("architect.planner.get_llm_client")
+    def test_generate_project_spec_accepts_workspace_context_kwarg(
+        self, mock_get_client,
+    ):
+        client = MagicMock()
+        client.generate.return_value = (
+            "fixed spec markdown", {"input": 0, "output": 0},
+        )
+        mock_get_client.return_value = client
+
+        result = generate_project_spec(
+            "noop", workspace_context="ignored",
+        )
+        assert result == "fixed spec markdown"
+
+    @patch("architect.planner.get_llm_client")
+    def test_decompose_goal_accepts_workspace_context_kwarg(
+        self, mock_get_client,
+    ):
+        steps_json = json.dumps(
+            [{"title": "s1", "description": "d1", "depends_on": []}]
+        )
+        client = MagicMock()
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
+        mock_get_client.return_value = client
+
+        result = decompose_goal("noop", workspace_context="ignored")
+        assert len(result) == 1
+        assert result[0]["title"] == "s1"
+
+    @patch("architect.planner.get_llm_client")
+    def test_decompose_goal_with_voting_accepts_workspace_context_kwarg(
+        self, mock_get_client,
+    ):
+        steps_json = json.dumps(
+            [{"title": "s1", "description": "d1", "depends_on": []}]
+        )
+        client = MagicMock()
+        client.generate.return_value = (steps_json, {"input": 0, "output": 0})
+        mock_get_client.return_value = client
+
+        # complexity="trivial" short-circuits to decompose_goal so the test
+        # exercises the workspace_context plumbing through both functions.
+        result = decompose_goal_with_voting(
+            "noop",
+            complexity="trivial",
+            workspace_context="ignored",
+        )
+        assert len(result) == 1
+        assert result[0]["title"] == "s1"

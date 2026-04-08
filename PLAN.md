@@ -153,7 +153,7 @@ of pre-existing workspace files using the existing
 
 ## Section 2 — Thread workspace context through planner functions
 
-**Status:** pending
+**Status:** completed
 
 **Goal:** Add a `workspace_context: str = ""` parameter to the four
 planner entry points so they can receive (but not yet emit) a

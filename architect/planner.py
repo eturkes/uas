@@ -90,6 +90,7 @@ def generate_project_spec(
     goal: str,
     research_context: str = "",
     complexity: str = "medium",
+    workspace_context: str = "",
 ) -> str:
     """Generate a structured project specification from a goal.
 
@@ -102,6 +103,12 @@ def generate_project_spec(
         goal: The user's goal text.
         research_context: Pre-computed research findings to incorporate.
         complexity: Estimated complexity (trivial/simple/medium/complex).
+        workspace_context: Optional formatted summary of pre-existing
+            workspace files. When non-empty, embedded into the prompt
+            under ``<workspace_files>`` so the planner can ground
+            decisions in real file contents. Currently plumbed in but
+            not yet wired into the prompt template (Section 3 of
+            PLAN.md).
 
     Returns:
         The specification as a Markdown string, or empty string for
@@ -163,12 +170,21 @@ say "No additional research needed" and briefly explain why.
 """
 
 
-def research_goal(goal: str) -> str:
+def research_goal(goal: str, workspace_context: str = "") -> str:
     """Perform domain research before planning implementation.
 
     Sends the goal to the planner LLM with a research-specific prompt
     to gather best practices, standards, and authoritative sources.
     Returns a structured research summary, or empty string on failure.
+
+    Args:
+        goal: The user's goal text.
+        workspace_context: Optional formatted summary of pre-existing
+            workspace files. When non-empty, embedded into the prompt
+            under ``<workspace_files>`` so the planner can ground
+            decisions in real file contents. Currently plumbed in but
+            not yet wired into the prompt template (Section 3 of
+            PLAN.md).
     """
     client = get_llm_client(role="planner")
     prompt = RESEARCH_PROMPT.format(goal=goal)
@@ -842,7 +858,23 @@ def _format_spec(spec: str) -> str:
 
 
 def decompose_goal(goal: str, spec: str = "",
-                    hooks: list | None = None) -> list[dict]:
+                    hooks: list | None = None,
+                    workspace_context: str = "") -> list[dict]:
+    """Decompose a goal into an ordered list of atomic steps.
+
+    Args:
+        goal: The user's goal text.
+        spec: Optional structured project specification to guide
+            decomposition.
+        hooks: Optional hook configurations loaded from
+            ``.uas/hooks.toml``.
+        workspace_context: Optional formatted summary of pre-existing
+            workspace files. When non-empty, embedded into the prompt
+            under ``<workspace_files>`` so the planner can ground
+            decisions in real file contents. Currently plumbed in but
+            not yet wired into the prompt template (Section 3 of
+            PLAN.md).
+    """
     _hooks = hooks or []
 
     # Section 8: PRE_PLAN hook
@@ -1284,6 +1316,7 @@ def decompose_goal_with_voting(
     spec: str = "",
     complexity: str | None = None,
     hooks: list | None = None,
+    workspace_context: str = "",
 ) -> list[dict]:
     """Generate multiple decomposition plans and select the best one.
 
@@ -1297,6 +1330,12 @@ def decompose_goal_with_voting(
         complexity: Pre-computed complexity estimate. If None, will be
             estimated via LLM call.
         hooks: Hook configurations loaded from .uas/hooks.toml.
+        workspace_context: Optional formatted summary of pre-existing
+            workspace files. When non-empty, embedded into the prompt
+            under ``<workspace_files>`` so the planner can ground
+            decisions in real file contents. Currently plumbed in but
+            not yet wired into the prompt template (Section 3 of
+            PLAN.md).
 
     Returns (steps, complexity) tuple-style via the steps list, with the
     estimated complexity stored in the module-level for the caller to read.
@@ -1315,7 +1354,10 @@ def decompose_goal_with_voting(
 
     if complexity in ("trivial", "simple"):
         logger.info("  Skipping voting for %s goal, using single decomposition.", complexity)
-        return decompose_goal(goal, spec=spec, hooks=_hooks)
+        return decompose_goal(
+            goal, spec=spec, hooks=_hooks,
+            workspace_context=workspace_context,
+        )
 
     # Section 8: PRE_PLAN hook (for voting path)
     if _hooks:
@@ -1376,7 +1418,10 @@ def decompose_goal_with_voting(
 
     if not plans:
         logger.warning("  All voting plans failed, falling back to single decomposition.")
-        return decompose_goal(goal, spec=spec, hooks=_hooks)
+        return decompose_goal(
+            goal, spec=spec, hooks=_hooks,
+            workspace_context=workspace_context,
+        )
 
     if len(plans) == 1:
         logger.info("  Only 1 valid plan generated, using it directly.")

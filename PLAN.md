@@ -507,7 +507,39 @@ every metric.
 - `uas-eval --runs 1` works and reports stdev as 0.
 - Aggregate is reproducible from JSONL by hand.
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+- `integration/eval.py`: added `RESULTS_AGGREGATE` constant; added
+  `aggregate_results(all_results) -> dict` (per-case mean +
+  `statistics.pstdev` across `pass_rate`, `elapsed`, `llm_time`,
+  `sandbox_time`, `attempts`, `tokens_input`, `tokens_output`); added
+  `print_aggregate_report(aggregate)` (sortable per-case stderr table
+  with overall pass rate footer); added `--runs N` CLI flag and
+  `UAS_EVAL_RUNS` env-var override (default 3, validated `>= 1`);
+  rewrote `main()` case loop as nested
+  `for run_index in range(args.runs): for case in cases:`. Per-iteration
+  `append_result_row(..., run_index=run_index, ...)`. After all runs,
+  computes the aggregate, persists to `RESULTS_AGGREGATE`, and prints
+  both `print_report` (first run) and `print_aggregate_report` (all
+  runs). Legacy `RESULTS_FILE` now stores the **first run's**
+  results only to preserve the pre-Section-6 `len == len(cases)`
+  shape for any straggler consumer.
+- `tests/test_eval_variance.py`: 11 tests covering empty input,
+  single run, three-run mean+pstdev (including the `[1, 2, 3]` case
+  whose stdev is `sqrt(2/3)`), mixed pass/fail, all-fail, token /
+  llm_time / sandbox_time / attempts aggregation, the no-`output`
+  default-zero error path, multiple independent cases, and a
+  full-key-set assertion. **11/11 passed in 0.09s.**
+- **Integration smoke**: monkey-patched `run_case` with deterministic
+  varying elapsed (`1.0, 2.0, 3.0`) over `--runs 3`. Output:
+  3 JSONL rows with run_indices `[0, 1, 2]`, aggregate file
+  populated with `elapsed_mean=2.0, elapsed_stdev=0.8165`
+  (matching `pstdev([1, 2, 3])` exactly), `tokens_input_mean=200.0`
+  (mean of `[100, 200, 300]`), pass-rate 1.0. Aggregate report
+  rendered correctly to stderr with `=== Run K/N ===` separators
+  per run.
 
 ## Section 7 — Tier schema and tiered reporting
 

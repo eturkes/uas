@@ -37,6 +37,9 @@ RESULTS_FILE = os.path.join(SCRIPT_DIR, "eval_results.json")
 # Append-only durable log of every (case × run) result row, stamped
 # with capture_run_metadata() at the head. Created on first append.
 RESULTS_JSONL = os.path.join(SCRIPT_DIR, "eval_results.jsonl")
+# Per-invocation derived view of the JSONL log: per-case mean ± stdev
+# across all runs in this invocation. Overwritten each run.
+RESULTS_AGGREGATE = os.path.join(SCRIPT_DIR, "eval_results_aggregate.json")
 
 UAS_AUTH_DIR = os.path.join(REPO_ROOT, ".uas_auth")
 CLAUDE_JSON = os.path.join(UAS_AUTH_DIR, "claude.json")
@@ -722,6 +725,116 @@ def run_check(check, workspace, invocation=None):
     return {"type": ctype, "passed": False, "detail": "unknown check type"}
 
 
+def aggregate_results(all_results) -> dict:
+    """Build per-case mean ± stdev across every run iteration.
+
+    Input is the flat list of result dicts from ``run_case`` (one per
+    case × run). Each result may carry an embedded ``output`` dict
+    holding the Section 1 metrics (per-step timing, token totals,
+    attempt counts) — when missing, every metric defaults to zero so
+    error-path rows still aggregate cleanly.
+
+    Returns a dict keyed by case name with mean and population stdev
+    (``statistics.pstdev``, so ``n_runs == 1`` yields ``stdev = 0.0``)
+    for: ``pass_rate``, ``elapsed``, ``llm_time``, ``sandbox_time``,
+    ``attempts``, ``tokens_input``, ``tokens_output``. Each entry
+    also carries ``n_runs``.
+    """
+    import statistics
+    by_case = {}
+    for r in all_results:
+        by_case.setdefault(r["name"], []).append(r)
+    aggregate = {}
+    for name, rows in by_case.items():
+        passes = [1.0 if r.get("passed") else 0.0 for r in rows]
+        elapseds = [float(r.get("elapsed", 0.0)) for r in rows]
+        llm_times = []
+        sandbox_times = []
+        attempts = []
+        tok_in = []
+        tok_out = []
+        for r in rows:
+            out = r.get("output") or {}
+            steps = out.get("steps", [])
+            llm_t = sum(
+                s.get("timing", {}).get("llm_time", 0.0) for s in steps
+            )
+            sandbox_t = sum(
+                s.get("timing", {}).get("sandbox_time", 0.0) for s in steps
+            )
+            llm_times.append(llm_t)
+            sandbox_times.append(sandbox_t)
+            attempts.append(out.get("attempt_total", 0))
+            tt = out.get("total_tokens") or {"input": 0, "output": 0}
+            tok_in.append(tt.get("input", 0))
+            tok_out.append(tt.get("output", 0))
+
+        def _ms(values):
+            return statistics.mean(values), statistics.pstdev(values)
+
+        pr_m, pr_s = _ms(passes)
+        el_m, el_s = _ms(elapseds)
+        lt_m, lt_s = _ms(llm_times)
+        st_m, st_s = _ms(sandbox_times)
+        at_m, at_s = _ms(attempts)
+        ti_m, ti_s = _ms(tok_in)
+        to_m, to_s = _ms(tok_out)
+        aggregate[name] = {
+            "n_runs": len(rows),
+            "pass_rate_mean": pr_m,
+            "pass_rate_stdev": pr_s,
+            "elapsed_mean": el_m,
+            "elapsed_stdev": el_s,
+            "llm_time_mean": lt_m,
+            "llm_time_stdev": lt_s,
+            "sandbox_time_mean": st_m,
+            "sandbox_time_stdev": st_s,
+            "attempts_mean": at_m,
+            "attempts_stdev": at_s,
+            "tokens_input_mean": ti_m,
+            "tokens_input_stdev": ti_s,
+            "tokens_output_mean": to_m,
+            "tokens_output_stdev": to_s,
+        }
+    return aggregate
+
+
+def print_aggregate_report(aggregate):
+    """Print the per-case mean ± stdev table after a multi-run pass."""
+    if not aggregate:
+        return
+    print("\n" + "=" * 78, file=sys.stderr)
+    print("  UAS Eval Aggregate Report (mean ± stdev across runs)",
+          file=sys.stderr)
+    print("=" * 78, file=sys.stderr)
+    header = (
+        f"  {'Case':<25} {'N':>3} {'Pass':>14} {'Wall(s)':>14} "
+        f"{'LLM(s)':>14}"
+    )
+    print(header, file=sys.stderr)
+    print("  " + "-" * 76, file=sys.stderr)
+    for name in sorted(aggregate.keys()):
+        a = aggregate[name]
+        pr = f"{a['pass_rate_mean']:.2f}±{a['pass_rate_stdev']:.2f}"
+        el = f"{a['elapsed_mean']:.1f}±{a['elapsed_stdev']:.1f}"
+        lt = f"{a['llm_time_mean']:.1f}±{a['llm_time_stdev']:.1f}"
+        print(
+            f"  {name[:25]:<25} {a['n_runs']:>3} {pr:>14} {el:>14} {lt:>14}",
+            file=sys.stderr,
+        )
+    overall_pass = (
+        sum(a["pass_rate_mean"] * a["n_runs"] for a in aggregate.values())
+        / sum(a["n_runs"] for a in aggregate.values())
+    )
+    print("  " + "-" * 76, file=sys.stderr)
+    print(
+        f"  Overall pass rate: {overall_pass:.3f} across "
+        f"{len(aggregate)} cases",
+        file=sys.stderr,
+    )
+    print("=" * 78, file=sys.stderr)
+
+
 def print_report(results):
     """Print assessment report."""
     total = len(results)
@@ -826,7 +939,18 @@ def main():
         help="Override path for the append-only JSONL results log "
              "(default: integration/eval_results.jsonl)",
     )
+    _default_runs = int(os.environ.get("UAS_EVAL_RUNS", "3"))
+    parser.add_argument(
+        "--runs", type=int, default=_default_runs,
+        help=(
+            "Number of times to run the full benchmark for variance "
+            f"(default: {_default_runs}, env: UAS_EVAL_RUNS)"
+        ),
+    )
     args = parser.parse_args()
+    if args.runs < 1:
+        print("--runs must be >= 1", file=sys.stderr)
+        return 1
 
     cases = load_prompts(args.filter)
     if not cases:
@@ -881,36 +1005,63 @@ def main():
     if args.clean and os.path.exists(WORKSPACES_DIR):
         shutil.rmtree(WORKSPACES_DIR)
 
-    print(f"Running {len(cases)} prompt case(s)...\n", file=sys.stderr)
+    print(
+        f"Running {len(cases)} prompt case(s) × {args.runs} run(s)...\n",
+        file=sys.stderr,
+    )
 
     results_jsonl_path = args.results_out or RESULTS_JSONL
-    results = []
-    for i, case in enumerate(cases, 1):
-        label = case["goal"][:70]
-        print(f"[{i}/{len(cases)}] {case['name']}: {label}...",
-              file=sys.stderr)
-        result = run_case(case, verbose=args.verbose, local=args.local,
-                          engine=engine)
-        results.append(result)
-        # Section 5: append every result row to the durable JSONL log,
-        # stamped with the captured run metadata. Section 6's
-        # multi-run loop will pass a real run_index; Section 5's
-        # single-iteration mode pins it at 0.
-        append_result_row(
-            result,
-            run_metadata=run_metadata,
-            run_index=0,
-            output_path=results_jsonl_path,
-        )
-        status = "PASS" if result["passed"] else "FAIL"
-        print(f"        -> {status} ({result.get('elapsed', 0):.1f}s)",
-              file=sys.stderr)
+    all_results = []
+    first_run_results = []
+    for run_index in range(args.runs):
+        if args.runs > 1:
+            print(
+                f"\n=== Run {run_index + 1}/{args.runs} ===",
+                file=sys.stderr,
+            )
+        run_results = []
+        for i, case in enumerate(cases, 1):
+            label = case["goal"][:70]
+            print(
+                f"[{i}/{len(cases)}] {case['name']}: {label}...",
+                file=sys.stderr,
+            )
+            result = run_case(
+                case, verbose=args.verbose, local=args.local, engine=engine,
+            )
+            run_results.append(result)
+            all_results.append(result)
+            append_result_row(
+                result,
+                run_metadata=run_metadata,
+                run_index=run_index,
+                output_path=results_jsonl_path,
+            )
+            status = "PASS" if result["passed"] else "FAIL"
+            print(
+                f"        -> {status} ({result.get('elapsed', 0):.1f}s)",
+                file=sys.stderr,
+            )
+        if run_index == 0:
+            first_run_results = run_results
 
+    # Legacy compatibility: RESULTS_FILE holds the first run's results
+    # only, preserving the pre-Section-6 "len == len(cases)" shape for
+    # any consumer that expects it.
     with open(RESULTS_FILE, "w") as f:
-        json.dump(results, f, indent=2, default=str)
+        json.dump(first_run_results, f, indent=2, default=str)
 
-    print_report(results)
-    return 0 if all(r["passed"] for r in results) else 1
+    # Section 6: aggregate every (case × run) row and persist the
+    # derived view next to the JSONL log.
+    aggregate = aggregate_results(all_results)
+    with open(RESULTS_AGGREGATE, "w") as f:
+        json.dump(aggregate, f, indent=2, default=str)
+
+    print_report(first_run_results)
+    print_aggregate_report(aggregate)
+
+    # Pass condition: every case in every run passed.
+    return 0 if all(r["passed"] for r in all_results) else 1
 
 
 if __name__ == "__main__":

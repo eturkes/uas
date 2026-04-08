@@ -26,4 +26,4 @@ WORKSPACE="$(mktemp -d)"
 export UAS_WORKSPACE="$WORKSPACE"
 echo "Workspace: $WORKSPACE"
 
-python3 -m architect.main "$@"
+python3 -P -m architect.main "$@"

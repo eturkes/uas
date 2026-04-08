@@ -17,7 +17,7 @@ fi
 if [ "${1:-}" = "prune" ]; then
     shift
     cd /uas
-    python3 -m architect.state prune "$@"
+    python3 -P -m architect.state prune "$@"
     exit $?
 fi
 
@@ -28,7 +28,7 @@ if [ -n "${UAS_TASK:-}" ] || [ -n "${UAS_GOAL:-}" ] || [ -n "${UAS_GOAL_FILE:-}"
     echo "Non-interactive mode detected (UAS_TASK, UAS_GOAL, or UAS_GOAL_FILE set)."
     echo "Skipping interactive setup."
     cd /uas
-    python3 -m architect.main "$@"
+    python3 -P -m architect.main "$@"
     exit $?
 fi
 
@@ -78,4 +78,4 @@ echo "============================================================"
 echo ""
 
 cd /uas
-python3 -m architect.main "$@"
+python3 -P -m architect.main "$@"

@@ -52,7 +52,7 @@ class TestPhase1Decomposition:
         """Decompose a trivial goal via --dry-run and verify step output."""
         stdout, stderr, rc = run_in_container(
             uas_engine,
-            ["python3", "-m", "architect.main",
+            ["python3", "-P", "-m", "architect.main",
              "--dry-run", "Print the current date and time"],
             env={"UAS_WORKSPACE": "/workspace"},
             workspace=str(tmp_path),
@@ -76,7 +76,7 @@ class TestOrchestratorExecution:
         """Execute a trivial task: create a file with known content."""
         stdout, stderr, rc = run_in_container(
             uas_engine,
-            ["python3", "-m", "orchestrator.main"],
+            ["python3", "-P", "-m", "orchestrator.main"],
             env={
                 "UAS_SANDBOX_MODE": "local",
                 "UAS_WORKSPACE": "/workspace",

@@ -244,13 +244,13 @@ def _run_local(task: str, extra_env: dict | None = None,
 
     if output_callback:
         return _run_streaming(
-            [sys.executable, "-m", "orchestrator.main"],
+            [sys.executable, "-P", "-m", "orchestrator.main"],
             env=env, cwd=cwd, callback=output_callback,
         )
 
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "orchestrator.main"],
+            [sys.executable, "-P", "-m", "orchestrator.main"],
             capture_output=True,
             text=True,
             timeout=RUN_TIMEOUT,
@@ -485,7 +485,7 @@ def _run_container(task: str, extra_env: dict | None = None,
         "-w", "/workspace",
     ) + env_args + [
         container_name,
-        "python3", "-m", "orchestrator.main",
+        "python3", "-P", "-m", "orchestrator.main",
     ]
 
     if output_callback:

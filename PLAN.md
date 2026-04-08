@@ -504,7 +504,18 @@ for regression comparison.
 
 ## Section 6 — Eliminate workspace-shadowing of framework modules
 
-**Status:** pending
+**Status:** completed
+
+**Implementation note:** The scrub code in changes 3 and 4 was extended
+beyond the plan's literal `if _sys.path[0] == "":` form. Empirical
+verification on Python 3.13 showed that `python -m architect.X` does
+NOT prepend `""` — it prepends the cwd as an *absolute path*. The
+literal scrub never fired in that mode and the manual smoke check
+failed (`ImportError: shadow detected` from `architect/state.py:16`).
+The committed scrub now removes `sys.path[0]` whenever it represents
+the cwd in either form (`""` or absolute path) AND is not the
+framework root itself, preserving the plan's stated goal. Three extra
+tests cover the new branch in `tests/test_package_init.py`.
 
 **Goal:** Structurally eliminate Root Cause B from Background — the
 entire *class* of bug where a top-level workspace file (`config.py`,

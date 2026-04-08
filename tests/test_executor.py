@@ -1,10 +1,13 @@
 """Tests for architect.executor: run_orchestrator, extract_sandbox_stdout, find_engine."""
 
+import os
 import subprocess
+import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
 
+import architect.executor as _executor_module
 from architect.executor import (
     run_orchestrator,
     extract_sandbox_stdout,
@@ -14,6 +17,7 @@ from architect.executor import (
     truncate_output,
     find_engine,
     build_planner_workspace_context,
+    _run_local,
     RUN_TIMEOUT,
     _STDOUT_PATTERN,
     _STDERR_PATTERN,
@@ -427,3 +431,179 @@ class TestBuildPlannerWorkspaceContext:
         result = build_planner_workspace_context(str(tmp_path))
         assert result != ""
         assert "data.json" in result
+
+
+class TestRunLocalDashPFlag:
+    """PLAN.md Section 6: -P flag prevents workspace files from shadowing
+    framework modules in the orchestrator subprocess invocation.
+    """
+
+    def test_run_local_passes_dash_p_flag(self, tmp_path, monkeypatch):
+        """The non-streaming branch must inject -P after sys.executable."""
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+
+        captured: dict = {}
+
+        def fake_run(cmd, *args, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["kwargs"] = kwargs
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(_executor_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(
+            _executor_module.config, "get",
+            lambda key, default=None: (
+                str(tmp_path) if key == "workspace" else default
+            ),
+        )
+
+        _run_local("noop")
+
+        cmd = captured["cmd"]
+        assert "-P" in cmd, f"-P flag missing from command: {cmd}"
+        py_idx = cmd.index(sys.executable)
+        assert cmd[py_idx + 1] == "-P", (
+            f"-P must immediately follow sys.executable; got: {cmd}"
+        )
+        assert "-m" in cmd
+        m_idx = cmd.index("-m")
+        assert m_idx > py_idx + 1, "-m must come after -P"
+        assert cmd[m_idx + 1] == "orchestrator.main"
+
+    def test_run_local_streaming_passes_dash_p_flag(self, tmp_path, monkeypatch):
+        """The streaming branch (used when output_callback is set) must
+        also inject -P after sys.executable."""
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+
+        captured: dict = {}
+
+        def fake_streaming(cmd, *args, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["kwargs"] = kwargs
+            return {"exit_code": 0, "stdout": "", "stderr": ""}
+
+        monkeypatch.setattr(
+            _executor_module, "_run_streaming", fake_streaming,
+        )
+        monkeypatch.setattr(
+            _executor_module.config, "get",
+            lambda key, default=None: (
+                str(tmp_path) if key == "workspace" else default
+            ),
+        )
+
+        _run_local("noop", output_callback=lambda line: None)
+
+        assert "cmd" in captured, "_run_streaming was not invoked"
+        cmd = captured["cmd"]
+        assert "-P" in cmd, f"-P flag missing from streaming command: {cmd}"
+        py_idx = cmd.index(sys.executable)
+        assert cmd[py_idx + 1] == "-P", (
+            f"-P must immediately follow sys.executable; got: {cmd}"
+        )
+        assert "orchestrator.main" in cmd
+
+    def test_run_local_does_not_shadow_framework_modules(
+        self, tmp_path, monkeypatch,
+    ):
+        """End-to-end check: with -P, a workspace cwd containing junk
+        config.py / state.py / executor.py / events.py / hooks.py does
+        NOT shadow the framework's same-named modules.
+
+        We don't actually run the orchestrator (it would call the LLM
+        and hang). Instead we intercept _run_local's subprocess.run and
+        substitute a tiny ``python3 -P -c "import config; ..."`` invocation
+        that uses the same cwd and env _run_local would have used. The
+        substituted subprocess proves the -P flag is the structural
+        defense by failing if any of the workspace shadow modules win
+        the import race.
+        """
+        for name in (
+            "config.py", "state.py", "executor.py", "events.py", "hooks.py",
+        ):
+            (tmp_path / name).write_text(
+                'raise ImportError("workspace shadow")\n'
+            )
+
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(
+            _executor_module.config, "get",
+            lambda key, default=None: (
+                str(tmp_path) if key == "workspace" else default
+            ),
+        )
+
+        captured_cmds: list = []
+        real_run = subprocess.run
+
+        def intercepted_run(cmd, *args, **kwargs):
+            captured_cmds.append(list(cmd))
+            # Replace the orchestrator invocation with a controlled probe:
+            # import the framework's top-level ``config`` module (the only
+            # actually-bare-imported module today, and the original Root
+            # Cause B trigger). Verify it resolves to the framework copy
+            # and not the workspace shadow file. The -P flag (preserved
+            # from the original cmd at index 1) is what makes this work.
+            probe = (
+                "import config; "
+                "assert hasattr(config, 'get'), "
+                "f'wrong module: {config.__file__}'; "
+                "print('OK')"
+            )
+            new_cmd = [cmd[0], cmd[1], "-c", probe]
+            return real_run(new_cmd, *args, **kwargs)
+
+        monkeypatch.setattr(
+            _executor_module.subprocess, "run", intercepted_run,
+        )
+
+        result = _run_local("noop")
+
+        assert captured_cmds, "subprocess.run was never called"
+        cmd = captured_cmds[0]
+        assert "-P" in cmd, (
+            f"-P flag absent from intercepted command: {cmd}"
+        )
+        assert "workspace shadow" not in result["stderr"], (
+            f"Workspace junk modules shadowed framework modules despite -P. "
+            f"stderr={result['stderr']!r}"
+        )
+        assert result["exit_code"] == 0, (
+            f"Probe subprocess failed (exit {result['exit_code']}). "
+            f"stderr={result['stderr']!r} stdout={result['stdout']!r}"
+        )
+        assert "OK" in result["stdout"]
+
+    def test_run_local_safe_path_does_not_propagate_to_grandchildren(
+        self, tmp_path, monkeypatch,
+    ):
+        """Justify -P flag over PYTHONSAFEPATH=1 env var: -P is process-local
+        and does NOT propagate to grandchild processes (e.g. pytest spawned
+        by the orchestrator), so user tests still see workspace-relative
+        imports normally.
+        """
+        monkeypatch.setenv("UAS_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("PYTHONSAFEPATH", raising=False)
+
+        captured: dict = {}
+
+        def fake_run(cmd, *args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            captured["cmd"] = list(cmd)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(_executor_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(
+            _executor_module.config, "get",
+            lambda key, default=None: (
+                str(tmp_path) if key == "workspace" else default
+            ),
+        )
+
+        _run_local("noop")
+
+        env = captured.get("env") or {}
+        assert "PYTHONSAFEPATH" not in env, (
+            f"PYTHONSAFEPATH must NOT be set in subprocess env (would "
+            f"propagate to grandchildren); got env keys: {sorted(env)}"
+        )

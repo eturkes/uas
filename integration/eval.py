@@ -96,7 +96,7 @@ def run_case(case, verbose=False, local=False, engine=None):
                 cmd.extend(["-e", f"{k}={v}"])
             cmd.extend([
                 "--entrypoint", "", "-w", "/uas", IMAGE_TAG,
-                "python3", "-m", "architect.main",
+                "python3", "-P", "-m", "architect.main",
             ])
             proc = subprocess.run(
                 cmd,
@@ -117,7 +117,7 @@ def run_case(case, verbose=False, local=False, engine=None):
             if verbose:
                 env["UAS_VERBOSE"] = "1"
             proc = subprocess.run(
-                [sys.executable, "-m", "architect.main"],
+                [sys.executable, "-P", "-m", "architect.main"],
                 env=env,
                 cwd=workspace,
                 capture_output=not verbose,

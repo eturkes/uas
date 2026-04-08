@@ -222,22 +222,22 @@ UAS_EXPLAIN=1 uas "your goal"
 For post-hoc analysis of a previous run without re-executing:
 
 ```bash
-python3 -m architect.explain /path/to/workspace
-python3 -m architect.explain --step 2 /path/to/workspace
-python3 -m architect.explain --failure 3 /path/to/workspace
-python3 -m architect.explain --critical-path /path/to/workspace
-python3 -m architect.explain --cost /path/to/workspace
+python3 -P -m architect.explain /path/to/workspace
+python3 -P -m architect.explain --step 2 /path/to/workspace
+python3 -P -m architect.explain --failure 3 /path/to/workspace
+python3 -P -m architect.explain --critical-path /path/to/workspace
+python3 -P -m architect.explain --cost /path/to/workspace
 ```
 
 ### Non-Interactive / Local Mode
 
 ```bash
 # Run without containers (uses local Python + Claude Code CLI):
-UAS_SANDBOX_MODE=local UAS_GOAL="your goal" python3 -m architect.main
+UAS_SANDBOX_MODE=local UAS_GOAL="your goal" python3 -P -m architect.main
 
 # Read goal from a file (useful for long or multi-line goals):
-python3 -m architect.main --goal-file goal.txt
-UAS_GOAL_FILE=goal.txt python3 -m architect.main
+python3 -P -m architect.main --goal-file goal.txt
+UAS_GOAL_FILE=goal.txt python3 -P -m architect.main
 
 # Or run the prompt evaluation suite:
 python3 integration/eval.py                # Run all prompt cases
@@ -529,7 +529,7 @@ sandbox runs.
 `UAS_EXPLAIN` is set), a post-run explanation is printed to stderr
 covering critical path analysis, failure taxonomy, rewrite
 effectiveness scoring, and cost breakdown. The standalone CLI
-(`python3 -m architect.explain`) supports post-hoc analysis of
+(`python3 -P -m architect.explain`) supports post-hoc analysis of
 previous runs. When combined with `--report`, explanations are
 included as a fifth tab in the HTML report.
 
@@ -589,13 +589,13 @@ dumps and full sandbox output):
 
 ```bash
 # Verbose architect run:
-python3 -m architect.main -v "your goal"
+python3 -P -m architect.main -v "your goal"
 
 # Verbose orchestrator run:
-python3 -m orchestrator.main -v "your task"
+python3 -P -m orchestrator.main -v "your task"
 
 # Or via environment variable:
-UAS_VERBOSE=1 python3 -m architect.main "your goal"
+UAS_VERBOSE=1 python3 -P -m architect.main "your goal"
 ```
 
 ## Implicit Intelligence

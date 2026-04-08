@@ -303,7 +303,7 @@ templates and instructing the planner to honour pre-existing files.
 
 ## Section 4 — Wire workspace context into the architect's main flow
 
-**Status:** pending
+**Status:** completed
 
 **Goal:** Call the new helper exactly once at the start of the
 planning phase in `architect/main.py` and pass the result through all

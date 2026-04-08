@@ -5939,6 +5939,25 @@ def main():
         goal_entity = prov.add_entity("goal", content=goal)
         planner_agent = prov.add_agent("planner_llm")
 
+        # Section 4: Scan the workspace once so the planner can ground
+        # research, spec, and decomposition in real pre-existing files
+        # rather than hallucinating an alternative schema.
+        workspace_context = ""
+        try:
+            workspace_context = build_planner_workspace_context(WORKSPACE)
+            if workspace_context:
+                logger.info(
+                    "  Pre-existing workspace files visible to planner "
+                    "(%d chars).",
+                    len(workspace_context),
+                )
+        except Exception as exc:
+            logger.warning(
+                "  Could not scan workspace for planner context "
+                "(non-fatal): %s",
+                exc,
+            )
+
         # Specification phase: estimate complexity, research domain for
         # medium/complex goals, then generate a structured project spec.
         research_context = ""
@@ -5949,7 +5968,9 @@ def main():
             if complexity in ("medium", "complex"):
                 logger.info("Researching domain before planning...")
                 event_log.emit(EventType.RESEARCH_START)
-                research_context = research_goal(goal)
+                research_context = research_goal(
+                    goal, workspace_context=workspace_context,
+                )
                 event_log.emit(
                     EventType.RESEARCH_COMPLETE,
                     data={"length": len(research_context)},
@@ -5964,6 +5985,7 @@ def main():
                 goal,
                 research_context=research_context,
                 complexity=complexity or "medium",
+                workspace_context=workspace_context,
             )
             if spec:
                 logger.info("  Spec generated (%d chars).", len(spec))
@@ -5985,12 +6007,15 @@ def main():
             state["spec"] = spec
         if research_context:
             state["research_context"] = research_context
+        if workspace_context:
+            state["planner_workspace_context"] = workspace_context
         try:
             steps = decompose_goal_with_voting(
                 goal,
                 spec=spec,
                 complexity=complexity,
                 hooks=_hooks,
+                workspace_context=workspace_context,
             )
         except Exception as e:
             logger.error("Failed to decompose goal: %s", e)

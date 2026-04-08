@@ -178,14 +178,32 @@ def append_result_row(row, *, run_metadata, run_index,
         f.write("\n")
 
 
-def load_prompts(filter_pattern=None):
+# Allowed tier values for the case schema. The order is the natural
+# difficulty progression and is used by Section 9 case authors as a
+# reference. Cases without a tier silently default to "trivial" for
+# backward compat with pre-Section-7 prompt files.
+ALLOWED_TIERS = ("trivial", "moderate", "hard", "open_ended")
+
+
+def load_prompts(filter_pattern=None, tier=None):
+    """Load and filter cases from PROMPTS_FILE.
+
+    ``filter_pattern`` is a case-insensitive regex against case name.
+    ``tier`` is an exact-match filter against the case's ``tier``
+    field (default ``"trivial"`` if missing).
+    """
     with open(PROMPTS_FILE) as f:
         prompts = json.load(f)
+    # Normalise: every case carries a tier (default trivial).
+    for p in prompts:
+        p.setdefault("tier", "trivial")
     if filter_pattern:
         prompts = [
             p for p in prompts
             if re.search(filter_pattern, p["name"], re.IGNORECASE)
         ]
+    if tier:
+        prompts = [p for p in prompts if p.get("tier") == tier]
     return prompts
 
 
@@ -799,8 +817,40 @@ def aggregate_results(all_results) -> dict:
     return aggregate
 
 
-def print_aggregate_report(aggregate):
-    """Print the per-case mean ± stdev table after a multi-run pass."""
+def aggregate_by_tier(all_results) -> dict:
+    """Per-tier rollup of pass rate across every (case × run) row.
+
+    Each input row should carry a ``tier`` field (the main loop
+    stamps it from the case definition; rows from pre-Section-7
+    prompt files default to ``"trivial"``).
+
+    Returns a dict keyed by tier name with:
+
+    - ``pass_rate_mean`` / ``pass_rate_stdev``: mean and population
+      stdev of the binary pass/fail across all rows in the tier.
+    - ``n_cases``: count of distinct case names in the tier.
+    - ``n_rows``: total result rows in the tier (cases × runs).
+    """
+    import statistics
+    by_tier = {}
+    for r in all_results:
+        tier = r.get("tier", "trivial")
+        by_tier.setdefault(tier, []).append(r)
+    out = {}
+    for tier, rows in by_tier.items():
+        passes = [1.0 if r.get("passed") else 0.0 for r in rows]
+        case_names = {r["name"] for r in rows}
+        out[tier] = {
+            "pass_rate_mean": statistics.mean(passes),
+            "pass_rate_stdev": statistics.pstdev(passes),
+            "n_cases": len(case_names),
+            "n_rows": len(rows),
+        }
+    return out
+
+
+def print_aggregate_report(aggregate, by_tier=None):
+    """Print per-case + (optional) per-tier aggregate stats to stderr."""
     if not aggregate:
         return
     print("\n" + "=" * 78, file=sys.stderr)
@@ -832,6 +882,27 @@ def print_aggregate_report(aggregate):
         f"{len(aggregate)} cases",
         file=sys.stderr,
     )
+
+    if by_tier:
+        print("\n  By tier:", file=sys.stderr)
+        print("  " + "-" * 76, file=sys.stderr)
+        tier_header = (
+            f"  {'Tier':<14} {'Cases':>6} {'Rows':>6} {'Pass':>16}"
+        )
+        print(tier_header, file=sys.stderr)
+        # Print in canonical tier order, then any unknown tiers.
+        ordered = [t for t in ALLOWED_TIERS if t in by_tier]
+        unknown = sorted(set(by_tier) - set(ALLOWED_TIERS))
+        for tier in ordered + unknown:
+            t = by_tier[tier]
+            pr = (
+                f"{t['pass_rate_mean']:.2f}±{t['pass_rate_stdev']:.2f}"
+            )
+            print(
+                f"  {tier:<14} {t['n_cases']:>6} {t['n_rows']:>6} "
+                f"{pr:>16}",
+                file=sys.stderr,
+            )
     print("=" * 78, file=sys.stderr)
 
 
@@ -947,12 +1018,19 @@ def main():
             f"(default: {_default_runs}, env: UAS_EVAL_RUNS)"
         ),
     )
+    parser.add_argument(
+        "--tier", default=None, choices=ALLOWED_TIERS,
+        help=(
+            "Run only cases with this exact tier "
+            f"({' / '.join(ALLOWED_TIERS)})"
+        ),
+    )
     args = parser.parse_args()
     if args.runs < 1:
         print("--runs must be >= 1", file=sys.stderr)
         return 1
 
-    cases = load_prompts(args.filter)
+    cases = load_prompts(args.filter, tier=args.tier)
     if not cases:
         print("No matching prompt cases found.", file=sys.stderr)
         return 1
@@ -1029,6 +1107,10 @@ def main():
             result = run_case(
                 case, verbose=args.verbose, local=args.local, engine=engine,
             )
+            # Section 7: stamp the case's tier onto the result so the
+            # by_tier aggregator can group rows without needing the
+            # original case definition.
+            result["tier"] = case.get("tier", "trivial")
             run_results.append(result)
             all_results.append(result)
             append_result_row(
@@ -1051,14 +1133,16 @@ def main():
     with open(RESULTS_FILE, "w") as f:
         json.dump(first_run_results, f, indent=2, default=str)
 
-    # Section 6: aggregate every (case × run) row and persist the
-    # derived view next to the JSONL log.
-    aggregate = aggregate_results(all_results)
+    # Section 6 + 7: aggregate every (case × run) row both per-case
+    # and per-tier, then persist the nested view next to the JSONL log.
+    by_case = aggregate_results(all_results)
+    by_tier = aggregate_by_tier(all_results)
+    aggregate_doc = {"by_case": by_case, "by_tier": by_tier}
     with open(RESULTS_AGGREGATE, "w") as f:
-        json.dump(aggregate, f, indent=2, default=str)
+        json.dump(aggregate_doc, f, indent=2, default=str)
 
     print_report(first_run_results)
-    print_aggregate_report(aggregate)
+    print_aggregate_report(by_case, by_tier=by_tier)
 
     # Pass condition: every case in every run passed.
     return 0 if all(r["passed"] for r in all_results) else 1

@@ -1,6 +1,7 @@
 [
   {
     "name": "hello-file",
+    "tier": "trivial",
     "goal": "Create a file called hello.txt containing exactly the text: Hello from UAS",
     "checks": [
       {"type": "file_exists", "path": "hello.txt"},
@@ -9,6 +10,7 @@
   },
   {
     "name": "two-step-pipeline",
+    "tier": "trivial",
     "goal": "Step 1: Write a file named 'step1.txt' containing the word 'HELLO' to the workspace. Step 2: Read 'step1.txt' from the workspace and write a new file 'step2.txt' containing 'HELLO WORLD'.",
     "checks": [
       {"type": "file_exists", "path": "step1.txt"},
@@ -18,6 +20,7 @@
   },
   {
     "name": "live-data-pipeline",
+    "tier": "trivial",
     "goal": "Build a two-step data pipeline: 1. Fetch JSON from http://api.open-notify.org/astros.json and save to raw_astros.json. 2. Read raw_astros.json, extract the astronaut count, and write 'There are currently X astronauts in space.' to summary.txt.",
     "checks": [
       {"type": "file_exists", "path": "raw_astros.json"},
@@ -27,6 +30,7 @@
   },
   {
     "name": "fibonacci-json",
+    "tier": "trivial",
     "goal": "Write the first 20 Fibonacci numbers as a JSON array to fibonacci.json.",
     "checks": [
       {"type": "file_exists", "path": "fibonacci.json"},

@@ -563,7 +563,51 @@ so pass-rate is reportable per complexity tier.
   per-tier table with only the `trivial` row populated.
 - `uas-eval --tier trivial` filters correctly.
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+- `integration/prompts.json`: backfilled all 4 cases with
+  `"tier": "trivial"`.
+- `integration/eval.py`:
+  - New `ALLOWED_TIERS = ("trivial", "moderate", "hard",
+    "open_ended")` constant near the loader.
+  - `load_prompts(filter_pattern=None, tier=None)` now backfills
+    `tier=trivial` for any case missing the field, then applies the
+    optional exact-match tier filter on top of the existing name
+    regex filter.
+  - New `aggregate_by_tier(all_results) -> dict` returning
+    `{tier: {pass_rate_mean, pass_rate_stdev, n_cases, n_rows}}`.
+  - `print_aggregate_report(aggregate, by_tier=None)` extended with
+    a "By tier" sub-table that prints tiers in canonical
+    `ALLOWED_TIERS` order, then any unknown tiers sorted at the end.
+  - `--tier TIER` argparse argument with `choices=ALLOWED_TIERS`.
+  - Main loop tags every result row with `result["tier"]` from the
+    case definition before appending to JSONL — so by_tier can
+    aggregate without needing the original case dict.
+  - `RESULTS_AGGREGATE` now persists nested
+    `{"by_case": …, "by_tier": …}` structure.
+- `tests/test_eval_tiers.py`: 13 tests across 4 classes covering
+  the `ALLOWED_TIERS` constant, `aggregate_by_tier` math
+  (empty / single / multi-tier / mixed pass-fail / missing-tier
+  default), `load_prompts` tier filter (no filter, exact match,
+  default backfill, tier+name combo, no-match), and a regression
+  check that the 4 shipped prompts.json cases all carry
+  `tier=trivial`. **13/13 passed in 0.08s.**
+- **Integration smoke** via monkey-patched `run_case` × `--runs 2`:
+  4 cases × 2 runs = 8 rows. Aggregate file gained the nested
+  `{by_case, by_tier}` shape; `by_tier["trivial"]` =
+  `{pass_rate_mean: 1.0, pass_rate_stdev: 0.0, n_cases: 4,
+  n_rows: 8}`. JSONL rows confirmed to carry `tier=trivial`.
+  Stderr report rendered the new "By tier" sub-table cleanly.
+- **CLI smoke**: `eval.py --tier moderate --list` returns
+  "No matching prompt cases found" (correct — no moderate cases
+  yet); `eval.py --tier trivial --list` returns all 4 cases.
+- **Cross-section regression**: ran all six Phase 1 test files
+  together (`test_eval_checks`, `test_eval_metadata`,
+  `test_eval_persistence`, `test_eval_variance`, `test_eval_tiers`,
+  `test_git_finalize`) → **102/102 passed in 88s** (most of the
+  time is the pytest-in-pytest forks from Section 3).
 
 ## Section 8 — LLM-as-judge module
 

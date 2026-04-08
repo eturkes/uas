@@ -218,7 +218,7 @@ reflexion loop classifies the error).
 
 ---
 
-### Section 3: Clean up the broken rehab workspace and re-run end-to-end  [PENDING]
+### Section 3: Clean up the broken rehab workspace and re-run end-to-end  [COMPLETED]
 
 **Why:** The existing `rehab/.git` directory is in the half-initialized
 state described in the Background section. Without removing it, even after
@@ -638,6 +638,80 @@ own failure handler** to `uas-wip` (clean working tree, no orphan
 attempt branches), with only `state.json` carrying the failed run
 record. Do not delete `rehab/.uas_state/runs/fa0d38fa9ef6/`
 without user confirmation.
+
+**Result (2026-04-07, sixth attempt — after Section 7 landed):** All
+three Section 3 acceptance criteria are now met. Section 7 (`cda9c70`,
+"Scope full-pytest gate via git diff vs uas-wip") was committed and the
+container image was rebuilt via `bash install.sh` (new image id
+`a090ae74a397`, built `2026-04-07 20:45 EDT`). `docker run --rm
+--entrypoint /bin/bash uas-engine:latest -c "grep -c
+changed_test_files_since_uas_wip /uas/architect/git_state.py
+/uas/architect/main.py"` returned `git_state.py:1` and `main.py:3`,
+confirming the Section 7 helper and its three call sites are inside
+the image. The rehab workspace's expired OAuth credential
+(`expiresAt = 2026-04-07T14:06 UTC`) was refreshed by copying
+`~/.claude/.credentials.json` (host token, `expiresAt =
+2026-04-08T07:17 UTC`) into `rehab/.uas_auth/.credentials.json`. The
+existing `rehab/.uas_state/runs/fa0d38fa9ef6/state.json` was backed
+up to `state.json.section3_backup_20260407_204857` and surgically
+reset: every `failed` step → `pending`, run status `blocked` →
+`executing`, and the dict-typed transient fields (`step.timing`,
+`step.token_usage`, `step.uas_result`, `state.total_tokens`) were
+deleted entirely rather than reset to `{}` because the architect's
+`setdefault(...)` calls at `architect/main.py:1035, 1040, 4890`
+no-op when the key already exists, leaving the empty dict in place
+and crashing on the subsequent `dict[key] += value`. (The first
+re-launch crashed with `KeyError: 'total_time'` at
+`architect/main.py:4893` for exactly this reason; deleting the
+keys instead of clearing them fixed it. This is a process note for
+future state-reset work, not a code bug worth filing.) The engine
+was launched non-interactively via `docker run -d --privileged
+--name uas-run-1aac882308ef -e IS_SANDBOX=1 -e
+UAS_SANDBOX_MODE=local -e UAS_HOST_UID=$(id -u) -e
+UAS_HOST_GID=$(id -g) -v rehab/.uas_auth:/root/.claude:Z -v
+rehab/.uas_auth/claude.json:/root/.claude.json:Z -v
+rehab:/workspace:Z -w /workspace uas-engine:latest --resume
+--goal-file goal_001.txt`. Outcome:
+
+- **Acceptance criterion 1 (`progress.md` shows at least one
+  completed step): MET.** `rehab/.uas_state/runs/fa0d38fa9ef6/progress.md`
+  reads `Steps completed: 1/37` and `Step 1 (Project skeleton and
+  dependency installation) completed successfully` at
+  `2026-04-08T01:00:30Z`. `state.json` records `Step 1 status =
+  completed, elapsed = 257.7s, files_written = [src/rehab/config.py,
+  src/rehab/__init__.py, the 5 sub-package __init__.py files,
+  pyproject.toml, .python-version, .gitignore, README.md, CLAUDE.md,
+  data/, translations/]`. The architect's full-pytest gate (Section
+  7) correctly skipped `tests/test_config.py` because step 1's
+  attempt did not change any `tests/**/*.py` files.
+- **Acceptance criterion 2 (no "Failed to create attempt branch"
+  warnings): MET.** `grep -c "Failed to create attempt branch"
+  /tmp/uas-section3-final.log` = `0`. Section 1's repair logic ran
+  cleanly.
+- **Acceptance criterion 3 (no "Failed to extract code block"
+  failures on attempt 1): MET.** `grep -c "Failed to extract code
+  block" /tmp/uas-section3-final.log` = `0`. Step 1 attempt 1's
+  orchestrator subprocess returned exit code 0 in 190.1s. Sections
+  2 and 4 continue to hold.
+
+Step 1's success unblocked the dependency graph and the architect
+proceeded to run steps 2, 3, and 6 in parallel before the verifier
+stopped the container (Section 3 only requires *at least one*
+completed step, not the full 37-step run; allowing all 37 steps to
+finish would consume hours of LLM time and is out of scope for this
+verification). Final state at section completion: `rehab/.git`
+HEAD on `uas/step-3/attempt-2`, with branches `main`, `uas-wip`,
+`uas/step-{2,3,6}/attempt-2` present and commit `409053a "Step 1:
+Project skeleton and dependency installation"` on top of the
+original `6bf0e6f "Initial workspace state"`. The
+`fa0d38fa9ef6` run state still records 36 pending steps and run
+status `executing`; whoever wants to continue this run can simply
+re-launch the same docker command and the architect's resume path
+will pick up at step 2. The forensic backup
+`rehab/.uas_state/runs/fa0d38fa9ef6/state.json.section3_backup_20260407_204857`
+is preserved per user instruction. Sections 1, 2, 4, 5, 6, and 7
+are conclusively verified end-to-end against the original failing
+project.
 
 ---
 

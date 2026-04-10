@@ -199,6 +199,85 @@ ALLOWED_TIERS = ("trivial", "moderate", "hard", "open_ended")
 EVAL_MODEL_DEFAULT = "claude-haiku-4-5-20251001"
 EVAL_MODEL_ENV_VARS = ("UAS_MODEL", "UAS_MODEL_PLANNER", "UAS_MODEL_CODER")
 
+# OAuth token refresh.  Claude Max OAuth tokens last ~8 hours.
+# Long benchmark runs (--runs 3 over 35 cases is ~30 hours on Haiku)
+# outlive a single token cycle.  The eval harness keeps its auth
+# in UAS_AUTH_DIR (.uas_auth/); the user's default CLI keeps auth
+# in ~/.claude/.  This session (Claude Code) continuously refreshes
+# ~/.claude/ as a side effect of being alive.  The strategy below
+# piggybacks on that: when the eval-harness token is near expiry,
+# copy the user's default credentials over.  If the default creds
+# are also near expiry, call ``claude -p`` to force a refresh first.
+_OAUTH_REFRESH_BUFFER = 3600  # seconds — refresh when < 1 hour left
+_DEFAULT_CLAUDE_CREDS = os.path.expanduser("~/.claude/.credentials.json")
+
+
+def _read_token_expiry(creds_path):
+    """Return seconds remaining on the OAuth access token, or 0."""
+    try:
+        with open(creds_path) as f:
+            creds = json.load(f)
+        exp = creds.get("claudeAiOauth", {}).get("expiresAt", 0) / 1000
+        return max(0.0, exp - time.time())
+    except Exception:
+        return 0.0
+
+
+def _maybe_refresh_oauth():
+    """Ensure eval-harness OAuth token has at least 1 hour of life.
+
+    Called between cases by the main loop.  Three-stage fallback:
+
+    1. Eval token (``UAS_AUTH_DIR``) valid for >1 hour → no-op.
+    2. Default token (``~/.claude/``) valid for >1 hour → copy it.
+    3. Default token also near expiry → call ``claude -p ping`` to
+       refresh it, then copy.
+    """
+    eval_creds = os.path.join(UAS_AUTH_DIR, ".credentials.json")
+    remaining = _read_token_expiry(eval_creds)
+    if remaining > _OAUTH_REFRESH_BUFFER:
+        return  # plenty of time
+
+    # Stage 2: borrow from ~/.claude/
+    default_remaining = _read_token_expiry(_DEFAULT_CLAUDE_CREDS)
+    if default_remaining <= _OAUTH_REFRESH_BUFFER:
+        # Stage 3: force-refresh ~/.claude/ via claude -p
+        claude_path = shutil.which("claude")
+        if not claude_path:
+            print("  [oauth] Token expiring, claude CLI not found",
+                  file=sys.stderr)
+            return
+        try:
+            proc = subprocess.run(
+                [claude_path, "-p", "ping",
+                 "--model", EVAL_MODEL_DEFAULT],
+                capture_output=True, text=True,
+                timeout=120, stdin=subprocess.DEVNULL,
+            )
+            if proc.returncode != 0:
+                print(f"  [oauth] CLI refresh failed (exit "
+                      f"{proc.returncode}): "
+                      f"{proc.stderr[:200]}", file=sys.stderr)
+                return
+        except Exception as e:
+            print(f"  [oauth] CLI refresh error: {e}",
+                  file=sys.stderr)
+            return
+        default_remaining = _read_token_expiry(_DEFAULT_CLAUDE_CREDS)
+
+    # Copy valid default credentials into eval auth dir.
+    if default_remaining > _OAUTH_REFRESH_BUFFER:
+        try:
+            shutil.copy2(_DEFAULT_CLAUDE_CREDS, eval_creds)
+            new_rem = _read_token_expiry(eval_creds)
+            print(f"  [oauth] Token refreshed — {new_rem/3600:.1f}h "
+                  f"remaining", file=sys.stderr)
+        except Exception as e:
+            print(f"  [oauth] Copy failed: {e}", file=sys.stderr)
+    else:
+        print("  [oauth] Could not obtain valid token",
+              file=sys.stderr)
+
 
 def load_prompts(filter_pattern=None, tier=None):
     """Load and filter cases from ``CASES_DIR/<tier>/<case>.json``.
@@ -1279,6 +1358,7 @@ def main():
             )
         run_results = []
         for i, case in enumerate(cases, 1):
+            _maybe_refresh_oauth()
             label = case["goal"][:70]
             print(
                 f"[{i}/{len(cases)}] {case['name']}: {label}...",

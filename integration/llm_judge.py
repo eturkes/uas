@@ -444,7 +444,19 @@ def judge(case_goal, workspace, criteria, *, files=None,
         "case_name": case_name,
     }
 
-    if use_cache:
+    # A transient SDK exception (auth 401, network timeout, executor
+    # crash) is not a real judge verdict. Caching it would poison every
+    # subsequent run against an identical workspace, which is exactly how
+    # Phase 1 §10 run_b's Tier 3 cases went stuck-fail. Skip the write
+    # whenever any sample carries an infrastructure error prefix; the
+    # next invocation will re-call and try to get a real answer.
+    has_infra_errors = any(
+        isinstance(r, str) and (
+            r.startswith("call error:") or r.startswith("executor error:")
+        )
+        for r in reasons
+    )
+    if use_cache and not has_infra_errors:
         cache = _load_cache(cache_path)
         # Store everything but the per-call ``cached`` flag — it's a
         # presentation field set fresh on every retrieval.

@@ -201,15 +201,17 @@ EVAL_MODEL_ENV_VARS = ("UAS_MODEL", "UAS_MODEL_PLANNER", "UAS_MODEL_CODER")
 
 # OAuth token refresh.  Claude Max OAuth tokens last ~8 hours.
 # Long benchmark runs (--runs 3 over 35 cases is ~30 hours on Haiku)
-# outlive a single token cycle.  The eval harness keeps its auth
-# in UAS_AUTH_DIR (.uas_auth/); the user's default CLI keeps auth
-# in ~/.claude/.  This session (Claude Code) continuously refreshes
-# ~/.claude/ as a side effect of being alive.  The strategy below
-# piggybacks on that: when the eval-harness token is near expiry,
-# copy the user's default credentials over.  If the default creds
-# are also near expiry, call ``claude -p`` to force a refresh first.
+# outlive a single token cycle.  Four-stage fallback ensures the eval
+# can survive multi-day runs even as a detached background process:
+#   1. Self-refresh: exchange the eval token's own refresh_token at
+#      the Anthropic OAuth endpoint — no external dependency.
+#   2. Borrow from ~/.claude/ if it has a valid token.
+#   3. Force-refresh ~/.claude/ via ``claude -p ping``, then borrow.
+#   4. Give up and log the failure.
 _OAUTH_REFRESH_BUFFER = 3600  # seconds — refresh when < 1 hour left
 _DEFAULT_CLAUDE_CREDS = os.path.expanduser("~/.claude/.credentials.json")
+_OAUTH_TOKEN_ENDPOINT = "https://console.anthropic.com/v1/oauth/token"
+_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
 
 def _read_token_expiry(creds_path):
@@ -223,14 +225,73 @@ def _read_token_expiry(creds_path):
         return 0.0
 
 
+def _self_refresh_oauth(creds_path):
+    """Exchange the refresh token in *creds_path* for a new access token.
+
+    Hits the Anthropic OAuth token endpoint directly — no CLI, no
+    interactive session, works in detached ``nohup`` processes.
+    Returns True on success, False on any failure.
+    """
+    try:
+        with open(creds_path) as f:
+            creds = json.load(f)
+        oauth = creds.get("claudeAiOauth", {})
+        refresh_token = oauth.get("refreshToken")
+        if not refresh_token:
+            print("  [oauth] Self-refresh skip: no refreshToken in creds",
+                  file=sys.stderr)
+            return False
+        import httpx  # urllib.request hits Cloudflare 1010
+        resp = httpx.post(
+            _OAUTH_TOKEN_ENDPOINT,
+            json={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": _OAUTH_CLIENT_ID,
+            },
+            headers={
+                "User-Agent": "claude-code/1.0",
+                "Content-Type": "application/json",
+            },
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            body_snippet = resp.text[:300].replace("\n", " ")
+            print(f"  [oauth] Self-refresh HTTP {resp.status_code}: "
+                  f"{body_snippet}", file=sys.stderr)
+            return False
+        body = resp.json()
+        new_access = body.get("access_token")
+        new_refresh = body.get("refresh_token")
+        expires_in = body.get("expires_in", 28800)
+        if not new_access:
+            print("  [oauth] Self-refresh response missing access_token",
+                  file=sys.stderr)
+            return False
+        oauth["accessToken"] = new_access
+        if new_refresh:
+            oauth["refreshToken"] = new_refresh
+        oauth["expiresAt"] = int((time.time() + expires_in) * 1000)
+        creds["claudeAiOauth"] = oauth
+        with open(creds_path, "w") as f:
+            json.dump(creds, f)
+        return True
+    except Exception as e:
+        print(f"  [oauth] Self-refresh exception: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+        return False
+
+
 def _maybe_refresh_oauth():
     """Ensure eval-harness OAuth token has at least 1 hour of life.
 
-    Called between cases by the main loop.  Three-stage fallback:
+    Called between cases by the main loop.  Four-stage fallback:
 
     1. Eval token (``UAS_AUTH_DIR``) valid for >1 hour → no-op.
-    2. Default token (``~/.claude/``) valid for >1 hour → copy it.
-    3. Default token also near expiry → call ``claude -p ping`` to
+    2. Self-refresh: exchange the eval token's own ``refreshToken``
+       at the Anthropic OAuth endpoint.  Works in detached processes.
+    3. Default token (``~/.claude/``) valid for >1 hour → copy it.
+    4. Default token also near expiry → call ``claude -p ping`` to
        refresh it, then copy.
     """
     eval_creds = os.path.join(UAS_AUTH_DIR, ".credentials.json")
@@ -238,10 +299,17 @@ def _maybe_refresh_oauth():
     if remaining > _OAUTH_REFRESH_BUFFER:
         return  # plenty of time
 
-    # Stage 2: borrow from ~/.claude/
+    # Stage 2: self-refresh using the refresh token.
+    if _self_refresh_oauth(eval_creds):
+        new_rem = _read_token_expiry(eval_creds)
+        print(f"  [oauth] Self-refreshed — {new_rem/3600:.1f}h "
+              f"remaining", file=sys.stderr)
+        return
+
+    # Stage 3: borrow from ~/.claude/
     default_remaining = _read_token_expiry(_DEFAULT_CLAUDE_CREDS)
     if default_remaining <= _OAUTH_REFRESH_BUFFER:
-        # Stage 3: force-refresh ~/.claude/ via claude -p
+        # Stage 4: force-refresh ~/.claude/ via claude -p
         claude_path = shutil.which("claude")
         if not claude_path:
             print("  [oauth] Token expiring, claude CLI not found",
@@ -702,7 +770,12 @@ def run_check(check, workspace, invocation=None, case=None):
                 "detail": "file not found",
             }
         content = open(path).read()
-        matched = bool(re.search(check["pattern"], content))
+        # re.MULTILINE so ^/$ anchors match line boundaries, not just
+        # the start/end of the file. Case authors consistently expect
+        # line-oriented semantics (e.g. "^# Hello from UAS$" matching
+        # the first line of a multi-line README); pre-MULTILINE this
+        # silently failed every such check.
+        matched = bool(re.search(check["pattern"], content, re.MULTILINE))
         detail = "matched" if matched else f"content: {content.strip()[:200]!r}"
         return {
             "type": ctype,

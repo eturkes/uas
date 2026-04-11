@@ -391,6 +391,56 @@ class TestExistingChecksUnchanged:
         )
         assert result["passed"] is True
 
+    def test_file_contains_anchors_are_multiline(self, workspace):
+        """Regression guard: ^ and $ must match line boundaries.
+
+        Pre-MULTILINE, a pattern like ``^# Hello from UAS$`` against a
+        multi-line README would silently fail even when the first line
+        exactly matched. Phase 1 §10 run_b sanity-check surfaced this
+        on hello-markdown, markdown-toc-generator, and the cluster-A
+        fixed-width case.
+        """
+        path = os.path.join(workspace, "README.md")
+        with open(path, "w") as f:
+            f.write(
+                "# Hello from UAS\n\n"
+                "This project provides a small test harness.\n"
+            )
+        # Line-anchored regex matches the first line under MULTILINE.
+        passing = ev.run_check(
+            {"type": "file_contains", "path": "README.md",
+             "pattern": "^# Hello from UAS$"},
+            workspace,
+        )
+        assert passing["passed"] is True
+
+        # A line-anchored regex for a line that does not exist in the
+        # file must still fail cleanly.
+        failing = ev.run_check(
+            {"type": "file_contains", "path": "README.md",
+             "pattern": "^# Different header$"},
+            workspace,
+        )
+        assert failing["passed"] is False
+
+    def test_file_contains_dollar_anchor_matches_end_of_line(
+        self, workspace
+    ):
+        """Fixed-width record case relies on ``$`` matching end-of-line."""
+        path = os.path.join(workspace, "employees.txt")
+        with open(path, "w") as f:
+            # 60-character fixed-width lines.
+            f.write(
+                "000001Alice Smith             Engineering         0000095000\n"
+                "000002Bob   Jones             Sales               0000075000\n"
+            )
+        result = ev.run_check(
+            {"type": "file_contains", "path": "employees.txt",
+             "pattern": r"^.{60}$"},
+            workspace,
+        )
+        assert result["passed"] is True
+
     def test_glob_exists_still_works(self, workspace):
         with open(os.path.join(workspace, "a.py"), "w") as f:
             f.write("# x")

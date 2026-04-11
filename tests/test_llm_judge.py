@@ -682,6 +682,96 @@ class TestJudgeCache:
         assert result["cached"] is False
         assert result["passed"] is False
 
+    def test_all_errors_skip_cache_write(
+        self, workspace_with_one_file, tmp_path
+    ):
+        """A run where every sample errored must NOT create a cache entry.
+
+        Regression guard for the Phase 1 §10 run_b cache-poisoning bug:
+        a single transient 401 used to persist as a cached "fail with
+        reason: call error: HTTPStatusError 401", short-circuiting
+        every subsequent run against the same workspace.
+        """
+        cache = str(tmp_path / "judge-cache.json")
+
+        def always_raise(model, prompt):
+            raise RuntimeError("HTTPStatusError: 401 Unauthorized")
+
+        with mock.patch.object(
+            lj, "_call_anthropic", side_effect=always_raise
+        ):
+            result = lj.judge(
+                "g", workspace_with_one_file, "c",
+                samples=5, cache_path=cache, case_name="test-case",
+            )
+        assert result["passed"] is False
+        assert all("call error" in r for r in result["reasons"])
+        assert not os.path.isfile(cache), (
+            "error-only judge run must not write a cache file"
+        )
+
+    def test_partial_errors_skip_cache_write(
+        self, workspace_with_one_file, tmp_path
+    ):
+        """Even one errored sample in a mixed run blocks caching.
+
+        Rationale: conservative — any infrastructure error hints that
+        the run is not a clean measurement, and we'd rather re-call
+        next time than persist a half-degraded verdict.
+        """
+        cache = str(tmp_path / "judge-cache.json")
+        responses = list(_mk_responses(["pass", "pass", "pass", "pass"]))
+        responses.append(RuntimeError("flake"))
+
+        def side_effect(model, prompt):
+            r = responses.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        with mock.patch.object(
+            lj, "_call_anthropic", side_effect=side_effect
+        ):
+            result = lj.judge(
+                "g", workspace_with_one_file, "c",
+                samples=5, cache_path=cache, case_name="test-case",
+            )
+        # 4 passes + 1 error → ceil(5/2)=3 → still a pass verdict
+        assert result["passed"] is True
+        assert sum(result["votes"]) == 4
+        assert not os.path.isfile(cache), (
+            "any infrastructure error must block cache persistence"
+        )
+
+    def test_pre_existing_cache_untouched_on_error(
+        self, workspace_with_one_file, tmp_path
+    ):
+        """Errored runs must not mutate unrelated pre-existing entries."""
+        cache = str(tmp_path / "judge-cache.json")
+        # Prime the cache with a good entry for criteria A.
+        with mock.patch.object(
+            lj, "_call_anthropic",
+            side_effect=_mk_responses(["pass"] * 5),
+        ):
+            lj.judge(
+                "g", workspace_with_one_file, "criteria A",
+                samples=5, cache_path=cache, case_name="test-case",
+            )
+        original = lj._load_cache(cache)
+        assert len(original) == 1
+        # Now run with errors under criteria B (different key).
+        with mock.patch.object(
+            lj, "_call_anthropic",
+            side_effect=RuntimeError("boom"),
+        ):
+            lj.judge(
+                "g", workspace_with_one_file, "criteria B",
+                samples=5, cache_path=cache, case_name="test-case",
+            )
+        after = lj._load_cache(cache)
+        # Cache still has exactly the criteria-A entry, no B entry.
+        assert after == original
+
 
 # ============================================================
 # eval.py integration: llm_judge check type

@@ -1,0 +1,631 @@
+  uas-eval phase1 | sha=7cbaa085 (dirty) | branch=main | config=e3ed7766
+Running 35 prompt case(s) × 3 run(s)...
+
+
+=== Run 1/3 ===
+[1/35] hello-csv: Create a CSV file at greeting.csv with header row 'id,message' followe...
+        -> FAIL (779.5s)
+[2/35] hello-file: Create a file called hello.txt containing exactly the text: Hello from...
+        -> PASS (607.1s)
+[3/35] hello-json: Create a JSON file at greeting.json containing exactly the object {"me...
+        -> FAIL (723.4s)
+[4/35] hello-markdown: Create a Markdown file at README.md whose first non-blank line is the ...
+        -> FAIL (666.1s)
+[5/35] hello-utf8: Create a UTF-8 encoded text file at greetings.txt containing exactly t...
+        -> PASS (917.7s)
+[6/35] astros-from-fixture: Build a two-step data pipeline: (1) Read the local fixture file astros...
+        -> FAIL (912.6s)
+[7/35] caesar-cipher-tested: Implement a Python module caesar.py exposing two functions: encrypt(te...
+        -> FAIL (2655.2s)
+[8/35] csv-aggregator: Read the CSV file at transactions.csv (columns: id, category, amount)....
+        -> FAIL (1518.3s)
+[9/35] csv-filter-by-column: Read the CSV file at sales.csv (columns: id, region, amount). Write a ...
+        -> PASS (4966.8s)
+[10/35] csv-to-json: Read the CSV file at sales.csv (a header row plus several data rows wi...
+        -> FAIL (1228.9s)
+[11/35] fastapi-hello-route: Build a minimal FastAPI app at app.py that exposes one route GET /hell...
+        -> FAIL (1114.6s)
+[12/35] fibonacci-tested: Implement a Python module fib.py that exposes a function fib(n: int) -...
+        -> PASS (784.7s)
+[13/35] json-to-csv: Read the JSON file at users.json (a list of objects each with keys: id...
+        -> FAIL (615.0s)
+[14/35] markdown-toc-generator: Read the Markdown document at document.md. Generate a table of content...
+        -> FAIL (1173.5s)
+[15/35] palindrome-checker-tested: Implement a Python module palindrome.py exposing is_palindrome(text: s...
+        -> PASS (691.4s)
+[16/35] prime-sieve-tested: Implement a Python module sieve.py exposing primes_up_to(n: int) -> li...
+        -> FAIL (1506.7s)
+[17/35] regex-log-parser: Read the Apache combined-format access log at access.log. Parse each l...
+        -> FAIL (1171.4s)
+[18/35] sqlite-etl-loader: Build a Python script load_cities.py that: (1) opens a SQLite database...
+        -> FAIL (2652.9s)
+  [oauth] Could not obtain valid token
+[19/35] temperature-converter-cli: Build a Python CLI tool tempconv.py using argparse. Usage: 'python3 te...
+        -> FAIL (887.4s)
+  [oauth] Could not obtain valid token
+[20/35] text-stats-report: Read the plain-text article at article.txt and write a JSON report at ...
+        -> FAIL (1802.8s)
+  [oauth] CLI refresh failed (exit 1): 
+[21/35] cluster-A-fixed-width-records: Read the CSV file at employees.csv (columns: id, name, department, sal...
+        -> FAIL (8.9s)
+  [oauth] CLI refresh failed (exit 1): 
+[22/35] cluster-A-roman-numeral-converter: Implement roman.py exposing to_roman(n: int) -> str and from_roman(s: ...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[23/35] cluster-B-pipeline-schema-mismatch: Build a three-step Python data pipeline. Step 1: Read sales_raw.csv (c...
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[24/35] cluster-D-strict-json-schema: Build a Python script generate_report.py that produces report.json con...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[25/35] cluster-D-temporal-ordering: Build a Python script split_timeseries.py that reads timeseries.csv (c...
+        -> FAIL (8.3s)
+  [oauth] CLI refresh failed (exit 1): 
+[26/35] cluster-E-multi-requirement-cli: Build a Python CLI tool fileinfo.py with the following requirements: (...
+        -> FAIL (8.3s)
+  [oauth] CLI refresh failed (exit 1): 
+[27/35] cluster-F-tdd-lru-cache: Use test-driven development to implement lru_cache.py exposing an LRUC...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[28/35] cluster-F-tdd-rate-limiter: Use test-driven development to implement rate_limiter.py exposing a To...
+        -> FAIL (8.8s)
+  [oauth] CLI refresh failed (exit 1): 
+[29/35] cluster-G-rollback-trigger: Build a Python script bigint_factorial.py that exposes factorial(n: in...
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[30/35] cluster-I-resume-stub-multi-phase: Build a small data analysis project with these phases, each in its own...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[31/35] dataset-analysis-report: Read the fixture dataset at cars.csv (columns: make, model, year, mile...
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[32/35] mini-calc-dsl: Build a tiny arithmetic DSL in Python at calc/. Required pieces: calc/...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[33/35] readme-from-source: Read the existing Python module at quicklib.py (it is already present ...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[34/35] sort-algo-comparison-report: Implement three sort algorithms in Python — bubble sort, merge sort, a...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[35/35] static-blog-site: Build a small static blog under site/ consisting of: site/index.html (...
+        -> FAIL (8.7s)
+
+=== Run 2/3 ===
+  [oauth] CLI refresh failed (exit 1): 
+[1/35] hello-csv: Create a CSV file at greeting.csv with header row 'id,message' followe...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[2/35] hello-file: Create a file called hello.txt containing exactly the text: Hello from...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[3/35] hello-json: Create a JSON file at greeting.json containing exactly the object {"me...
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[4/35] hello-markdown: Create a Markdown file at README.md whose first non-blank line is the ...
+        -> FAIL (10.1s)
+  [oauth] CLI refresh failed (exit 1): 
+[5/35] hello-utf8: Create a UTF-8 encoded text file at greetings.txt containing exactly t...
+        -> FAIL (8.3s)
+  [oauth] CLI refresh failed (exit 1): 
+[6/35] astros-from-fixture: Build a two-step data pipeline: (1) Read the local fixture file astros...
+        -> FAIL (8.3s)
+  [oauth] CLI refresh failed (exit 1): 
+[7/35] caesar-cipher-tested: Implement a Python module caesar.py exposing two functions: encrypt(te...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[8/35] csv-aggregator: Read the CSV file at transactions.csv (columns: id, category, amount)....
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[9/35] csv-filter-by-column: Read the CSV file at sales.csv (columns: id, region, amount). Write a ...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[10/35] csv-to-json: Read the CSV file at sales.csv (a header row plus several data rows wi...
+        -> FAIL (13.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[11/35] fastapi-hello-route: Build a minimal FastAPI app at app.py that exposes one route GET /hell...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[12/35] fibonacci-tested: Implement a Python module fib.py that exposes a function fib(n: int) -...
+        -> FAIL (8.3s)
+  [oauth] CLI refresh failed (exit 1): 
+[13/35] json-to-csv: Read the JSON file at users.json (a list of objects each with keys: id...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[14/35] markdown-toc-generator: Read the Markdown document at document.md. Generate a table of content...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[15/35] palindrome-checker-tested: Implement a Python module palindrome.py exposing is_palindrome(text: s...
+        -> FAIL (8.3s)
+  [oauth] CLI refresh failed (exit 1): 
+[16/35] prime-sieve-tested: Implement a Python module sieve.py exposing primes_up_to(n: int) -> li...
+        -> FAIL (8.2s)
+  [oauth] CLI refresh failed (exit 1): 
+[17/35] regex-log-parser: Read the Apache combined-format access log at access.log. Parse each l...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[18/35] sqlite-etl-loader: Build a Python script load_cities.py that: (1) opens a SQLite database...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[19/35] temperature-converter-cli: Build a Python CLI tool tempconv.py using argparse. Usage: 'python3 te...
+        -> FAIL (9.0s)
+  [oauth] CLI refresh failed (exit 1): 
+[20/35] text-stats-report: Read the plain-text article at article.txt and write a JSON report at ...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[21/35] cluster-A-fixed-width-records: Read the CSV file at employees.csv (columns: id, name, department, sal...
+        -> FAIL (9.2s)
+  [oauth] CLI refresh failed (exit 1): 
+[22/35] cluster-A-roman-numeral-converter: Implement roman.py exposing to_roman(n: int) -> str and from_roman(s: ...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[23/35] cluster-B-pipeline-schema-mismatch: Build a three-step Python data pipeline. Step 1: Read sales_raw.csv (c...
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[24/35] cluster-D-strict-json-schema: Build a Python script generate_report.py that produces report.json con...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[25/35] cluster-D-temporal-ordering: Build a Python script split_timeseries.py that reads timeseries.csv (c...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[26/35] cluster-E-multi-requirement-cli: Build a Python CLI tool fileinfo.py with the following requirements: (...
+        -> FAIL (9.3s)
+  [oauth] CLI refresh failed (exit 1): 
+[27/35] cluster-F-tdd-lru-cache: Use test-driven development to implement lru_cache.py exposing an LRUC...
+        -> FAIL (9.1s)
+  [oauth] CLI refresh failed (exit 1): 
+[28/35] cluster-F-tdd-rate-limiter: Use test-driven development to implement rate_limiter.py exposing a To...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[29/35] cluster-G-rollback-trigger: Build a Python script bigint_factorial.py that exposes factorial(n: in...
+        -> FAIL (8.9s)
+  [oauth] CLI refresh failed (exit 1): 
+[30/35] cluster-I-resume-stub-multi-phase: Build a small data analysis project with these phases, each in its own...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[31/35] dataset-analysis-report: Read the fixture dataset at cars.csv (columns: make, model, year, mile...
+        -> FAIL (8.3s)
+  [oauth] CLI refresh failed (exit 1): 
+[32/35] mini-calc-dsl: Build a tiny arithmetic DSL in Python at calc/. Required pieces: calc/...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[33/35] readme-from-source: Read the existing Python module at quicklib.py (it is already present ...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[34/35] sort-algo-comparison-report: Implement three sort algorithms in Python — bubble sort, merge sort, a...
+        -> FAIL (8.8s)
+  [oauth] CLI refresh failed (exit 1): 
+[35/35] static-blog-site: Build a small static blog under site/ consisting of: site/index.html (...
+        -> FAIL (8.8s)
+
+=== Run 3/3 ===
+  [oauth] CLI refresh failed (exit 1): 
+[1/35] hello-csv: Create a CSV file at greeting.csv with header row 'id,message' followe...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[2/35] hello-file: Create a file called hello.txt containing exactly the text: Hello from...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[3/35] hello-json: Create a JSON file at greeting.json containing exactly the object {"me...
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[4/35] hello-markdown: Create a Markdown file at README.md whose first non-blank line is the ...
+        -> FAIL (9.0s)
+  [oauth] CLI refresh failed (exit 1): 
+[5/35] hello-utf8: Create a UTF-8 encoded text file at greetings.txt containing exactly t...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[6/35] astros-from-fixture: Build a two-step data pipeline: (1) Read the local fixture file astros...
+        -> FAIL (8.2s)
+  [oauth] CLI refresh failed (exit 1): 
+[7/35] caesar-cipher-tested: Implement a Python module caesar.py exposing two functions: encrypt(te...
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[8/35] csv-aggregator: Read the CSV file at transactions.csv (columns: id, category, amount)....
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[9/35] csv-filter-by-column: Read the CSV file at sales.csv (columns: id, region, amount). Write a ...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[10/35] csv-to-json: Read the CSV file at sales.csv (a header row plus several data rows wi...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[11/35] fastapi-hello-route: Build a minimal FastAPI app at app.py that exposes one route GET /hell...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[12/35] fibonacci-tested: Implement a Python module fib.py that exposes a function fib(n: int) -...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[13/35] json-to-csv: Read the JSON file at users.json (a list of objects each with keys: id...
+        -> FAIL (8.8s)
+  [oauth] CLI refresh failed (exit 1): 
+[14/35] markdown-toc-generator: Read the Markdown document at document.md. Generate a table of content...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[15/35] palindrome-checker-tested: Implement a Python module palindrome.py exposing is_palindrome(text: s...
+        -> FAIL (8.2s)
+  [oauth] CLI refresh failed (exit 1): 
+[16/35] prime-sieve-tested: Implement a Python module sieve.py exposing primes_up_to(n: int) -> li...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[17/35] regex-log-parser: Read the Apache combined-format access log at access.log. Parse each l...
+        -> FAIL (13.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[18/35] sqlite-etl-loader: Build a Python script load_cities.py that: (1) opens a SQLite database...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[19/35] temperature-converter-cli: Build a Python CLI tool tempconv.py using argparse. Usage: 'python3 te...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[20/35] text-stats-report: Read the plain-text article at article.txt and write a JSON report at ...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[21/35] cluster-A-fixed-width-records: Read the CSV file at employees.csv (columns: id, name, department, sal...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[22/35] cluster-A-roman-numeral-converter: Implement roman.py exposing to_roman(n: int) -> str and from_roman(s: ...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[23/35] cluster-B-pipeline-schema-mismatch: Build a three-step Python data pipeline. Step 1: Read sales_raw.csv (c...
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[24/35] cluster-D-strict-json-schema: Build a Python script generate_report.py that produces report.json con...
+        -> FAIL (8.9s)
+  [oauth] CLI refresh failed (exit 1): 
+[25/35] cluster-D-temporal-ordering: Build a Python script split_timeseries.py that reads timeseries.csv (c...
+        -> FAIL (18.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[26/35] cluster-E-multi-requirement-cli: Build a Python CLI tool fileinfo.py with the following requirements: (...
+        -> FAIL (8.9s)
+  [oauth] CLI refresh failed (exit 1): 
+[27/35] cluster-F-tdd-lru-cache: Use test-driven development to implement lru_cache.py exposing an LRUC...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[28/35] cluster-F-tdd-rate-limiter: Use test-driven development to implement rate_limiter.py exposing a To...
+        -> FAIL (8.9s)
+  [oauth] CLI refresh failed (exit 1): 
+[29/35] cluster-G-rollback-trigger: Build a Python script bigint_factorial.py that exposes factorial(n: in...
+        -> FAIL (11.3s)
+  [oauth] CLI refresh failed (exit 1): 
+[30/35] cluster-I-resume-stub-multi-phase: Build a small data analysis project with these phases, each in its own...
+        -> FAIL (8.7s)
+  [oauth] CLI refresh failed (exit 1): 
+[31/35] dataset-analysis-report: Read the fixture dataset at cars.csv (columns: make, model, year, mile...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[32/35] mini-calc-dsl: Build a tiny arithmetic DSL in Python at calc/. Required pieces: calc/...
+        -> FAIL (8.4s)
+  [oauth] CLI refresh failed (exit 1): 
+[33/35] readme-from-source: Read the existing Python module at quicklib.py (it is already present ...
+        -> FAIL (8.5s)
+  [oauth] CLI refresh failed (exit 1): 
+[34/35] sort-algo-comparison-report: Implement three sort algorithms in Python — bubble sort, merge sort, a...
+        -> FAIL (8.6s)
+  [oauth] CLI refresh failed (exit 1): 
+[35/35] static-blog-site: Build a small static blog under site/ consisting of: site/index.html (...
+        -> FAIL (8.5s)
+
+============================================================
+  UAS Prompt Evaluation Report
+============================================================
+
+  [FAIL] hello-csv (779.5s)
+         Steps: 2 [1:failed, 2:failed]
+         Status: blocked
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [PASS] hello-file (607.1s)
+         Steps: 2 [1:completed, 2:completed]
+         Status: completed
+         [ok] file_exists: found
+         [ok] file_contains: matched
+
+  [FAIL] hello-json (723.4s)
+         Steps: 2 [1:failed, 2:failed]
+         Status: blocked
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [FAIL] hello-markdown (666.1s)
+         Steps: 2 [1:completed, 2:completed]
+         Status: completed
+         [ok] file_exists: found
+         [FAIL] file_contains: content: '# Hello from UAS\n\nThis project provides a comprehensive framework for Unmanned Aerial Systems development and integration.'
+         [ok] file_contains: matched
+
+  [PASS] hello-utf8 (917.7s)
+         Steps: 2 [1:completed, 2:completed]
+         Status: completed
+         [ok] file_exists: found
+         [ok] file_contains: matched
+         [ok] file_contains: matched
+         [ok] file_contains: matched
+
+  [FAIL] astros-from-fixture (912.6s)
+         Steps: 3 [1:failed, 2:failed, 3:failed]
+         Status: blocked
+         [ok] file_exists: found
+         [FAIL] file_exists: not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [FAIL] caesar-cipher-tested (2655.2s)
+         Steps: 4 [1:completed, 2:completed, 3:completed, 4:failed]
+         Status: blocked
+         [ok] file_exists: found
+         [ok] file_exists: found
+         [ok] pytest_pass: all tests passed
+         Exit code: 1
+
+  [FAIL] csv-aggregator (1518.3s)
+         Steps: 6 [1:failed, 2:failed, 3:failed, 4:failed, 5:failed, 6:failed]
+         Status: blocked
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [PASS] csv-filter-by-column (4966.8s)
+         Steps: 5 [1:completed, 2:completed, 3:completed, 4:completed, 5:completed]
+         Status: completed
+         [ok] file_exists: found
+         [ok] file_shape: shape ok
+         [ok] file_contains: matched
+
+  [FAIL] csv-to-json (1228.9s)
+         Steps: 4 [1:completed, 2:failed, 3:failed, 4:failed]
+         Status: blocked
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [FAIL] fastapi-hello-route (1114.6s)
+         Steps: 4 [1:completed, 2:completed, 3:completed, 4:completed]
+         Status: completed
+         [ok] file_exists: found
+         [FAIL] file_exists: not found
+         [FAIL] pytest_pass: test path not found
+
+  [PASS] fibonacci-tested (784.7s)
+         Steps: 4 [1:completed, 2:completed, 3:completed, 4:completed]
+         Status: completed
+         [ok] file_exists: found
+         [ok] file_exists: found
+         [ok] pytest_pass: all tests passed
+
+  [FAIL] json-to-csv (615.0s)
+         Steps: 4 [1:failed, 2:failed, 3:failed, 4:failed]
+         Status: blocked
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [FAIL] markdown-toc-generator (1173.5s)
+         Steps: 2 [1:failed, 2:failed]
+         Status: blocked
+         [FAIL] file_exists: not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [PASS] palindrome-checker-tested (691.4s)
+         Steps: 2 [1:completed, 2:completed]
+         Status: completed
+         [ok] file_exists: found
+         [ok] file_exists: found
+         [ok] pytest_pass: all tests passed
+
+  [FAIL] prime-sieve-tested (1506.7s)
+         Steps: 5 [1:completed, 2:completed, 3:completed, 4:completed, 5:completed]
+         Status: completed
+         [ok] file_exists: found
+         [FAIL] file_exists: not found
+         [FAIL] pytest_pass: test path not found
+
+  [FAIL] regex-log-parser (1171.4s)
+         Steps: 4 [1:failed, 2:failed, 3:failed, 4:failed]
+         Status: blocked
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [FAIL] sqlite-etl-loader (2652.9s)
+         Steps: 8 [1:completed, 2:failed, 3:failed, 4:failed, 5:failed, 6:failed, 7:failed, 8:completed]
+         Status: blocked
+         [ok] file_exists: found
+         [ok] file_exists: found
+         [ok] file_shape: shape ok
+         Exit code: 1
+
+  [FAIL] temperature-converter-cli (887.4s)
+         Steps: 7 [1:failed, 2:failed, 3:failed, 4:failed, 5:failed, 6:failed, 7:failed]
+         Status: blocked
+         [ok] file_exists: found
+         [ok] file_exists: found
+         [FAIL] pytest_pass: exit 5
+         [ok] command_succeeds: exit_code=0
+         Exit code: 1
+
+  [FAIL] text-stats-report (1802.8s)
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [FAIL] cluster-A-fixed-width-records (8.9s)
+         [FAIL] file_exists: not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [FAIL] cluster-A-roman-numeral-converter (8.5s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] pytest_pass: test path not found
+         Exit code: 1
+
+  [FAIL] cluster-B-pipeline-schema-mismatch (8.7s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_shape: file not found
+         Exit code: 1
+
+  [FAIL] cluster-D-strict-json-schema (8.6s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [FAIL] cluster-D-temporal-ordering (8.3s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_shape: file not found
+         Exit code: 1
+
+  [FAIL] cluster-E-multi-requirement-cli (8.3s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] pytest_pass: test path not found
+         [FAIL] command_succeeds: exit_code=2
+         Exit code: 1
+
+  [FAIL] cluster-F-tdd-lru-cache (8.4s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] pytest_pass: test path not found
+         Exit code: 1
+
+  [FAIL] cluster-F-tdd-rate-limiter (8.8s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] pytest_pass: test path not found
+         Exit code: 1
+
+  [FAIL] cluster-G-rollback-trigger (8.7s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] pytest_pass: test path not found
+         Exit code: 1
+
+  [FAIL] cluster-I-resume-stub-multi-phase (8.4s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         Exit code: 1
+
+  [FAIL] dataset-analysis-report (8.7s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] llm_judge: majority=0.00; votes=0/5; (cached); reason: call error: HTTPStatusError: Client error '401 Unauthorized' for url 'https://api.anthropic.com/v1/messages'
+For more in
+==============================================================================
+  UAS Eval Aggregate Report (mean ± stdev across runs)
+==============================================================================
+  Case                        N           Pass        Wall(s)         LLM(s)
+  ----------------------------------------------------------------------------
+  astros-from-fixture         3      0.00±0.00    309.7±426.3    217.9±308.2
+  caesar-cipher-tested        3      0.00±0.00   890.8±1247.6    327.9±463.7
+  cluster-A-fixed-width-rec   3      0.00±0.00        8.8±0.3        0.0±0.0
+  cluster-A-roman-numeral-c   3      0.00±0.00        8.5±0.1        0.0±0.0
+  cluster-B-pipeline-schema   3      0.00±0.00        8.7±0.0        0.0±0.0
+  cluster-D-strict-json-sch   3      0.00±0.00        8.6±0.2        0.0±0.0
+  cluster-D-temporal-orderi   3      0.00±0.00       11.8±4.8        0.0±0.0
+  cluster-E-multi-requireme   3      0.00±0.00        8.8±0.4        0.0±0.0
+  cluster-F-tdd-lru-cache     3      0.00±0.00        8.7±0.3        0.0±0.0
+  cluster-F-tdd-rate-limite   3      0.00±0.00        8.7±0.2        0.0±0.0
+  cluster-G-rollback-trigge   3      0.00±0.00        9.6±1.2        0.0±0.0
+  cluster-I-resume-stub-mul   3      0.00±0.00        8.5±0.1        0.0±0.0
+  csv-aggregator              3      0.00±0.00    511.8±711.7    637.3±901.2
+  csv-filter-by-column        3      0.33±0.47  1661.2±2337.4    620.3±877.2
+  csv-to-json                 3      0.00±0.00    416.9±574.2    189.1±267.4
+  dataset-analysis-report     3      0.00±0.00        8.4±0.2        0.0±0.0
+  fastapi-hello-route         3      0.00±0.00    377.1±521.4     96.6±136.6
+  fibonacci-tested            3      0.33±0.47    267.2±365.9      41.8±59.1
+  hello-csv                   3      0.00±0.00    265.5±363.4    198.7±281.0
+  hello-file                  3      0.33±0.47    207.9±282.2     84.8±120.0
+  hello-json                  3      0.00±0.00    246.9±336.9    172.9±244.5
+  hello-markdown              3      0.00±0.00    228.4±309.5    105.7±149.5
+  hello-utf8                  3      0.33±0.47    311.5±428.7    141.2±199.6
+  json-to-csv                 3      0.00±0.00    210.8±285.8    141.5±200.1
+  markdown-toc-generator      3      0.00±0.00    396.9±549.2    230.0±325.3
+  mini-calc-dsl               3      0.00±0.00        8.5±0.1        0.0±0.0
+  palindrome-checker-tested   3      0.33±0.47    236.0±322.0     72.2±102.2
+  prime-sieve-tested          3      0.00±0.00    507.8±706.3    211.4±298.9
+  readme-from-source          3      0.00±0.00        8.5±0.1        0.0±0.0
+  regex-log-parser            3      0.00±0.00    397.8±547.0    575.3±813.6
+  sort-algo-comparison-repo   3      0.00±0.00        8.6±0.1        0.0±0.0
+  sqlite-etl-loader           3      0.00±0.00   889.9±1246.6    651.0±920.7
+  static-blog-site            3      0.00±0.00        8.6±0.1        0.0±0.0
+  temperature-converter-cli   3      0.00±0.00    301.6±414.2    101.7±143.8
+  text-stats-report           3      0.00±0.00    606.7±845.8        0.0±0.0
+  ----------------------------------------------------------------------------
+  Overall pass rate: 0.048 across 35 cases
+
+  By tier:
+  ----------------------------------------------------------------------------
+  Tier            Cases   Rows             Pass
+  trivial             5     15        0.13±0.34
+  moderate           15     45        0.07±0.25
+  hard               10     30        0.00±0.00
+  open_ended          5     15        0.00±0.00
+==============================================================================
+
+         Exit code: 1
+
+  [FAIL] mini-calc-dsl (8.6s)
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] file_exists: not found
+         [FAIL] llm_judge: majority=0.00; votes=0/5; (cached); reason: call error: HTTPStatusError: Client error '401 Unauthorized' for url 'https://api.anthropic.com/v1/messages'
+For more in
+         Exit code: 1
+
+  [FAIL] readme-from-source (8.5s)
+         [FAIL] file_exists: not found
+         [FAIL] llm_judge: majority=0.00; votes=0/5; (cached); reason: call error: HTTPStatusError: Client error '401 Unauthorized' for url 'https://api.anthropic.com/v1/messages'
+For more in
+         Exit code: 1
+
+  [FAIL] sort-algo-comparison-report (8.5s)
+         [FAIL] file_exists: not found
+         [FAIL] llm_judge: majority=0.00; votes=0/5; (cached); reason: call error: HTTPStatusError: Client error '401 Unauthorized' for url 'https://api.anthropic.com/v1/messages'
+For more in
+         Exit code: 1
+
+  [FAIL] static-blog-site (8.7s)
+         [FAIL] llm_judge: majority=0.00; votes=0/5; (cached); reason: call error: HTTPStatusError: Client error '401 Unauthorized' for url 'https://api.anthropic.com/v1/messages'
+For more in
+         Exit code: 1
+
+============================================================
+  5/35 passed, 30 failed
+  Total time: 27504.4s
+  Results: /home/eturkes/pro/uas/integration/eval_results.json
+  Workspaces: /home/eturkes/pro/uas/integration/workspace/
+============================================================

@@ -181,6 +181,48 @@ def append_result_row(row, *, run_metadata, run_index,
         f.write("\n")
 
 
+def load_prior_rows(path, run_metadata) -> list:
+    """Return JSONL rows from ``path`` that resume the current session.
+
+    A row is considered resumable iff its ``git_sha``, ``git_dirty``,
+    and ``harness_version`` all match ``run_metadata``. Rows from
+    other commits, other dirty states, or earlier harness versions
+    are ignored — they would corrupt the noise floor if silently
+    merged.
+
+    Missing files yield an empty list. Corrupt JSON lines and rows
+    missing any of the three gating keys are skipped with a stderr
+    warning; the rest of the file still loads.
+    """
+    if not path or not os.path.isfile(path):
+        return []
+    target_sha = run_metadata.get("git_sha")
+    target_dirty = run_metadata.get("git_dirty")
+    target_hv = run_metadata.get("harness_version")
+    matched = []
+    with open(path, "r", encoding="utf-8") as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except (json.JSONDecodeError, ValueError) as exc:
+                print(
+                    f"  [resume] skipping corrupt JSONL line {lineno} "
+                    f"in {path}: {exc}",
+                    file=sys.stderr,
+                )
+                continue
+            if (row.get("git_sha") == target_sha
+                    and row.get("git_dirty") == target_dirty
+                    and row.get("harness_version") == target_hv
+                    and "run_index" in row
+                    and "name" in row):
+                matched.append(row)
+    return matched
+
+
 # Allowed tier values for the case schema. The order is the natural
 # difficulty progression and is used by Section 9 case authors as a
 # reference. Cases without a tier silently default to "trivial" for
@@ -1354,6 +1396,15 @@ def main():
             f"({' / '.join(ALLOWED_TIERS)})"
         ),
     )
+    parser.add_argument(
+        "--no-resume", action="store_true",
+        help=(
+            "Disable resume-from-JSONL. By default, rows in the target "
+            "results JSONL whose git_sha / git_dirty / harness_version "
+            "match the current run are treated as already completed "
+            "and not re-executed."
+        ),
+    )
     args = parser.parse_args()
     if args.runs < 1:
         print("--runs must be >= 1", file=sys.stderr)
@@ -1421,8 +1472,25 @@ def main():
     )
 
     results_jsonl_path = args.results_out or RESULTS_JSONL
-    all_results = []
-    first_run_results = []
+
+    if args.no_resume:
+        prior_rows = []
+    else:
+        prior_rows = load_prior_rows(results_jsonl_path, run_metadata)
+    resumable_keys = {
+        (r["run_index"], r["name"]) for r in prior_rows
+    }
+    if prior_rows:
+        print(
+            f"  [resume] reusing {len(prior_rows)} row(s) from "
+            f"{results_jsonl_path} (matching sha/dirty/harness)",
+            file=sys.stderr,
+        )
+
+    all_results = list(prior_rows)
+    first_run_results = [
+        r for r in prior_rows if r.get("run_index") == 0
+    ]
     for run_index in range(args.runs):
         if args.runs > 1:
             print(
@@ -1431,6 +1499,13 @@ def main():
             )
         run_results = []
         for i, case in enumerate(cases, 1):
+            if (run_index, case["name"]) in resumable_keys:
+                print(
+                    f"[{i}/{len(cases)}] {case['name']}: "
+                    f"-> SKIP (resumed)",
+                    file=sys.stderr,
+                )
+                continue
             _maybe_refresh_oauth()
             label = case["goal"][:70]
             print(
@@ -1458,7 +1533,7 @@ def main():
                 file=sys.stderr,
             )
         if run_index == 0:
-            first_run_results = run_results
+            first_run_results.extend(run_results)
 
     # Legacy compatibility: RESULTS_FILE holds the first run's results
     # only, preserving the pre-Section-6 "len == len(cases)" shape for

@@ -1,0 +1,82 @@
+  uas-eval phase1 | sha=b44c6299 (dirty) | branch=main | config=e3ed7766
+Running 5 prompt case(s) × 1 run(s)...
+
+  [oauth] Self-refresh HTTP 400: {"error": "invalid_grant", "error_description": "Refresh token not found or invalid"}
+  [oauth] Token refreshed — 7.1h remaining
+[1/5] hello-csv: Create a CSV file at greeting.csv with header row 'id,message' followe...
+        -> FAIL (2422.2s)
+[2/5] hello-file: Create a file called hello.txt containing exactly the text: Hello from...
+        -> PASS (622.6s)
+[3/5] hello-json: Create a JSON file at greeting.json containing exactly the object {"me...
+        -> FAIL (999.2s)
+[4/5] hello-markdown: Create a Markdown file at README.md whose first non-blank line is the ...
+        -> PASS (553.7s)
+[5/5] hello-utf8: Create a UTF-8 encoded text file at greetings.txt containing exactly t...
+        -> FAIL (607.9s)
+
+==============================================================================
+  UAS Eval Aggregate Report (mean ± stdev across runs)
+==============================================================================
+  Case                        N           Pass        Wall(s)         LLM(s)
+  ----------------------------------------------------------------------------
+  hello-csv                   1      0.00±0.00     2422.2±0.0     1525.3±0.0
+  hello-file                  1      1.00±0.00      622.6±0.0      302.3±0.0
+  hello-json                  1      0.00±0.00      999.2±0.0      771.7±0.0
+  hello-markdown              1      1.00±0.00      553.7±0.0      256.2±0.0
+  hello-utf8                  1      0.00±0.00      607.9±0.0      268.5±0.0
+  ----------------------------------------------------------------------------
+  Overall pass rate: 0.400 across 5 cases
+
+  By tier:
+  ----------------------------------------------------------------------------
+  Tier            Cases   Rows             Pass
+  trivial             5      5        0.40±0.49
+==============================================================================
+
+============================================================
+  UAS Prompt Evaluation Report
+============================================================
+
+  [FAIL] hello-csv (2422.2s)
+         Steps: 2 [1:failed, 2:failed]
+         Status: blocked
+         [ok] file_exists: found
+         [ok] file_shape: shape ok
+         [ok] file_contains: matched
+         Exit code: 1
+
+  [PASS] hello-file (622.6s)
+         Steps: 2 [1:completed, 2:completed]
+         Status: completed
+         [ok] file_exists: found
+         [ok] file_contains: matched
+
+  [FAIL] hello-json (999.2s)
+         Steps: 2 [1:failed, 2:failed]
+         Status: blocked
+         [FAIL] file_exists: not found
+         [FAIL] file_shape: file not found
+         [FAIL] file_contains: file not found
+         Exit code: 1
+
+  [PASS] hello-markdown (553.7s)
+         Steps: 2 [1:completed, 2:completed]
+         Status: completed
+         [ok] file_exists: found
+         [ok] file_contains: matched
+         [ok] file_contains: matched
+
+  [FAIL] hello-utf8 (607.9s)
+         Steps: 2 [1:completed, 2:completed]
+         Status: completed
+         [FAIL] file_exists: not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+         [FAIL] file_contains: file not found
+
+============================================================
+  2/5 passed, 3 failed
+  Total time: 5205.7s
+  Results: /home/eturkes/pro/uas/integration/eval_results.json
+  Workspaces: /home/eturkes/pro/uas/integration/workspace/
+============================================================

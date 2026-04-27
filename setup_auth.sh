@@ -67,7 +67,8 @@ echo ""
     -v "$AUTH_DIR:/root/.claude:Z" \
     -v "$CLAUDE_JSON:/root/.claude.json:Z" \
     --entrypoint claude \
-    "$IMAGE_TAG"
+    "$IMAGE_TAG" \
+    --dangerously-skip-permissions --effort max
 
 # --- Fix ownership (container runs as root, so files are owned by root) ---
 if command -v sudo &>/dev/null; then

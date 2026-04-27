@@ -65,7 +65,7 @@ if [ "$AUTH_VALID" = false ]; then
     echo "============================================================"
     echo ""
 
-    claude
+    claude --dangerously-skip-permissions --effort max
 fi
 
 # =============================================================================

@@ -45,6 +45,11 @@ mkdir -p "$AUTH_DIR"
 CLAUDE_JSON="$AUTH_DIR/claude.json"
 [ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
 
+# Always overwrite settings.json with the framework's canonical defaults so
+# every Claude invocation under UAS sees the same env, theme, and disabled
+# UI knobs regardless of prior local edits.
+cp -f "${SCRIPT_DIR}/framework_settings.json" "$AUTH_DIR/settings.json"
+
 echo "============================================================"
 echo "  UAS Auth Setup"
 echo "============================================================"

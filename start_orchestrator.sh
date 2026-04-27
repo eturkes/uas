@@ -39,6 +39,10 @@ mkdir -p "$AUTH_DIR"
 CLAUDE_JSON="$AUTH_DIR/claude.json"
 [ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
 
+# Refresh settings.json from the framework canonical so every container
+# launch sees the same Claude defaults (env vars, disabled UI, etc.).
+cp -f "${SCRIPT_DIR}/framework_settings.json" "$AUTH_DIR/settings.json"
+
 # --- Per-project container reuse ---
 PROJECT_HASH=$(echo -n "$PWD" | sha256sum | cut -c1-12)
 PROJECT_IMAGE="uas-project-${PROJECT_HASH}"

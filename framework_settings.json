@@ -1,0 +1,18 @@
+{
+  "env": {
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000",
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+    "MAX_THINKING_TOKENS": "128000"
+  },
+  "awaySummaryEnabled": false,
+  "autoMemoryEnabled": false,
+  "skipDangerousModePermissionPrompt": true,
+  "useAutoModeDuringPlan": false,
+  "theme": "light",
+  "preferredNotifChannel": "notifications_disabled",
+  "autoCompactEnabled": false,
+  "remoteControlAtStartup": false,
+  "agentPushNotifEnabled": false
+}

@@ -36,6 +36,11 @@ echo ""
 # --- Ensure install directory exists ---
 mkdir -p "$INSTALL_DIR"
 
+# --- Install the framework's canonical Claude settings alongside the
+#     wrapper so every run can re-seed .uas_auth/settings.json. ---
+FRAMEWORK_SETTINGS_DEST="${INSTALL_DIR}/uas-framework-settings.json"
+cp -f "${SCRIPT_DIR}/framework_settings.json" "$FRAMEWORK_SETTINGS_DEST"
+
 # --- Generate the wrapper script ---
 WRAPPER="${INSTALL_DIR}/uas"
 cat > "$WRAPPER" << 'WRAPPER_EOF'
@@ -63,6 +68,13 @@ mkdir -p "$AUTH_DIR"
 # ~/.claude/).  Seed an empty file so the bind mount works on first run.
 CLAUDE_JSON="$AUTH_DIR/claude.json"
 [ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
+
+# Refresh settings.json from the framework canonical (installed by install.sh
+# alongside this wrapper) so every run sees the same Claude defaults.
+FRAMEWORK_SETTINGS="$(dirname "$(readlink -f "$0")")/uas-framework-settings.json"
+if [ -f "$FRAMEWORK_SETTINGS" ]; then
+    cp -f "$FRAMEWORK_SETTINGS" "$AUTH_DIR/settings.json"
+fi
 
 # --- Per-project container reuse ---
 # Deterministic name from the project directory so packages installed

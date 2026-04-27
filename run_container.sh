@@ -42,6 +42,10 @@ fi
 CLAUDE_JSON="$AUTH_DIR/claude.json"
 [ -f "$CLAUDE_JSON" ] || echo '{}' > "$CLAUDE_JSON"
 
+# Refresh settings.json from the framework canonical so every run sees
+# the same Claude defaults (env vars, disabled UI, etc.).
+cp -f "${SCRIPT_DIR}/framework_settings.json" "$AUTH_DIR/settings.json"
+
 WORKSPACE="$(mktemp -d)"
 echo "Workspace: $WORKSPACE"
 

@@ -1,15 +1,22 @@
 {
   "name": "readme-from-source",
   "goal": "Read the existing Python module at quicklib.py (it is already present in the workspace). Write a comprehensive README.md that documents the module for a developer who has not seen the source. The README must include: a short project description, an installation section (e.g., 'pip install ... or place quicklib.py on PYTHONPATH'), a usage section with at least 3 worked examples (Python code blocks calling functions exported by quicklib.py with realistic arguments), an API reference section listing each public function with its signature and a one-line description, and a license placeholder line at the bottom. Do NOT modify quicklib.py.",
-  "setup_files": ["quicklib.py"],
+  "setup_files": [
+    "quicklib.py"
+  ],
   "checks": [
-    {"type": "file_exists", "path": "README.md"},
+    {
+      "type": "file_exists",
+      "path": "README.md"
+    },
     {
       "type": "llm_judge",
       "criteria": "Pass iff ALL of these are true: (1) README.md exists and is at least 30 lines long. (2) It contains a project description paragraph. (3) It contains an Installation section with at least one mention of how to make the module importable. (4) It contains a Usage section with at least 3 distinct Python code blocks (fenced with ```python) showing real calls to functions defined in quicklib.py — the function names must actually exist in the source. (5) It contains an API Reference section listing every public function defined in quicklib.py (no underscore prefix) with its signature and a description. (6) It contains a license line. (7) quicklib.py was not modified. Any missing or invented function name is a failure.",
-      "files": ["README.md", "quicklib.py"],
-      "samples": 5,
-      "model": "claude-haiku-4-5-20251001"
+      "files": [
+        "README.md",
+        "quicklib.py"
+      ],
+      "samples": 5
     }
   ],
   "notes": {

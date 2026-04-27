@@ -2,12 +2,30 @@
   "name": "mini-calc-dsl",
   "goal": "Build a tiny arithmetic DSL in Python at calc/. Required pieces: calc/lexer.py (tokenizes a source string into number, identifier, operator, and paren tokens), calc/parser.py (builds an AST supporting integer literals, the four binary operators + - * /, parentheses, variable references, and let-binding 'let x = expr in expr'), calc/interpreter.py exposing eval_program(source: str) -> int, and calc/__init__.py re-exporting eval_program. Also write three example programs at examples/ex1.calc, examples/ex2.calc, examples/ex3.calc that exercise: ex1 = simple arithmetic with parens, ex2 = a let-binding, ex3 = nested let-bindings. Finally, write a runner script run_examples.py that calls eval_program on each example file and prints '<filename>: <result>' lines. Run run_examples.py at the end.",
   "checks": [
-    {"type": "file_exists", "path": "calc/lexer.py"},
-    {"type": "file_exists", "path": "calc/parser.py"},
-    {"type": "file_exists", "path": "calc/interpreter.py"},
-    {"type": "file_exists", "path": "examples/ex1.calc"},
-    {"type": "file_exists", "path": "examples/ex2.calc"},
-    {"type": "file_exists", "path": "examples/ex3.calc"},
+    {
+      "type": "file_exists",
+      "path": "calc/lexer.py"
+    },
+    {
+      "type": "file_exists",
+      "path": "calc/parser.py"
+    },
+    {
+      "type": "file_exists",
+      "path": "calc/interpreter.py"
+    },
+    {
+      "type": "file_exists",
+      "path": "examples/ex1.calc"
+    },
+    {
+      "type": "file_exists",
+      "path": "examples/ex2.calc"
+    },
+    {
+      "type": "file_exists",
+      "path": "examples/ex3.calc"
+    },
     {
       "type": "llm_judge",
       "criteria": "Pass iff ALL of these are true: (1) calc/lexer.py defines a tokenizer that handles numbers, identifiers, +, -, *, /, parens, and the keywords 'let' and 'in'. (2) calc/parser.py defines a parser that handles operator precedence (* and / bind tighter than + and -) and parens, plus let-bindings. (3) calc/interpreter.py exposes eval_program(source) that walks the AST and returns an int. (4) examples/ex1.calc uses arithmetic with parens, ex2.calc uses one let-binding, ex3.calc uses nested let-bindings. (5) run_examples.py invokes eval_program on each file and prints output. The DSL must actually work end-to-end (the runner output matches what a hand-evaluation would produce). Any missing element or broken DSL behaviour is a failure.",
@@ -21,8 +39,7 @@
         "examples/ex3.calc",
         "run_examples.py"
       ],
-      "samples": 5,
-      "model": "claude-haiku-4-5-20251001"
+      "samples": 5
     }
   ],
   "notes": {

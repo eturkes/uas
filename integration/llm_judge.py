@@ -26,7 +26,11 @@ import os
 import re
 
 # Default model and sample count. Both overridable per call.
-DEFAULT_MODEL = "claude-opus-4-6"
+# UAS framework policy: use Claude's current default model (Opus 4.7).
+# The Anthropic SDK requires an explicit model id, so this is the one
+# place the moving default must be hardcoded — bump in lockstep with
+# Claude releases.
+DEFAULT_MODEL = "claude-opus-4-7"
 DEFAULT_SAMPLES = 5
 
 # Per-file content budget (chars). Files larger than this are
@@ -381,7 +385,7 @@ def judge(case_goal, workspace, criteria, *, files=None,
         (5).
     model : str
         Anthropic model id. Defaults to ``DEFAULT_MODEL``
-        (``claude-opus-4-6``).
+        (``claude-opus-4-7``).
     case_name : str | None
         Used as part of the cache key.
     cache_path : str | None

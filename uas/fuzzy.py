@@ -41,7 +41,10 @@ class FuzzyDisabledError(RuntimeError):
 
 
 # Default model for fuzzy calls — overridable via UAS_FUZZY_MODEL or config.
-_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+# UAS framework policy: track Claude's current default (Opus 4.7). The
+# Anthropic SDK requires an explicit model id, so this constant must be
+# bumped in lockstep with new Claude releases.
+_DEFAULT_MODEL = "claude-opus-4-7"
 
 # Maximum cached (prompt, args) pairs per decorated function.
 _CACHE_SIZE = 256

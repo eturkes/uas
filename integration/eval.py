@@ -229,17 +229,13 @@ def load_prior_rows(path, run_metadata) -> list:
 # backward compat with pre-Section-7 prompt files.
 ALLOWED_TIERS = ("trivial", "moderate", "hard", "open_ended")
 
-# Default model used by the eval harness for the architect subprocess.
-# Project policy (set during Phase 1 Section 10): the eval / measurement
-# instrument runs on Haiku 4.5 to keep dev iteration cheap and to
-# preserve the user's weekly Opus quota for real-world UAS task
-# execution. Real-world UAS use (architect/orchestrator invoked
-# directly, outside this harness) is unaffected and continues to use
-# whatever uas_config / UAS_MODEL the user has set. Override here by
-# exporting UAS_MODEL (or UAS_MODEL_PLANNER / UAS_MODEL_CODER) before
-# invoking uas-eval.
-EVAL_MODEL_DEFAULT = "claude-haiku-4-5-20251001"
-EVAL_MODEL_ENV_VARS = ("UAS_MODEL", "UAS_MODEL_PLANNER", "UAS_MODEL_CODER")
+# Eval harness model policy: track Claude's current default (Opus 4.7).
+# Per the unified UAS framework directive, every Claude invocation —
+# including the eval / measurement instrument — uses the model the CLI
+# selects when no --model flag is passed, so the eval harness no longer
+# injects a default UAS_MODEL. Callers can still pin a model explicitly
+# by exporting UAS_MODEL (or UAS_MODEL_PLANNER / UAS_MODEL_CODER)
+# before invoking uas-eval.
 
 # OAuth token refresh.  Claude Max OAuth tokens last ~8 hours.
 # Long benchmark runs (--runs 3 over 35 cases is ~30 hours on Haiku)
@@ -359,8 +355,7 @@ def _maybe_refresh_oauth():
             return
         try:
             proc = subprocess.run(
-                [claude_path, "-p", "ping",
-                 "--model", EVAL_MODEL_DEFAULT],
+                [claude_path, "-p", "ping"],
                 capture_output=True, text=True,
                 timeout=120, stdin=subprocess.DEVNULL,
             )
@@ -784,7 +779,8 @@ def run_check(check, workspace, invocation=None, case=None):
         defaults to auto-discovery of every ``.py``, ``.md``,
         ``.json``, ``.txt``, ``.csv`` file under the workspace),
         ``samples`` (int, default 5), ``model`` (default
-        ``claude-opus-4-6``). Calls ``integration/llm_judge.judge``
+        ``claude-opus-4-7`` from ``llm_judge.DEFAULT_MODEL``). Calls
+        ``integration/llm_judge.judge``
         with N parallel samples and majority-votes the result.
         Requires ``case`` to be passed in (the orchestrator does this
         automatically via ``run_checks``).
@@ -1065,17 +1061,21 @@ def run_check(check, workspace, invocation=None, case=None):
             }
         files = check.get("files")
         samples = check.get("samples", 5)
-        model = check.get("model", "claude-opus-4-6")
+        # Only forward `model` when the case explicitly pins one;
+        # otherwise let llm_judge.DEFAULT_MODEL track Claude's current
+        # default per UAS framework policy.
+        judge_kwargs = {
+            "case_goal": case.get("goal", ""),
+            "workspace": workspace,
+            "criteria": criteria,
+            "files": files,
+            "samples": samples,
+            "case_name": case.get("name"),
+        }
+        if "model" in check:
+            judge_kwargs["model"] = check["model"]
         try:
-            result = judge_fn(
-                case_goal=case.get("goal", ""),
-                workspace=workspace,
-                criteria=criteria,
-                files=files,
-                samples=samples,
-                model=model,
-                case_name=case.get("name"),
-            )
+            result = judge_fn(**judge_kwargs)
         except Exception as e:
             return {
                 "type": ctype, "passed": False,
@@ -1357,14 +1357,12 @@ def _ensure_image(engine):
 
 
 def main():
-    # Project policy: default the eval harness to Haiku for cost.
-    # Done before argparse / metadata capture so the env_snapshot
-    # captured into the JSONL log accurately reflects the model the
-    # architect actually saw. ``setdefault`` semantics — any value
-    # already set in the parent shell wins.
-    for _key in EVAL_MODEL_ENV_VARS:
-        if _key not in os.environ:
-            os.environ[_key] = EVAL_MODEL_DEFAULT
+    # UAS framework policy: every Claude invocation (including the eval
+    # harness) uses the CLI's current default model. We deliberately do
+    # NOT inject a default UAS_MODEL — the architect subprocess will
+    # fall through to llm_client's no-flag path and pick up Claude's
+    # default. Explicit per-shell overrides (UAS_MODEL,
+    # UAS_MODEL_PLANNER, UAS_MODEL_CODER) still win.
 
     parser = argparse.ArgumentParser(description="UAS Prompt Evaluation")
     parser.add_argument("-k", "--filter", help="Run cases matching pattern")

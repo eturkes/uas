@@ -9,11 +9,14 @@
 
 # ── Core ─────────────────────────────────────────────────────────────────────
 
-# LLM model for general use (runtime default: claude-opus-4-6)
+# LLM model for general use.
+# When unset, UAS omits --model and the Claude CLI uses its current
+# default (currently Opus 4.7). Set this to pin a specific model.
 # model = "claude-sonnet-4-6"
 
-# Model overrides for specific roles
-# model_planner = "claude-opus-4-6"
+# Model overrides for specific roles. Same fall-through behavior:
+# unset = use the CLI default; set = pin this model for the role.
+# model_planner = "claude-opus-4-7"
 # model_coder = "claude-sonnet-4-6"
 
 # Execution mode: "container" or "local"

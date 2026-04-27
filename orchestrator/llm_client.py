@@ -81,6 +81,7 @@ def classify_error(returncode: int, stdout: str, stderr: str) -> ErrorClassifica
 # ---------------------------------------------------------------------------
 
 COST_PER_1K = {
+    "claude-opus-4-7":   {"input": 0.015, "output": 0.075},
     "claude-opus-4-6":   {"input": 0.015, "output": 0.075},
     "claude-sonnet-4-6": {"input": 0.003, "output": 0.015},
     "claude-haiku-4-5":  {"input": 0.0008, "output": 0.004},

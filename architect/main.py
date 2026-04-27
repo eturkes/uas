@@ -1031,7 +1031,7 @@ def _accumulate_usage(state: dict, usage: dict, model: str | None = None,
     out = usage.get("output", 0)
     if inp == 0 and out == 0:
         return
-    cost = estimate_cost(model or "claude-opus-4-6", usage)
+    cost = estimate_cost(model or "claude-opus-4-7", usage)
     with _state_lock:
         totals = state.setdefault("total_tokens", {"input": 0, "output": 0})
         totals["input"] += inp

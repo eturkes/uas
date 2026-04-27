@@ -51,7 +51,7 @@ def _track_usage(usage: dict, model: str | None = None):
     out = usage.get("output", 0)
     _orch_usage["input"] += inp
     _orch_usage["output"] += out
-    _orch_usage["cost_usd"] += estimate_cost(model or "claude-opus-4-6", usage)
+    _orch_usage["cost_usd"] += estimate_cost(model or "claude-opus-4-7", usage)
 
 PRE_FLIGHT_PROMPT = """\
 You are reviewing generated Python code before it runs in a sandbox.

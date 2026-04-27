@@ -110,14 +110,14 @@ class TestModelFlag:
 
     @patch("orchestrator.llm_client.subprocess.run")
     @patch("orchestrator.llm_client.shutil.which", return_value="/usr/bin/claude")
-    def test_fallback_model_when_none(self, _mock_which, mock_run, _mock_cls):
+    def test_omits_model_flag_when_none(self, _mock_which, mock_run, _mock_cls):
+        # UAS framework policy: when no model is explicitly set, omit
+        # --model entirely so the CLI uses Claude's current default.
         mock_run.return_value = _cp("response")
         client = ClaudeCodeClient(model=None)
         client.generate("hello")
         cmd = mock_run.call_args[0][0]
-        assert "--model" in cmd
-        idx = cmd.index("--model")
-        assert cmd[idx + 1] == "claude-opus-4-6"
+        assert "--model" not in cmd
 
 
 @patch("orchestrator.llm_client.classify_llm_error", side_effect=_mock_classify)

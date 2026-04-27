@@ -200,8 +200,12 @@ class ClaudeCodeClient:
             "Write", "Edit", "NotebookEdit", "Bash", "Task",
         ])
 
-        model = self.model or "claude-opus-4-6"
-        cmd.extend(["--model", model])
+        # Default model: omit --model entirely so the CLI uses its current
+        # default (per UAS framework policy: always track Claude's moving
+        # default, currently Opus 4.7). Pass --model only when the caller
+        # has explicitly set self.model (UAS_MODEL / role-specific overrides).
+        if self.model:
+            cmd.extend(["--model", self.model])
         cmd.extend(["--effort", "max"])
         cmd.extend(["--output-format", "json"])
 
@@ -211,8 +215,15 @@ class ClaudeCodeClient:
         env.pop("CLAUDECODE", None)
         env.pop("CLAUDE_CODE_SESSION", None)
         env["IS_SANDBOX"] = "1"
+        # UAS framework canonical env (mirrors framework_settings.json so
+        # subprocess invocations behave identically whether or not the
+        # settings file is present in the isolation dir).
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "128000"
+        env["DISABLE_AUTOUPDATER"] = "1"
+        env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] = "1"
+        env["CLAUDE_CODE_DISABLE_1M_CONTEXT"] = "1"
+        env["MAX_THINKING_TOKENS"] = "128000"
 
         # Section 9: Isolate the CLI so tool side effects (file writes,
         # .uas_auth/, step scripts) don't land in the workspace.
@@ -233,6 +244,19 @@ class ClaudeCodeClient:
             _src = os.path.join(_orig_config, _cred_name)
             if os.path.isfile(_src):
                 shutil.copy2(_src, os.path.join(iso_config, _cred_name))
+
+        # Propagate the UAS framework's canonical Claude settings into the
+        # isolation dir so the subprocess sees the same theme, env, and
+        # disabled UI knobs as every other UAS framework Claude run.
+        # Without this, the isolation dir would have credentials only and
+        # framework_settings.json would be silently bypassed on this path.
+        _framework_settings = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "framework_settings.json",
+        )
+        if os.path.isfile(_framework_settings):
+            shutil.copy2(_framework_settings,
+                         os.path.join(iso_config, "settings.json"))
 
         env["CLAUDE_CONFIG_DIR"] = iso_config
 
@@ -303,7 +327,7 @@ class ClaudeCodeClient:
                                 "partial output for truncation recovery.",
                                 returncode, len(stdout.strip()),
                             )
-                            return self._parse_json_output(stdout.strip(), model)
+                            return self._parse_json_output(stdout.strip(), self.model)
                         # unknown — raise
                         raise RuntimeError(
                             f"Claude Code CLI exited with code {returncode}: "
@@ -349,7 +373,7 @@ class ClaudeCodeClient:
                     )
 
                 # Auth errors can arrive on stdout with exit code 0.
-                parsed = self._parse_json_output(stdout, model)
+                parsed = self._parse_json_output(stdout, self.model)
                 if parsed.text:
                     auth_err = classify_error(0, parsed.text, "")
                     if auth_err.category == "auth":

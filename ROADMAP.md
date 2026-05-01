@@ -107,15 +107,92 @@ removed; both regimes now follow the unified policy above. The
 `EVAL_MODEL_DEFAULT` constant is removed; the per-case Haiku judge
 pins are removed.
 
+## Pivot (May 2026) — usage-limit-aware long-horizon orchestrator
+
+After Phase 1 closed, project direction was reframed. The harness
+exists; what it should be measuring has changed.
+
+**Original framing.** "Best harness conceivable for autonomous agents
+on long-horizon tasks." Operationally, this had become "build the
+measurement instrument, then ablate the 68-mechanism scaffold to find
+which mechanisms earn their keep." Phase 1 was the instrument; the
+old Phases 2–5 were the ablation pipeline.
+
+**Refined framing.** The actual goal is **a usage-limit-aware
+orchestrator that maximizes productive use of a Claude Max
+subscription on long-horizon tasks**. The 68-mechanism scaffold was
+sized against an earlier Claude that had different gaps; under
+Claude Code 2026 (sub-agents, hooks, MCP, skills, 1M context, native
+session compaction, statusline JSON exposing rate-limit data) most of
+those mechanisms duplicate or fight Claude Code's native capabilities.
+§10's empirical run was direct evidence: Opus 4.7 plus all 68
+mechanisms enabled spent 38 min and $16 over-decomposing a hello-file
+task into TDD steps and never produced the file. The scaffold's
+coupling cost dominates on at least the trivial tier.
+
+The harness's job is no longer "improve subtask quality" — Claude
+Code itself delivers that. The harness's job is **scheduling and
+budgeting**: keep a Claude Code worker productively busy across a
+multi-day task within the constraints of the Claude Max usage limits
+(5-hour rolling window, weekly limit, paid buffer overflow) and the
+user's preferences for when to pause vs. spend buffer.
+
+**Architectural shape.** External daemon (Python) that:
+
+- Spawns headless `claude --print --dangerously-skip-permissions`
+  workers per subtask in a sandboxed workspace (Phase 1 substrate).
+- Reads usage-limit ground truth from Claude Code's statusline JSON
+  `rate_limits` field (added in Claude Code v2.1.80, March 2026):
+  `five_hour.used_percentage` / `resets_at` and
+  `seven_day.used_percentage` / `resets_at`.
+- Computes paid-buffer spend per call from `usage.input_tokens` /
+  `usage.output_tokens` × pricing table (buffer state isn't exposed
+  in `rate_limits`; inferred locally).
+- Maintains a three-state policy machine: free / paid / hard-stop,
+  with policy-driven soft transitions at the 5h and weekly cap
+  boundaries (default: pause at 5h, wrap up at weekly, hard-stop
+  near $200 buffer; configurable per task).
+- Persists task and ledger state across invocations via JSONL
+  (Phase 1 substrate, extended).
+
+**Substrate carried forward from Phase 1** (kept intact, treated as
+foundation, not subject to the pivot's deletions): Docker sandbox,
+OAuth 4-stage refresh, JSONL audit log + provenance metadata,
+workspace isolation, resume-from-JSONL, eval harness as one tool
+among several.
+
+**Empirical TBDs to resolve at Phase 2 implementation start, not by
+research:**
+
+1. Does the statusline hook fire during headless `claude --print`
+   invocations, or does the orchestrator need a different read
+   pattern (separate brief `claude` invocation, alternative surface,
+   etc.)?
+2. Does `used_percentage` cap at 100% in buffer mode, or can it
+   climb past 100% to signal overflow?
+
+Both are ~5-min empirical questions once the orchestrator skeleton
+exists; not blocking for ROADMAP planning.
+
+**Implication for Phases 2–6+.** The original Phase 2 ("3 baseline
+runs"), Phases 3–4 (ablation flags + ablation study), and Phase 5
+(prune-by-evidence) are all superseded. The new phase plan replaces
+the old Phases 2–6+. Phases 0 and 1 are unaffected; the substrate
+they delivered is the foundation. The new prune phase moves up and
+becomes more aggressive — most of the 68 mechanisms are now
+delete-candidates because they don't serve the orchestrator's
+scheduling-and-budgeting role.
+
 ## Current phase
 
-**Phase 2 — Baseline measurement** (active)
+**Phase 2 — Substrate verification** (active)
 
 Phase 1 closed at the same commit that added its "Completed phases"
-entry below. The hardened eval harness is the deliverable; details in
-that entry. The Phase 2 PLAN is pending — draft it before executing
-any Phase 2 work, and pause for user review before starting Section 1
-(per the decision protocol in `CLAUDE.md`).
+entry below. Under the pivot above, Phase 2's scope is rewritten —
+see the Phase 2 entry under "Phase details" for the new
+deliverables. The Phase 2 PLAN is pending — draft it before
+executing any Phase 2 work, and pause for user review before
+starting Section 1 (per the decision protocol in `CLAUDE.md`).
 
 ## Phase plan
 
@@ -123,11 +200,11 @@ any Phase 2 work, and pause for user review before starting Section 1
 |---|---|---|---|
 | 0 | Audit | completed | Catalog mechanisms, eval infra, flags, dependencies. No code changes. |
 | 1 | Eval harness hardening | completed | Turn eval.py into canonical measurement tool. Curated benchmark. Deterministic + LLM-judge grading. Persistent results with noise bounds. |
-| 2 | Baseline measurement | **active** | Run harness 3× on main. Record numbers. Establish regression gate. |
-| 3 | Ablation flags | pending | Put every mechanism behind a toggleable flag with documented dependencies. |
-| 4 | Ablation study | pending | Measure marginal contribution of each mechanism. Produce keep/delete/investigate table. |
-| 5 | Prune | pending | Delete mechanisms whose marginal contribution is zero or negative. |
-| 6+ | Informed iteration | pending | Add new mechanisms responsibly, each gated on eval improvement. |
+| 2 | Substrate verification | **active** | Verify empirical TBDs (statusline-during-print, percentage-cap behavior). Document substrate boundaries from Phase 1. Estimate cut surface. |
+| 3 | Orchestrator core | pending | Build the daemon: usage-limit ledger from statusline JSON, paid-buffer ledger from per-call usage, headless-worker primitive, three-state policy machine, task-state surviving invocation boundaries. |
+| 4 | Prune | pending | Delete existing scaffold mechanisms that don't serve the orchestrator. Migrate keep-but-Claude-Code-native items via skills / sub-agents / hooks / MCP. README rewritten to match. |
+| 5 | Policy & long-horizon UX | pending | Policy configuration interface, task definition spec, resume-summary format, human-checkpoint design. End-to-end real long-horizon task with project owner observing. |
+| 6+ | Informed iteration | pending | Add new orchestrator capabilities responsibly, each justified by real-task evidence not speculation. Slim discipline (no re-implementing what Claude Code does natively) holds indefinitely. |
 
 ## Phase details
 
@@ -216,95 +293,165 @@ amendment trades benchmark breadth for a fast-feedback loop —
 consistent with "the scaffold cannot exceed the model" plus
 "deletion is as valuable as addition" from the principles list.
 
-### Phase 2 — Baseline measurement
+### Phase 2 — Substrate verification
 
-**Goal:** record current system performance with every existing
-mechanism enabled.
-
-**Deliverables:**
-- 3 full benchmark runs on current `main`.
-- Per-tier mean pass rate ± stdev recorded in "Baseline metrics"
-  below.
-- Per-metric means recorded (LLM time, sandbox time, attempts,
-  tokens per task).
-- Regression gate definition: any subsequent change that drops mean
-  pass rate by more than 1 stdev without a compensating gain
-  elsewhere is a regression until investigated.
-
-**Exit criteria:** "Baseline metrics" section below is populated with
-real numbers. A `baseline` git tag is placed at the measured commit.
-
-### Phase 3 — Ablation flags
-
-**Goal:** make every mechanism from the Phase 0 catalog individually
-toggleable without rewriting the call sites.
+**Goal:** before standing up the orchestrator, confirm the substrate
+actually supports it. Resolve the two empirical TBDs flagged in the
+pivot section above, and document the boundaries of what Phase 1's
+deliverables provide vs. what the orchestrator must add.
 
 **Deliverables:**
-- One `UAS_DISABLE_<MECHANISM>` env var (or equivalent config key)
-  per mechanism.
-- Default behavior preserved (all mechanisms on).
-- Documented dependencies between flags. Example: disabling
-  `reflection_history` should auto-disable `counterfactual_tracing`
-  because the latter consumes the former's state.
-- Regression check: benchmark with no flags set must match Phase 2
-  baseline within noise bounds.
 
-**Exit criteria:** can run the benchmark with any subset of mechanisms
-disabled. Default-all-enabled matches baseline.
+- **Empirical TBD 1 (statusline-during-print):** verify whether
+  `claude --print --dangerously-skip-permissions <prompt>` triggers
+  the statusline hook and yields a JSON payload with `rate_limits`.
+  If yes, document the read pattern. If no, design and prototype the
+  alternative read pattern (separate brief `claude` invocation,
+  parsing of intermediate state, or whatever works).
+- **Empirical TBD 2 (percentage-cap behavior):** verify whether
+  `rate_limits.five_hour.used_percentage` and
+  `seven_day.used_percentage` cap at 100 in buffer mode, or climb
+  past 100 to signal overflow. Run a controlled test pushing one of
+  the limits past its cap on a cheap workload.
+- **Substrate-boundary catalog:** explicit list of what Phase 1's
+  deliverables (Docker sandbox, OAuth 4-stage refresh, JSONL audit
+  log, provenance metadata, workspace isolation, resume-from-JSONL,
+  eval harness) provide as APIs the orchestrator consumes vs.
+  internal details. Documented in `docs/substrate.md` (new file).
+- **Cut-surface preview:** rough first-pass of which existing
+  modules / mechanisms from the Phase 0 catalog are expected to
+  delete in Phase 4. Not a final cut list — Phase 4 makes those
+  calls — but a sized estimate so the team knows the scale.
 
-### Phase 4 — Ablation study
+**Exit criteria:** both TBDs resolved with documented findings;
+substrate-boundary doc exists; expected-delete list (estimated
+scale) recorded.
 
-**Goal:** measure marginal contribution of each mechanism.
+### Phase 3 — Orchestrator core
+
+**Goal:** build the daemon that owns long-horizon task state, spawns
+headless Claude Code workers, and enforces the three-state policy
+machine against real usage-limit signals.
 
 **Deliverables:**
-- Single-ablation runs: for each mechanism M, run benchmark with M
-  disabled, record Δ vs baseline.
-- Key pair ablations: for mechanisms hypothesized to interact (e.g.
-  reflection + counterfactual, best-of-N + multi-plan voting), run
-  with both disabled.
-- Results table: mechanism → Δ pass rate (mean, stdev) → Δ wall time
-  → Δ tokens → verdict (keep / delete / investigate).
 
-**Exit criteria:** every mechanism in the Phase 0 catalog has a
-verdict backed by numbers.
+- External daemon. Long-running process, systemd-managed service, or
+  CLI invoked by the user — design pending.
+- Usage-limit ledger reading `rate_limits` from statusline JSON per
+  Phase 2's resolved read pattern. Cached locally; refreshed per
+  worker invocation; sanity-checked against an internal
+  message-count tally. Divergence beyond a configured threshold
+  raises an alert.
+- Paid-buffer ledger computed from per-call `usage.input_tokens` /
+  `usage.output_tokens` against a pricing table. Persisted to the
+  JSONL audit log.
+- Headless-worker primitive: spawn `claude --print
+  --dangerously-skip-permissions <subtask spec>` in a sandboxed
+  workspace, capture output, increment the ledgers, persist the
+  result.
+- Three-state policy machine (free / paid / hard-stop). Default
+  policy: pause at 5h soft cap, wrap up at weekly soft cap,
+  hard-stop near $200 buffer. Configurable per task via TOML or
+  similar.
+- Task-state model surviving invocation boundaries: the long-horizon
+  task definition, the subtask queue, what's done / in-flight /
+  pending, decisions log, resume hints.
+- Resume-from-state across invocations (extending the Phase 1
+  resume-from-JSONL mechanism).
 
-### Phase 5 — Prune
+**Exit criteria:** the orchestrator runs a defined long-horizon task
+end-to-end across at least one window boundary (5h pause + resume,
+or weekly wrap + resume next week) without human intervention, with
+all ledgers and state cleanly persisted.
 
-**Goal:** remove mechanisms that data doesn't support.
+### Phase 4 — Prune
+
+**Goal:** delete the existing scaffold mechanisms that don't serve
+the orchestrator. The Phase 0 catalog (68 mechanisms) is the input
+list. This phase has moved up from Phase 5 in the original plan and
+is more aggressive — the old plan ablated first and pruned what
+failed; this plan prunes anything that doesn't fit the orchestrator's
+job description, then verifies the slimmed system still works.
 
 **Deliverables:**
-- Delete code for every "delete" verdict from Phase 4.
-- Shrink README to match reality.
-- Re-run full benchmark, confirm no regression vs Phase 2.
-- Update "Baseline metrics" below with post-prune numbers.
 
-**Exit criteria:** codebase is smaller; benchmark pass rate unchanged
-or improved.
+- For each of the 68 mechanisms: keep / cut / migrate-to-Claude-Code-
+  native verdict, with one-sentence justification. The "migrate"
+  category covers items whose function is real but is better
+  expressed as a Claude Code sub-agent / skill / hook / MCP server
+  than as a UAS Python module.
+- Delete the cut list. Migrate the migrate list (replace UAS module
+  with Claude Code-native configuration; document the configuration
+  in this repo).
+- Codebase shrinkage measured (lines removed, files removed, modules
+  collapsed).
+- README rewritten to match the slim reality.
+- Smoke run on the Phase 1 eval harness to confirm nothing in the
+  kept set is broken.
+
+**Exit criteria:** the codebase is materially smaller; the
+orchestrator + slim substrate is the entire working UAS; the README
+is accurate.
+
+### Phase 5 — Policy & long-horizon UX
+
+**Goal:** make the orchestrator usable for real long-horizon work.
+Phase 3 builds the engine; this phase builds the user-facing layer
+and validates the experience end-to-end on a real task.
+
+**Deliverables:**
+
+- Policy configuration interface (TOML or similar): pause
+  thresholds, buffer-spend limits, per-task overrides.
+- Long-horizon task definition spec: how the user describes "build
+  me X over the next week" in a way the orchestrator can decompose
+  and execute against.
+- Resume summary format: human-readable digest of what the
+  orchestrator did during a window, what's pending, what decisions
+  were made — written when wrapping up against a soft cap.
+- Human-checkpoint design: explicit checkpoint types (review plan
+  before exec, review critical commit, review on detected
+  regression). Configurable per task.
+- One realistic long-horizon task run end-to-end with the project
+  owner observing. Real task, real Claude Max subscription,
+  multi-day duration.
+- Post-run write-up: what worked, what didn't, what to fix.
+
+**Exit criteria:** one real multi-day task has been run via the
+orchestrator and the experience is good enough that the project
+owner intends to keep using it. Written-up findings are recorded
+under "Completed phases" below at phase close.
 
 ### Phase 6+ — Informed iteration
 
-**Goal:** add new capabilities responsibly.
+**Goal:** add new orchestrator capabilities responsibly.
 
-**Standing rules** (enforced indefinitely, not just during Phase 6):
+**Standing rules** (enforced indefinitely):
 
-1. Any new mechanism runs a before/after benchmark and demonstrates
-   a mean improvement greater than 1 stdev of the baseline noise.
-2. Any new mechanism ships with its own ablation flag from day one.
-3. New mechanisms are added to the Phase 0 catalog and the ablation
-   study immediately.
+1. Any new orchestrator capability is justified by a real
+   long-horizon task experience, not by speculation.
+2. Any new capability that adds behavior under failure conditions
+   ships with a way to disable it from day one.
+3. New capabilities are added to the substrate-boundary catalog and
+   the slim-system README at the same time as the code.
+4. The slim discipline holds: if Claude Code itself can do X
+   natively, configure it via skills / sub-agents / hooks / MCP
+   rather than re-implementing X in UAS.
 
 **Candidate directions** (not commitments — explore once Phase 5 is
-done and only if supported by evidence):
+done and only if supported by real-task evidence):
 
-- Aggressive test-time compute (best-of-16+ on hard steps, o1-style
-  deliberation budgets).
-- Adversarial generator/critic setups with distinct LLM roles.
-- Strategic human checkpoints at decomposition time (minimal human
-  input ≠ zero human input).
-- Verification strength: property-based tests, runtime invariants,
-  formal specs where feasible.
-- Task-class scoping — bounded reliability guarantees on a defined
-  class of tasks beats vague ambition on an open set.
+- Adversarial paired-Claude verification (two distinct workers, one
+  producing, one critiquing).
+- Verification by re-derivation (run a task twice with different
+  decompositions; only accept on output equivalence or property-test
+  pass).
+- Task-density routing (different task types route to different
+  scaffolding densities; cure for the §10 over-decomposition mode).
+- Persistent project memory (structured facts updated by run
+  outcomes, surfaced into next session's context — different from
+  reflection traces).
+- Multi-machine / multi-account orchestration.
 
 ## Current state of the codebase
 
@@ -312,6 +459,16 @@ done and only if supported by evidence):
 analysis, flag inventory, and dependency adjacency lists are recorded
 in the Phase 0 audit's `PLAN.md` history; the summary below is the
 distillation Phase 1+ should read at session start.)*
+
+*(Note added under May 2026 pivot: under the new direction (see
+"Pivot" section above), most of the 68 mechanisms catalogued below
+are expected delete-candidates because they duplicate or fight
+Claude Code 2026's native capabilities. The catalog still serves as
+the input list for Phase 4's prune verdicts; only its framing has
+changed from "ablate-then-prune" to "prune-aggressively-then-verify."
+The "Implications for Phase 1/Phase 3" subsections below are
+historical — see the Phase 2–6+ entries under "Phase details" for
+the current direction.)*
 
 UAS at the close of Phase 0 (363 commits, ~3 months) contains
 **68 distinct mechanisms** across the architect / orchestrator / uas
@@ -411,6 +568,14 @@ or any new flag they're meant to control will have no effect.
 | Phase 4 group ablations required | 11 |
 
 ## Baseline metrics
+
+*(Note added under May 2026 pivot: this section's metrics framework
+is reshaped under the pivot. "Pass rate per tier on a benchmark" is
+no longer the primary metric; the new measurement framework emerges
+from Phase 5's real-task experience. Section retained as a
+placeholder; new metrics, if any, recorded here when they exist.
+Original empty table retained below for historical reference but
+will not be populated under the pivot direction.)*
 
 *(Populated during Phase 2. Format:)*
 

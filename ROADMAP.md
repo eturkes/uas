@@ -109,21 +109,21 @@ pins are removed.
 
 ## Current phase
 
-**Phase 1 — Eval harness hardening** (active)
+**Phase 2 — Baseline measurement** (active)
 
-Phase 0 closed at commit `496d76f`-descendant. Its findings populate
-the "Current state of the codebase" section below. The Phase 1 PLAN
-is pending — draft it before executing any Phase 1 work, and pause
-for user review before starting Section 1 (per the decision protocol
-in `CLAUDE.md`).
+Phase 1 closed at the same commit that added its "Completed phases"
+entry below. The hardened eval harness is the deliverable; details in
+that entry. The Phase 2 PLAN is pending — draft it before executing
+any Phase 2 work, and pause for user review before starting Section 1
+(per the decision protocol in `CLAUDE.md`).
 
 ## Phase plan
 
 | # | Phase | Status | One-line goal |
 |---|---|---|---|
 | 0 | Audit | completed | Catalog mechanisms, eval infra, flags, dependencies. No code changes. |
-| 1 | Eval harness hardening | **active** | Turn eval.py into canonical measurement tool. Curated benchmark. Deterministic + LLM-judge grading. Persistent results with noise bounds. |
-| 2 | Baseline measurement | pending | Run harness 3× on main. Record numbers. Establish regression gate. |
+| 1 | Eval harness hardening | completed | Turn eval.py into canonical measurement tool. Curated benchmark. Deterministic + LLM-judge grading. Persistent results with noise bounds. |
+| 2 | Baseline measurement | **active** | Run harness 3× on main. Record numbers. Establish regression gate. |
 | 3 | Ablation flags | pending | Put every mechanism behind a toggleable flag with documented dependencies. |
 | 4 | Ablation study | pending | Measure marginal contribution of each mechanism. Produce keep/delete/investigate table. |
 | 5 | Prune | pending | Delete mechanisms whose marginal contribution is zero or negative. |
@@ -443,6 +443,33 @@ distillation; the full row-by-row tables live in
 and Phase 4 (ablation study) read for the detail. The audit's
 working file `PLAN.md` was removed on phase close per project
 convention.
+
+### Phase 1 — Eval harness hardening
+
+Closed in the same commit that populated this entry. Deliverables
+completed: canonical `uas-eval` wrapper at repo root, reduced 1-case
+suite (`cases/trivial/hello-file.json`, per the "Suite scope (amended
+after §9 close)" note above), hybrid grading (deterministic checks
+covering `file_exists` / `file_contains` / `pytest_pass` / `exit_code`
+/ `file_shape` / `command_succeeds` / regex, plus
+`integration/llm_judge.py` with N-sample majority vote for open-ended
+cases), append-only `integration/eval_results.jsonl`, per-task metrics
+surfaced from `architect/main.py` (pass/fail, wall time, LLM time,
+sandbox time, attempts, tokens, step-status counts, workspace size,
+cost), opt-in multi-run variance via `--runs N` (tested by
+`tests/test_eval_variance.py`), tiered reporting, and per-row
+reproducibility metadata (`git_sha`, `git_branch`, `git_dirty`,
+`harness_version`, `config_hash`, `env_snapshot`, `timestamp_utc`).
+
+End-to-end §10 run on commit `fa1c8fe` (dirty) under the unified Opus
+4.7 policy produced one well-formed JSONL row plus aggregate: 38.5
+min wallclock, FAIL on a hello-file goal (architect over-decomposed
+into 5 TDD steps and never produced `hello.txt`), $16.64 reported
+cost; every harness plumbing path green. The fail is exactly the
+scaffold-ceiling signal Phase 1 was built to surface; full per-step
+detail lives in the JSONL log and in `PLAN.md` git history. The
+phase's working file `PLAN.md` was removed on phase close per
+project convention.
 
 ## Amending this roadmap
 

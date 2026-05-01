@@ -202,7 +202,7 @@ starting Section 1 (per the decision protocol in `CLAUDE.md`).
 | 1 | Eval harness hardening | completed | Turn eval.py into canonical measurement tool. Curated benchmark. Deterministic + LLM-judge grading. Persistent results with noise bounds. |
 | 2 | Substrate verification | **active** | Verify empirical TBDs (statusline-during-print, percentage-cap behavior). Document substrate boundaries from Phase 1. Estimate cut surface. |
 | 3 | Orchestrator core | pending | Build the daemon: usage-limit ledger from statusline JSON, paid-buffer ledger from per-call usage, headless-worker primitive, three-state policy machine, task-state surviving invocation boundaries. |
-| 4 | Prune | pending | Delete existing scaffold mechanisms that don't serve the orchestrator. Migrate keep-but-Claude-Code-native items via skills / sub-agents / hooks / MCP. README rewritten to match. |
+| 4 | Prune | pending | Delete most of the scaffold. Default verdict on any mechanism is **cut**; keep list is short and explicit (Docker sandbox, OAuth refresh, JSONL log, provenance, workspace isolation, resume-from-JSONL, eval harness substrate). README rewritten from scratch. |
 | 5 | Policy & long-horizon UX | pending | Policy configuration interface, task definition spec, resume-summary format, human-checkpoint design. End-to-end real long-horizon task with project owner observing. |
 | 6+ | Informed iteration | pending | Add new orchestrator capabilities responsibly, each justified by real-task evidence not speculation. Slim discipline (no re-implementing what Claude Code does natively) holds indefinitely. |
 
@@ -366,32 +366,79 @@ all ledgers and state cleanly persisted.
 
 ### Phase 4 — Prune
 
-**Goal:** delete the existing scaffold mechanisms that don't serve
-the orchestrator. The Phase 0 catalog (68 mechanisms) is the input
-list. This phase has moved up from Phase 5 in the original plan and
-is more aggressive — the old plan ablated first and pruned what
-failed; this plan prunes anything that doesn't fit the orchestrator's
-job description, then verifies the slimmed system still works.
+**Goal:** delete most of the existing scaffold. **Default verdict on
+any given mechanism is cut.** The keep list is short and explicitly
+justified; the migrate list is expected to be near-empty. Phase 0's
+68-mechanism catalog is the deletion checklist, not a verdict
+matrix. This phase has moved up from Phase 5 in the original plan
+and is much more aggressive than the original "ablate first, prune
+what failed" model — this plan prunes anything that doesn't fit the
+orchestrator's job description, then verifies the slimmed system
+still works.
+
+**Keep list (current best estimate, finalized at phase start):**
+
+1. Docker sandbox + `Sandbox.Dockerfile` (`orchestrator/sandbox.py`).
+2. OAuth 4-stage refresh logic (currently in `integration/eval.py`).
+3. JSONL audit log primitive + write/append logic (Phase 1 §5).
+4. Provenance metadata capture — `git_sha`, `git_branch`,
+   `git_dirty`, `harness_version`, `config_hash`, `env_snapshot`,
+   `timestamp_utc` (Phase 1 §4).
+5. Workspace isolation pattern — per-task
+   `integration/workspace/<task>/` directory convention.
+6. Resume-from-JSONL logic (commit `d81e42e`).
+7. Eval harness shell wrapper + deterministic check types
+   (`file_exists`, `file_contains`, `pytest_pass`, `exit_code`,
+   `file_shape`, `command_succeeds`, content regex) + the
+   `hello-file` smoke case. The LLM-as-judge module
+   (`integration/llm_judge.py`) is *not* on the keep list — Claude
+   Code sub-agents fill that role natively.
+
+Possibly-keep, decided at phase start based on what Phase 3
+actually consumes: the relevant subset of `uas_config.py`'s loader,
+scoped to keys the orchestrator actually reads.
+
+**Migrate list:** expected to be empty. Patterns worth preserving
+(property-based verification, structured human checkpoints,
+adversarial paired-Claude review) are net-new code in Phase 3 or
+configured via Claude Code primitives (skills / sub-agents / hooks
+/ MCP), not ports of existing UAS modules.
+
+**Cut surface (sized estimate, not a final list):**
+
+- `architect/main.py` (6864 lines) — essentially total. Failure
+  handling, validation cascade, spec-rewrite loops, the
+  `/workspace`-literal validator, TDD gate, all gone.
+- `planner/main.py` (3700 lines) — essentially total. The
+  coverage-driven decomposition is replaced by budget-aware
+  decomposition in the new orchestrator.
+- `orchestrator/main.py` (2051 lines, despite the name) — mostly
+  total. Best-of-N + pre-flight aren't part of the pivot. The new
+  orchestrator daemon is a new module, not a refactor.
+- All 26 README-undocumented LLM-driven failure-classification
+  helpers.
+- Reflection / counterfactual / multi-plan-voting / step-DAG /
+  cross-run-learning / `UAS_MINIMAL` and the rest of the bundled
+  toggles.
+- `integration/llm_judge.py`.
 
 **Deliverables:**
 
-- For each of the 68 mechanisms: keep / cut / migrate-to-Claude-Code-
-  native verdict, with one-sentence justification. The "migrate"
-  category covers items whose function is real but is better
-  expressed as a Claude Code sub-agent / skill / hook / MCP server
-  than as a UAS Python module.
-- Delete the cut list. Migrate the migrate list (replace UAS module
-  with Claude Code-native configuration; document the configuration
-  in this repo).
-- Codebase shrinkage measured (lines removed, files removed, modules
-  collapsed).
-- README rewritten to match the slim reality.
-- Smoke run on the Phase 1 eval harness to confirm nothing in the
-  kept set is broken.
+- Codebase shrinkage measured (lines removed, files removed,
+  modules collapsed).
+- README rewritten from scratch to match the slim reality. The
+  existing README's framing is too far from the post-pivot system
+  to repair piecewise.
+- Smoke run on the Phase 1 eval harness to confirm the kept set is
+  unbroken.
+- Brief notes file recording the cut bucket and the rationale, so
+  future readers don't re-introduce things the pivot intentionally
+  removed.
 
 **Exit criteria:** the codebase is materially smaller; the
-orchestrator + slim substrate is the entire working UAS; the README
-is accurate.
+orchestrator + slim substrate is the entire working UAS; the new
+README is accurate; the keep list is a closed set with no
+"shouldn't this stay?" items outstanding.
 
 ### Phase 5 — Policy & long-horizon UX
 

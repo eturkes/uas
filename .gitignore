@@ -55,3 +55,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Override global image exclusion
+!*.png

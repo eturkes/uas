@@ -185,14 +185,15 @@ scheduling-and-budgeting role.
 
 ## Current phase
 
-**Phase 2 — Substrate verification** (active)
+**Phase 3 — Orchestrator core** (active)
 
-Phase 1 closed at the same commit that added its "Completed phases"
-entry below. Under the pivot above, Phase 2's scope is rewritten —
-see the Phase 2 entry under "Phase details" for the new
-deliverables. The Phase 2 PLAN is pending — draft it before
-executing any Phase 2 work, and pause for user review before
-starting Section 1 (per the decision protocol in `CLAUDE.md`).
+Phase 2 closed at the same commit that added its "Completed phases"
+entry below. Phase 3 builds the orchestrator daemon — see the
+Phase 3 entry under "Phase details" for the deliverables, and
+`docs/substrate.md` for the substrate APIs the daemon will consume.
+The Phase 3 PLAN is pending — draft it before executing any Phase 3
+work, and pause for user review before starting Section 1 (per the
+decision protocol in `CLAUDE.md`).
 
 ## Phase plan
 
@@ -200,8 +201,8 @@ starting Section 1 (per the decision protocol in `CLAUDE.md`).
 |---|---|---|---|
 | 0 | Audit | completed | Catalog mechanisms, eval infra, flags, dependencies. No code changes. |
 | 1 | Eval harness hardening | completed | Turn eval.py into canonical measurement tool. Curated benchmark. Deterministic + LLM-judge grading. Persistent results with noise bounds. |
-| 2 | Substrate verification | **active** | Verify empirical TBDs (statusline-during-print, percentage-cap behavior). Document substrate boundaries from Phase 1. Estimate cut surface. |
-| 3 | Orchestrator core | pending | Build the daemon: usage-limit ledger from statusline JSON, paid-buffer ledger from per-call usage, headless-worker primitive, three-state policy machine, task-state surviving invocation boundaries. |
+| 2 | Substrate verification | completed | Verify empirical TBDs (statusline-during-print, percentage-cap behavior). Document substrate boundaries from Phase 1. Estimate cut surface. |
+| 3 | Orchestrator core | **active** | Build the daemon: usage-limit ledger from statusline JSON, paid-buffer ledger from per-call usage, headless-worker primitive, three-state policy machine, task-state surviving invocation boundaries. |
 | 4 | Prune | pending | Delete most of the scaffold. Default verdict on any mechanism is **cut**; keep list is short and explicit (Docker sandbox, OAuth refresh, JSONL log, provenance, workspace isolation, resume-from-JSONL, eval harness substrate). README rewritten from scratch. |
 | 5 | Policy & long-horizon UX | pending | Policy configuration interface, task definition spec, resume-summary format, human-checkpoint design. End-to-end real long-horizon task with project owner observing. |
 | 6+ | Informed iteration | pending | Add new orchestrator capabilities responsibly, each justified by real-task evidence not speculation. Slim discipline (no re-implementing what Claude Code does natively) holds indefinitely. |
@@ -682,6 +683,42 @@ scaffold-ceiling signal Phase 1 was built to surface; full per-step
 detail lives in the JSONL log and in `PLAN.md` git history. The
 phase's working file `PLAN.md` was removed on phase close per
 project convention.
+
+### Phase 2 — Substrate verification
+
+Closed in the same commit that populated this entry. Deliverables
+completed: §1 statusline-during-print resolved — headless `claude
+--print --dangerously-skip-permissions` does **not** fire the
+statusline hook; the working alternative is `claude --print
+--output-format stream-json --verbose`, which emits a
+`rate_limit_event` line carrying ternary `status` plus paid-buffer
+fields (`overageStatus`, `isUsingOverage`, `overageResetsAt`). The
+TUI statusline `rate_limits` schema (snake_case
+`five_hour.used_percentage` / `resets_at` / `seven_day.*`) is
+confirmed against the prior research's claimed shape but is
+available only via the interactive surface. §2 percentage-cap
+behaviour explicitly deferred to natural-trigger capture (variant B
+per the PLAN's cost-vs-information decision step; full reasoning
+preserved in `PLAN.md` git history; dual-behaviour design constraint
+logged in `docs/substrate.md` § Open questions). §3 substrate-
+boundary catalog written to `docs/substrate.md` (~600 lines, 8
+components — 7 ROADMAP keep-list items plus the §1 rate-limit read
+pattern — each with location / accepts / emits / lifecycle / Phase-3
+consumption / gaps). §4 cut-surface preview written to
+`docs/cut_surface.md` (~210 lines): 0 of 68 catalog mechanisms on
+KEEP, all 10 Phase 0 strongly-coupled clusters CUT in their
+entirety, 3 root-level files (`uas_config.py`, `uas_hooks.py`,
+`uas.example.toml`) flagged NEEDS-PHASE-3-DECISION; totals reconcile
+to the Phase 0 catalog scale.
+
+New artefacts created during the phase: `tools/statusline_probe.sh`
+(kept on disk to support §2's deferred natural-trigger capture path;
+formal absorption-into-substrate decision deferred), plus
+`docs/substrate.md` and `docs/cut_surface.md`. Scope was deliberately
+bounded to verification + documentation — no orchestrator code, no
+per-mechanism verdicts, no architectural commitments. The phase's
+working file `PLAN.md` was removed on phase close per project
+convention.
 
 ## Amending this roadmap
 

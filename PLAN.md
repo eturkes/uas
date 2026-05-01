@@ -430,7 +430,95 @@ and where the orchestrator extends it vs. consumes it as-is.
 - A summary table at the top of the doc lists components with
   one-line descriptions.
 
-**Status:** pending
+**Status:** completed
+
+### Section 3 — Results
+
+**What was produced.** `docs/substrate.md` was expanded from the
+§2-era stub (Open questions only) into a full 8-component catalog,
+with the existing Open questions section preserved at the end so
+§2's deferral notes round-trip intact.
+
+**Coverage against acceptance criteria.**
+
+- All 7 ROADMAP §Phase 4 keep-list components are documented, plus
+  the Phase 2 §1 rate-limit read pattern as the eighth component
+  (numbered to match the ROADMAP keep-list order):
+  1. Sandbox primitive (`orchestrator/sandbox.py`,
+     `Containerfile`).
+  2. OAuth 4-stage refresh (`integration/eval.py`).
+  3. JSONL audit log primitive (`integration/eval.py`).
+  4. Provenance metadata capture (`integration/eval.py`).
+  5. Workspace isolation pattern (`integration/eval.py` plus the
+     `integration/workspace/<case>/` directory convention).
+  6. Resume-from-JSONL (`integration/eval.py`, commit `d81e42e`).
+  7. Eval shell wrapper + deterministic check types + hello-file
+     smoke case (`uas-eval`, `integration/eval.py` `run_check`,
+     `integration/cases/trivial/hello-file.json`). The
+     `integration/llm_judge.py` module is explicitly **not** on
+     the keep list per ROADMAP §Phase 4 and is documented as a
+     cut-target rather than a substrate component.
+  8. Claude Code rate-limit read pattern (stream-json
+     `rate_limit_event` default + TUI statusline `rate_limits`
+     companion).
+- Every component entry carries the 6 specified fields: Location,
+  Accepts, Emits, Lifecycle, Phase-3 consumption pattern, Gaps.
+- The doc opens with a one-screen "Components at a glance" table
+  (8 rows, one-line descriptions, `#` ordering matches the body
+  sections).
+
+**Cross-cutting observations recorded for Phase 3.**
+
+- Components 2 (`_maybe_refresh_oauth`) and 4
+  (`capture_run_metadata`) are the strongest candidates for
+  extraction into shared `auth.py` / `provenance.py` modules
+  alongside Phase 4's prune of the rest of `eval.py`. Documented
+  in components 2 and 4's "Phase-3 consumption pattern" sections.
+- Component 5's `setup_workspace` is destructive-by-default
+  (`shutil.rmtree`); the orchestrator's resume-across-restarts
+  semantics will need either a parameterisation
+  (`reset=False` on resume) or a sibling `setup_task_workspace`.
+  Documented in component 5's Gaps.
+- Component 7's `run_check` dispatcher mixes the keep-list types
+  with the `llm_judge` branch. Phase 4 needs a clean cut without
+  reflowing the surrounding control flow. Documented in
+  component 7's Gaps.
+- Component 6's resume gate (`git_sha` × `git_dirty` ×
+  `harness_version`) is too strict for long-horizon tasks that
+  edit code as they progress. Phase 3 will need its own gate
+  shape (per-event "I survive a `git_sha` flip" flag, or
+  task-state-keyed gate keys). Documented in component 6's Gaps.
+- Component 8 confirms the orchestrator can default to "ternary
+  status from the worker's own stream-json" without any extra
+  process plumbing; the TUI companion read is optional and adds
+  cost, and the `used_percentage` cap question (§2 deferred) only
+  matters under that optional path.
+
+**Acceptance gates.**
+
+- File exists at `docs/substrate.md`.
+- Length ~600 lines — well within "complete enough that the Phase
+  3 PLAN can be drafted against it without re-surveying the
+  codebase" (step 4 of §3) without ballooning into a verdict
+  pass.
+- The doc references PLAN.md §Section 1 — Results and ROADMAP
+  §Phase 4 §Keep list directly, so future readers can verify
+  per-component scope alignment without losing the substrate
+  doc's grounding.
+
+**Out of scope (intentionally not included).**
+
+- Per-mechanism keep / cut verdicts on the 68-mechanism Phase 0
+  catalog. That is §4's job (sized estimate) and Phase 4's job
+  (per-mechanism verdict pass).
+- Architect-internal `.uas_state/` layout (latest_run, runs,
+  scratchpad, knowledge.json). The architect is in the cut
+  surface; its state directories are documented inside component
+  5 only as "what the architect populates today, none of which
+  carries over into Phase 3".
+- `uas_config.py` per-key audit. Listed as "possibly-keep" in
+  ROADMAP §Phase 4 and deferred to phase-start-time decision;
+  treating it now would pre-empt that scoping call.
 
 ## Section 4 — Cut-surface preview
 

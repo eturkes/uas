@@ -556,4 +556,71 @@ per-mechanism verdict pass — that's Phase 4's job.
 - The total reconciles to the Phase 0 catalog scale.
 - The doc is short — sized estimate, not verdict pass.
 
-**Status:** pending
+**Status:** completed
+
+### Section 4 — Results
+
+**What was produced.** `docs/cut_surface.md` (new file, ~210
+lines) buckets the architect / orchestrator / uas trees plus
+`integration/` and the small root-level support files into KEEP
+/ CUT / NEEDS-PHASE-3-DECISION at file granularity, with line
+counts measured against the live tree via `wc -l`.
+
+**Headline numbers.**
+
+| Bucket | Mechanisms (of 68) | Files | Lines (approx) |
+|---|---|---|---|
+| KEEP | 0 | 4 + substrate slice of `integration/eval.py` | ≈ 1,400 |
+| CUT | 68 | 26 + cut tail of `integration/eval.py` | ≈ 19,800 |
+| NEEDS-PHASE-3-DECISION | 0 | 3 (`uas_config.py`, `uas_hooks.py`, `uas.example.toml`) | ≈ 510 |
+
+Mechanism total reconciles exactly to the Phase 0 §1 catalog
+(68). Line-count reconciles to ROADMAP's "~13k" at the
+three-big-modules level (`architect/main.py` 6,915 +
+`architect/planner.py` 3,700 + `orchestrator/main.py` 2,051 =
+12,666); broadening to the full in-scope tree (including
+helpers, `integration/`, and root decision files) lands at
+≈ 21,650.
+
+**Notable framings recorded for Phase 3.**
+
+- **Zero of the 68 catalog mechanisms land on KEEP.** Phase 4's
+  keep list is Phase-1 substrate (`orchestrator/sandbox.py`,
+  `Containerfile`, `uas-eval`, the `integration/eval.py`
+  substrate slice from §3, the hello-file smoke case) — none of
+  it is a §1 row. The catalog is delete-by-default.
+- **Cluster-level verdict.** All ten Phase 0 §4 strongly-coupled
+  clusters (A–J) are CUT in their entirety. The 25 unclustered
+  / borderline mechanisms are also CUT. The orchestrator's
+  resume-across-restart needs route through the KEEP-list
+  resume-from-JSONL substrate, not the architect's state-keyed
+  resume (#59); quota awareness routes through the §1 rate-limit
+  read pattern, not mechanism #29.
+- **`integration/eval.py` split is approximate.** Substrate
+  components 2–7 from `docs/substrate.md` map to line ranges
+  summing ≈ 1,100 KEEP / ≈ 460 CUT inside the 1,560-line file;
+  the exact partition is Phase 4 surgery and is not committed
+  here.
+- **Live-line drift acknowledged.** ROADMAP recorded
+  `architect/main.py` at 6,864 lines; live `wc -l` at §4
+  authoring time is 6,915. The doc instructs Phase 4 to
+  re-confirm any number before it uses it as a verdict input.
+
+**Out-of-scope items explicitly listed in the doc.** `tests/`
+tree (≈70 unit modules — follow primary mechanisms at Phase 4
+time), README rewrite (separate Phase 4 deliverable, not a
+prune target), loose root shell scripts (small; follow their
+primary code), gitignored ad-hoc scripts (out of prune scope per
+Phase 0 audit §2), `tools/statusline_probe.sh` (Phase 2 §1
+probe; deletes at phase close per PLAN scope-discipline note
+unless absorbed into substrate).
+
+**Acceptance gates.**
+
+- File exists at `docs/cut_surface.md`.
+- Sized estimate present for each bucket (lines, files,
+  mechanisms).
+- Total reconciles to the Phase 0 catalog scale (68 mechanisms;
+  ROADMAP's "~13k" headline matches).
+- Doc is short (~210 lines) — sized estimate, not Phase 4's
+  per-mechanism verdict pass.

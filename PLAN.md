@@ -325,7 +325,67 @@ handle both behaviours.
 - If executed, total buffer spend stayed within the bound
   declared in step 2.
 
-**Status:** pending
+**Status:** deferred to natural-trigger
+
+### Section 2 — Results
+
+**Decision (project owner, this session).** Variant B (opportunistic
+/ deferred). No deliberate buffer push performed during Phase 2.
+
+**Reasoning recorded.** Three factors made deferral the cheaper
+choice without losing meaningful information for Phase 3:
+
+1. **`used_percentage` isn't on the headless surface anyway.** §1
+   established that headless `claude --print` workers see only the
+   ternary `rate_limit_event` (`status` ∈ allowed / paid-buffer /
+   hard-stop, plus `overageStatus` / `isUsingOverage`). They do not
+   see `used_percentage`. Cap-vs-overflow behaviour matters only
+   for the *companion* TUI-statusline read pattern, which the §1
+   Results listed as one of three Phase-3 design options (the
+   others being "ternary-only is sufficient" and "internal usage
+   accumulator"). It is not on the orchestrator's critical path.
+2. **The deliberate-push experiment is heavier than the PLAN text
+   implied.** Account state at §1 baseline was
+   `five_hour.used_percentage: 6`. Pushing a fresh 5-hour window
+   from 6% to ~100% via trivial `--print` calls is hours of
+   pinging, not a 10-call probe. The PLAN's $5 spend bound would
+   gate it, but the wallclock and message-count cost of actually
+   reaching the cap is non-trivial — and the value of doing so in
+   this phase is bounded by point 1.
+3. **§3 and §4 do not depend on §2's verdict.** Phase 2's exit
+   criteria allow §2 to be explicitly deferred provided the gap is
+   logged in `docs/substrate.md` and Phase 3's state-machine design
+   acknowledges the dual-behaviour constraint. Both are now done
+   (this Results note + the stub written to `docs/substrate.md`
+   below).
+
+**Constraint placed on Phase 3.** If Phase 3 chooses the
+TUI-statusline companion read pattern, its quota state machine must
+treat `used_percentage` as either-cap-or-climb until the cap
+behaviour is observed in the wild. Two interpretations of a 100+%
+reading must be supported until evidence narrows it:
+
+- **Caps-at-100 hypothesis:** the field clamps; buffer engagement
+  must be detected via `overageStatus` / `isUsingOverage` from the
+  stream-json `rate_limit_event` instead, and percentage cannot be
+  used to estimate overflow magnitude.
+- **Climbs-past-100 hypothesis:** the field is uncapped; buffer
+  magnitude can be read directly from the percentage value, and
+  the >100 threshold itself signals buffer entry.
+
+If Phase 3 instead picks ternary-only or the internal accumulator
+options from §1's Results, this constraint is moot.
+
+**Buffer spend incurred during §2:** $0.00 (variant B; no probe
+calls run).
+
+**Natural-trigger capture plan.** When the project owner
+organically pushes the 5-hour window past 100% during real-task use
+(Phase 5 or later), capture one TUI statusline payload at that
+moment via the §1 probe (`tools/statusline_probe.sh` already wired,
+or re-wire from the §1 Results JSON snippet) and append the
+finding to `docs/substrate.md` § Open questions. No Phase 2
+re-open required.
 
 ## Section 3 — Substrate-boundary catalog
 

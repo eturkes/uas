@@ -104,7 +104,166 @@ shape (`five_hour.used_percentage`, `five_hour.resets_at`,
   that Phase 3 can consume it without re-discovering the
   mechanism.
 
-**Status:** pending
+**Status:** completed
+
+### Section 1 — Results
+
+**Headline finding.** The statusline hook does **not** fire under
+headless `claude --print --dangerously-skip-permissions <prompt>`.
+A working alternative exists: `claude --print --output-format
+stream-json --verbose ...` emits a `rate_limit_event` line in the
+stream. Its schema is simpler than the statusline's `rate_limits`
+field (status enum + overage state, no `used_percentage`), so it
+covers the orchestrator's free / paid / hard-stop transitions but
+not percentage-progress. The TUI statusline JSON's `rate_limits`
+field is confirmed against the prior research's claimed shape
+(both `five_hour` and `seven_day` populated, with
+`used_percentage` and `resets_at`).
+
+**Test environment.** Claude Code 2.1.123 (well above the v2.1.80
+threshold from the ROADMAP), Opus 4.7 default, project
+`/home/eturkes/pro/uas`, real Claude Max account. Probe script
+`tools/statusline_probe.sh` wired up via project-local
+`.claude/settings.local.json` `statusLine` block, parent-session
+PID 72018 used to disambiguate writes from headless subprocesses.
+
+**Findings.**
+
+1. **Statusline hook does not fire under `--print`.** Cleared the
+   probe directory, ran `claude --print --dangerously-skip-permissions
+   "Reply with the literal word: done"` (which returned `done`,
+   exit 0), then inspected `/tmp/uas_statusline_probes/`. Seven
+   probe files were written during the run window, **all** with
+   `ppid=72018` (the parent interactive session), **none** from
+   the `--print` subprocess. A separate `--debug-file` capture of
+   a `--print` startup confirms `Registered 0 hooks from 0
+   plugins` and `Hooks: Found 0 total hooks in registry`, with no
+   statusline reference anywhere in the headless startup log
+   (settings file is loaded — `Watching for changes in setting
+   files .../settings.local.json` — but the statusLine entry is
+   not exercised).
+
+2. **TUI statusline JSON matches the prior research's
+   `rate_limits` schema.** Captured from the parent session
+   (saved to
+   `/tmp/uas_statusline_probe_interactive_baseline.json` during
+   the test):
+
+   ```json
+   "rate_limits": {
+     "five_hour": {
+       "used_percentage": 6,
+       "resets_at": 1777660800
+     },
+     "seven_day": {
+       "used_percentage": 37,
+       "resets_at": 1777885200
+     }
+   }
+   ```
+
+   Both fields populated. `used_percentage` is an integer (not a
+   float) in this sample. `resets_at` is a Unix timestamp.
+   Surrounding JSON also exposes `cost.total_cost_usd`,
+   `context_window.used_percentage`, `model.id`,
+   `model.display_name`, `version` (Claude Code), `effort.level`,
+   `thinking.enabled`, `fast_mode`, etc. — all useful context
+   for the Phase 3 budget ledger.
+
+3. **Working alternative for headless: `rate_limit_event` in
+   stream-json.** Running `claude --print --output-format
+   stream-json --verbose --dangerously-skip-permissions "..."`
+   emits this line in the stream:
+
+   ```json
+   {
+     "type": "rate_limit_event",
+     "rate_limit_info": {
+       "status": "allowed",
+       "resetsAt": 1777660800,
+       "rateLimitType": "five_hour",
+       "overageStatus": "allowed",
+       "overageResetsAt": 1780272000,
+       "isUsingOverage": false
+     },
+     "uuid": "b608a807-f752-4415-91b3-b82b1d8743ea",
+     "session_id": "511b6f13-7c0e-4d1a-934d-e06568950cb1"
+   }
+   ```
+
+   The minimum flag set is `--print --output-format stream-json
+   --verbose` — `--include-hook-events` is **not** required (the
+   event is built-in, not a hook lifecycle event). Schema
+   differences from the statusline payload, in detail:
+
+   - **No `used_percentage`.** Only ternary `status` (observed
+     value `"allowed"`) plus paid-buffer fields
+     (`overageStatus`, `isUsingOverage`).
+   - **`resetsAt` (camelCase)** vs statusline's `resets_at`
+     (snake_case). Same Unix-timestamp semantics.
+   - **One `rateLimitType` per event.** This run emitted only
+     `five_hour`; whether `seven_day` events also fire is not
+     observed in §1 (out of scope — left to §2 and Phase 3
+     iteration).
+   - **`overageStatus` + `overageResetsAt` + `isUsingOverage`**
+     are present here and absent from the statusline schema —
+     directly answering "is paid buffer engaged?", which the
+     statusline payload requires inferring from
+     `used_percentage`.
+
+4. **Negative results worth recording (so they're not re-tried in
+   Phase 3).**
+
+   - `claude --print --output-format json "..."` (single-result
+     JSON) does **not** include rate-limit info. The full
+     payload covers `total_cost_usd`, per-iteration
+     `usage.input_tokens` / `cache_read_input_tokens` / etc.,
+     `modelUsage` per model, `permission_denials`,
+     `terminal_reason`, but no rate-limit field.
+   - `claude --print "/usage"` returns the canned string `"You
+     are currently using your subscription to power your Claude
+     Code usage"`. No actionable data.
+   - `claude --print "/extra-usage"` returns `"Please visit
+     https://claude.ai/settings/usage to manage extra usage."`.
+     No actionable data.
+
+5. **Read pattern recommended for Phase 3.**
+
+   - **Default surface:** parse `rate_limit_event` from each
+     worker's own stream-json output. No extra calls, no
+     statusline configuration required, lives inside the
+     existing call. Provides ternary status + paid-buffer
+     state — sufficient for the free / paid / hard-stop
+     transitions in the policy machine.
+   - **Substrate gap:** `used_percentage` (percentage-progress
+     within each window) is reachable only via TUI statusline.
+     The orchestrator may need to (a) accept ternary status as
+     sufficient for soft-cap policies, (b) accumulate per-call
+     usage against an inferred cap, or (c) periodically spawn a
+     short-lived TUI session as a percentage-read companion.
+     Decision deferred to Phase 3 design; this gap is logged in
+     `docs/substrate.md` (§3 of this PLAN).
+
+**Probe artefacts.**
+
+- `tools/statusline_probe.sh` — committed; lives until phase
+  close per PLAN scope-discipline note.
+- `.claude/settings.local.json` `statusLine` entry — added then
+  **restored** at end of §1 (gitignored anyway). The original
+  contained only the `permissions` block; §2 will re-add the
+  `statusLine` entry if needed. The block to re-add is:
+
+  ```json
+  "statusLine": {
+    "type": "command",
+    "command": "$CLAUDE_PROJECT_DIR/tools/statusline_probe.sh"
+  }
+  ```
+
+- Captured payloads embedded inline above (findings 2 and 3); no
+  on-disk artefacts retained outside `/tmp` (which is
+  expendable). Phase 3's substrate doc (§3) will reference the
+  inline payloads here as canonical.
 
 ## Section 2 — Verify percentage-cap behavior at limit
 

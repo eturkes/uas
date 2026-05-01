@@ -179,10 +179,42 @@ depends on this working correctly and with known noise bounds.
 - Reproducibility: capture git SHA, relevant env vars, and a hash
   of active config at run start.
 
-**Exit criteria:** `uas-eval` runs end-to-end, produces deterministic
-pass/fail plus noise bounds on the full benchmark, and appends to the
-persistent log. Running it twice on the same commit must produce
-statistically indistinguishable results.
+**Exit criteria:** `uas-eval` runs end-to-end on the canonical case
+suite, produces a deterministic pass/fail outcome with full
+reproducibility metadata, and appends to the persistent log within
+the ~10-minute budget defined under "Suite scope" below.
+
+**Suite scope (amended after §9 close).** The original Phase 1 scope
+called for 30–50 tasks across 4 tiers, run 3× per measurement, with
+the canonical command being `uas-eval --runs 3` and a "two
+consecutive runs produce statistically indistinguishable results"
+exit gate. After §1–§9 of the Phase 1 PLAN closed, the project
+owner directed a scope reduction to fit a ~10-minute wallclock
+budget for the canonical run. The amended Phase 1 scope is:
+
+- **One case** (`cases/trivial/hello-file.json`) — the smoke that
+  also serves as the canonical regression gate. The §9-authored
+  case set (5 trivial / 15 moderate / 10 hard / 5 open_ended)
+  was deleted along with the `integration/data/` fixture
+  directory; both are recoverable from `git log` if Phase 4
+  needs them.
+- **`--runs 1` default** (was `3`). Multi-run variance remains
+  available via explicit `--runs N` (still tested by
+  `tests/test_eval_variance.py`) but is opt-in. The "noise
+  bounds on the full benchmark" deliverable is therefore
+  retired; the multi-run plumbing stays.
+- **Exit gate softened**: the harness must run end-to-end and
+  produce well-formed artefacts. The "statistically
+  indistinguishable" two-run check is dropped as incompatible
+  with a 1-case × 1-run default.
+
+The phase's measurement-first principle is unchanged. The
+instrument exists, every code path that would re-stress the
+mechanism catalogue is intact, and Phase 4 ablation will draw
+fresh cases from the catalogue when it actually starts. The
+amendment trades benchmark breadth for a fast-feedback loop —
+consistent with "the scaffold cannot exceed the model" plus
+"deletion is as valuable as addition" from the principles list.
 
 ### Phase 2 — Baseline measurement
 

@@ -162,7 +162,47 @@ adjustment).**
 - `./uas-orchestrate --help` prints the subcommand list.
 - `tests/` is green.
 
-**Status:** pending
+**Results.**
+
+- All five new artefacts created: `orchestrator/cli.py` (97 lines,
+  argparse skeleton, every subcommand body raises
+  `NotImplementedError` with a §-tag), `uas-orchestrate` (executable
+  shell wrapper mirroring `uas-eval`), `integration/auth.py` (~190
+  lines — 7 OAuth helpers + the new `_check_client_id_divergence`
+  warning fed by the `UAS_OAUTH_CLIENT_ID` env override per
+  substrate §2 Gap), `integration/provenance.py` (~130 lines — 5
+  helpers + the new `ORCHESTRATOR_VERSION = "phase3"` plus the
+  `include_orchestrator_version=False` keyword), `docs/orchestrator.md`
+  (119 lines — committed §1 decisions, package layout, subcommand
+  catalog, per-task state-directory layout, open-questions list).
+- `integration/eval.py` no longer defines the lifted helpers; it
+  re-exports the new module names so existing callers and
+  monkeypatch targets (`ev.HARNESS_VERSION`, `ev.capture_run_metadata`,
+  `ev._git_capture`, `ev._hash_active_config`, `ev._maybe_refresh_oauth`,
+  `ev._self_refresh_oauth`, `ev._read_token_expiry`,
+  `ev._SECRET_ENV_PATTERN`, `ev._OAUTH_*`, `ev._DEFAULT_CLAUDE_CREDS`)
+  resolve unchanged. No tests modified.
+- `./uas-orchestrate --help` prints the five-subcommand list with
+  task-id positional argument on each.
+- Full `tests/` suite green: 1806 passed, 3 deselected, 4 min 51 s.
+- `./uas-eval -k hello-file` end-to-end on commit `2f3f32b` (dirty,
+  this PLAN edit + new files) produced one well-formed JSONL row +
+  aggregate. Wallclock 726.0 s (12.1 min); LLM time 423.7 s; 4
+  attempts; 36 input / 41,502 output tokens. Outcome
+  `passed=False` (FAIL) — architect over-decomposed into 2 TDD
+  steps both reporting `failed`, blocked status, never produced
+  `hello.txt`. Same scaffold-ceiling failure mode §10 surfaced;
+  acceptable per the substrate-plumbing-regression scope of this
+  step. New JSONL row carries `harness_version="phase1"` only
+  (`orchestrator_version` correctly absent from the eval row, per
+  the include-flag opt-in design). OAuth refresh path
+  (`integration.auth._maybe_refresh_oauth`) exercised cleanly
+  end-to-end: stage-2 self-refresh hit a stale `invalid_grant`,
+  stage-4 `claude -p ping` fallback succeeded → 4.2 h remaining.
+- NEEDS-PHASE-3-DECISION trio still untouched (no §1 consumer);
+  default-CUT trajectory holds for now per the §1 decision summary.
+
+**Status:** completed
 
 ## Section 2 — Headless-worker primitive
 

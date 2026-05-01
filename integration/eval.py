@@ -48,108 +48,18 @@ UAS_AUTH_DIR = os.path.join(REPO_ROOT, ".uas_auth")
 CLAUDE_JSON = os.path.join(UAS_AUTH_DIR, "claude.json")
 IMAGE_TAG = "uas-engine:latest"
 
-# Bumped manually when eval.py's output schema changes. Stamped on
-# every JSONL row in Section 5 so old logs can be migrated or skipped.
-HARNESS_VERSION = "phase1"
-
-# Secret-suffix filter for env_snapshot in capture_run_metadata().
-# Anchored to end-of-string so legitimate names like UAS_KEY_NAME
-# are not falsely filtered.
-_SECRET_ENV_PATTERN = re.compile(
-    r"(_TOKEN|_KEY|_SECRET|_PASSWORD)$", re.IGNORECASE
+# Provenance helpers live in integration/provenance.py since Phase 3
+# §1; re-exported here so existing callers and monkeypatch targets
+# (tests use ``ev.HARNESS_VERSION``, ``ev.capture_run_metadata``,
+# ``ev._git_capture``, ``ev._hash_active_config``,
+# ``ev._SECRET_ENV_PATTERN``) keep resolving without modification.
+from integration.provenance import (  # noqa: E402
+    HARNESS_VERSION,
+    _SECRET_ENV_PATTERN,
+    _git_capture,
+    _hash_active_config,
+    capture_run_metadata,
 )
-
-
-def _git_capture(args, default="unknown"):
-    """Run a git command from REPO_ROOT and return stripped stdout.
-
-    Returns ``default`` on any failure (no git binary, not a repo,
-    timeout, non-zero exit). Used by ``capture_run_metadata`` so a
-    bad git environment never crashes the eval.
-    """
-    try:
-        proc = subprocess.run(
-            ["git", "-C", REPO_ROOT, *args],
-            capture_output=True, text=True, timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return default
-    if proc.returncode != 0:
-        return default
-    return proc.stdout.strip()
-
-
-def _hash_active_config():
-    """Compute SHA-256 of the canonicalised JSON dump of uas_config.load_config().
-
-    Loaded via ``importlib.util`` from ``REPO_ROOT/uas_config.py`` so
-    eval.py can run from a checkout where ``uas_config`` is not
-    importable via the normal sys.path. Returns ``"unavailable"`` on
-    any error.
-    """
-    import hashlib
-    import importlib.util
-    config_path = os.path.join(REPO_ROOT, "uas_config.py")
-    if not os.path.isfile(config_path):
-        return "unavailable"
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "uas_config", config_path
-        )
-        if spec is None or spec.loader is None:
-            return "unavailable"
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        cfg = mod.load_config()
-        canonical = json.dumps(cfg, sort_keys=True, default=str)
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    except Exception:
-        return "unavailable"
-
-
-def capture_run_metadata() -> dict:
-    """Capture per-invocation reproducibility metadata.
-
-    Returns a dict with the following keys:
-
-    - ``git_sha``: full SHA from ``git rev-parse HEAD``, or
-      ``"unknown"``.
-    - ``git_branch``: ``git rev-parse --abbrev-ref HEAD`` output, or
-      ``"unknown"``.
-    - ``git_dirty``: True iff ``git status --porcelain`` is non-empty.
-    - ``timestamp_utc``: ISO-8601 UTC timestamp at the moment of
-      capture.
-    - ``env_snapshot``: dict of every ``UAS_*`` env var set in
-      ``os.environ`` at capture time, with secret-suffixed keys
-      (``_TOKEN``, ``_KEY``, ``_SECRET``, ``_PASSWORD``, case-
-      insensitive) filtered out. ``ANTHROPIC_API_KEY`` is excluded
-      implicitly because it does not match the ``UAS_*`` prefix.
-    - ``config_hash``: SHA-256 hex of the canonicalised JSON dump of
-      ``uas_config.load_config()``, or ``"unavailable"``.
-    - ``harness_version``: ``HARNESS_VERSION`` constant.
-
-    Section 5's persistence layer stamps this dict onto every JSONL
-    row so any benchmark line can be traced to a specific commit and
-    config state.
-    """
-    import datetime
-    git_porcelain = _git_capture(["status", "--porcelain"], default="")
-    env_snapshot = {
-        k: v
-        for k, v in os.environ.items()
-        if k.startswith("UAS_") and not _SECRET_ENV_PATTERN.search(k)
-    }
-    return {
-        "git_sha": _git_capture(["rev-parse", "HEAD"]),
-        "git_branch": _git_capture(["rev-parse", "--abbrev-ref", "HEAD"]),
-        "git_dirty": bool(git_porcelain),
-        "timestamp_utc": datetime.datetime.now(
-            datetime.timezone.utc
-        ).isoformat(),
-        "env_snapshot": env_snapshot,
-        "config_hash": _hash_active_config(),
-        "harness_version": HARNESS_VERSION,
-    }
 
 
 def append_result_row(row, *, run_metadata, run_index,
@@ -242,148 +152,20 @@ ALLOWED_TIERS = ("trivial", "moderate", "hard", "open_ended")
 # is retained because even a single Opus 4.7 architect run can take
 # 10+ minutes; opt-in --runs N variance sweeps stay well inside one
 # token cycle but the machinery is harmless and useful in degraded
-# auth states.  Four-stage fallback:
-#   1. Self-refresh: exchange the eval token's own refresh_token at
-#      the Anthropic OAuth endpoint — no external dependency.
-#   2. Borrow from ~/.claude/ if it has a valid token.
-#   3. Force-refresh ~/.claude/ via ``claude -p ping``, then borrow.
-#   4. Give up and log the failure.
-_OAUTH_REFRESH_BUFFER = 3600  # seconds — refresh when < 1 hour left
-_DEFAULT_CLAUDE_CREDS = os.path.expanduser("~/.claude/.credentials.json")
-_OAUTH_TOKEN_ENDPOINT = "https://console.anthropic.com/v1/oauth/token"
-_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-
-
-def _read_token_expiry(creds_path):
-    """Return seconds remaining on the OAuth access token, or 0."""
-    try:
-        with open(creds_path) as f:
-            creds = json.load(f)
-        exp = creds.get("claudeAiOauth", {}).get("expiresAt", 0) / 1000
-        return max(0.0, exp - time.time())
-    except Exception:
-        return 0.0
-
-
-def _self_refresh_oauth(creds_path):
-    """Exchange the refresh token in *creds_path* for a new access token.
-
-    Hits the Anthropic OAuth token endpoint directly — no CLI, no
-    interactive session, works in detached ``nohup`` processes.
-    Returns True on success, False on any failure.
-    """
-    try:
-        with open(creds_path) as f:
-            creds = json.load(f)
-        oauth = creds.get("claudeAiOauth", {})
-        refresh_token = oauth.get("refreshToken")
-        if not refresh_token:
-            print("  [oauth] Self-refresh skip: no refreshToken in creds",
-                  file=sys.stderr)
-            return False
-        import httpx  # urllib.request hits Cloudflare 1010
-        resp = httpx.post(
-            _OAUTH_TOKEN_ENDPOINT,
-            json={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-                "client_id": _OAUTH_CLIENT_ID,
-            },
-            headers={
-                "User-Agent": "claude-code/1.0",
-                "Content-Type": "application/json",
-            },
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            body_snippet = resp.text[:300].replace("\n", " ")
-            print(f"  [oauth] Self-refresh HTTP {resp.status_code}: "
-                  f"{body_snippet}", file=sys.stderr)
-            return False
-        body = resp.json()
-        new_access = body.get("access_token")
-        new_refresh = body.get("refresh_token")
-        expires_in = body.get("expires_in", 28800)
-        if not new_access:
-            print("  [oauth] Self-refresh response missing access_token",
-                  file=sys.stderr)
-            return False
-        oauth["accessToken"] = new_access
-        if new_refresh:
-            oauth["refreshToken"] = new_refresh
-        oauth["expiresAt"] = int((time.time() + expires_in) * 1000)
-        creds["claudeAiOauth"] = oauth
-        with open(creds_path, "w") as f:
-            json.dump(creds, f)
-        return True
-    except Exception as e:
-        print(f"  [oauth] Self-refresh exception: "
-              f"{type(e).__name__}: {e}", file=sys.stderr)
-        return False
-
-
-def _maybe_refresh_oauth():
-    """Ensure eval-harness OAuth token has at least 1 hour of life.
-
-    Called between cases by the main loop.  Four-stage fallback:
-
-    1. Eval token (``UAS_AUTH_DIR``) valid for >1 hour → no-op.
-    2. Self-refresh: exchange the eval token's own ``refreshToken``
-       at the Anthropic OAuth endpoint.  Works in detached processes.
-    3. Default token (``~/.claude/``) valid for >1 hour → copy it.
-    4. Default token also near expiry → call ``claude -p ping`` to
-       refresh it, then copy.
-    """
-    eval_creds = os.path.join(UAS_AUTH_DIR, ".credentials.json")
-    remaining = _read_token_expiry(eval_creds)
-    if remaining > _OAUTH_REFRESH_BUFFER:
-        return  # plenty of time
-
-    # Stage 2: self-refresh using the refresh token.
-    if _self_refresh_oauth(eval_creds):
-        new_rem = _read_token_expiry(eval_creds)
-        print(f"  [oauth] Self-refreshed — {new_rem/3600:.1f}h "
-              f"remaining", file=sys.stderr)
-        return
-
-    # Stage 3: borrow from ~/.claude/
-    default_remaining = _read_token_expiry(_DEFAULT_CLAUDE_CREDS)
-    if default_remaining <= _OAUTH_REFRESH_BUFFER:
-        # Stage 4: force-refresh ~/.claude/ via claude -p
-        claude_path = shutil.which("claude")
-        if not claude_path:
-            print("  [oauth] Token expiring, claude CLI not found",
-                  file=sys.stderr)
-            return
-        try:
-            proc = subprocess.run(
-                [claude_path, "-p", "ping"],
-                capture_output=True, text=True,
-                timeout=120, stdin=subprocess.DEVNULL,
-            )
-            if proc.returncode != 0:
-                print(f"  [oauth] CLI refresh failed (exit "
-                      f"{proc.returncode}): "
-                      f"{proc.stderr[:200]}", file=sys.stderr)
-                return
-        except Exception as e:
-            print(f"  [oauth] CLI refresh error: {e}",
-                  file=sys.stderr)
-            return
-        default_remaining = _read_token_expiry(_DEFAULT_CLAUDE_CREDS)
-
-    # Copy valid default credentials into eval auth dir.
-    if default_remaining > _OAUTH_REFRESH_BUFFER:
-        try:
-            shutil.copy2(_DEFAULT_CLAUDE_CREDS, eval_creds)
-            new_rem = _read_token_expiry(eval_creds)
-            print(f"  [oauth] Token refreshed — {new_rem/3600:.1f}h "
-                  f"remaining", file=sys.stderr)
-        except Exception as e:
-            print(f"  [oauth] Copy failed: {e}", file=sys.stderr)
-    else:
-        print("  [oauth] Could not obtain valid token",
-              file=sys.stderr)
+# auth states. The four-stage refresh now lives in
+# integration/auth.py since Phase 3 §1 (the orchestrator imports the
+# same helpers); names are re-exported here so existing callers and
+# monkeypatch targets (tests use ``ev._maybe_refresh_oauth``) keep
+# resolving without modification.
+from integration.auth import (  # noqa: E402
+    _DEFAULT_CLAUDE_CREDS,
+    _OAUTH_CLIENT_ID,
+    _OAUTH_REFRESH_BUFFER,
+    _OAUTH_TOKEN_ENDPOINT,
+    _maybe_refresh_oauth,
+    _read_token_expiry,
+    _self_refresh_oauth,
+)
 
 
 def load_prompts(filter_pattern=None, tier=None):

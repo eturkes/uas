@@ -1146,79 +1146,211 @@ without burning architect time.
 
 **Carry-forward notes for Section 10.**
 
-1. **Workspace permission issue.** `integration/workspace/hello-file/
-   .uas_state/runs/<run_id>/specs/` from prior container runs is
-   owned by root and breaks `setup_workspace`'s `shutil.rmtree` /
-   `--clean`'s top-level rmtree. Section 4 already flagged this
-   for Section 10. Recommended fix: either run cleanup inside a
-   container (root-on-root works), or have the user manually
-   `sudo rm -rf integration/workspace/` once before Section 10
-   starts.
-2. **Tier 3 OAuth rate limit.** Per §8 carry-forward note 1: 5
-   parallel Opus 4.6 calls hit 429 on the OAuth tier instantly.
-   Section 10 will see this on every Tier 3 case across 3 runs
-   (5 cases × 3 runs × 5 samples = 75 parallel-bursts of 5 calls
-   each). Mitigation options: (a) lower `samples` to 3 in the
-   case files, (b) add a 429-aware retry loop in `llm_judge.py`,
-   (c) use a non-Opus model for Tier 3 (e.g., haiku-4-5 — already
-   shown to work in §8 acceptance smoke).
+1. **Workspace permission issue.** Resolved during the §10 cleanup
+   pass — `integration/workspace/` was wiped and recreated empty,
+   no remaining root-owned residue.
+2. **Tier 3 OAuth rate limit.** Moot under the post-completion
+   scope reduction (see "Scope reduced post-completion" note
+   below) — all five Tier 3 cases were deleted, so the
+   `llm_judge` parallel-sampling rate-limit risk no longer
+   applies to Section 10's run. Should Phase 4 re-introduce
+   open-ended cases, the original mitigations remain on file:
+   (a) lower `samples` per case, (b) add 429-aware retry to
+   `_call_anthropic`. Switching judge model is no longer an
+   option under the unified Opus 4.7 policy.
 3. **Local-mode auth path.** §1 carry-forward note 1 still stands:
    `eval.py --local` cannot find OAuth credentials. Section 10's
    end-to-end must use container mode. Fixing local-mode auth is
    out of Phase 1 scope.
-4. **`integration/data/` is now tracked.** A fresh checkout will
-   include all 14 fixtures. No setup beyond `git checkout` is
-   needed for the case set to load.
-5. **Tier 2 acceptance is observation-only.** "At least one Tier 2
-   case observably triggers a reflection, rewrite, or backtrack"
-   means Section 10 should grep the JSONL log's per-step
-   `rewrites` field (surfaced by §1) and the `attempt_total`
-   field for any value `> 1` on at least one Tier 2 row across
-   the 3 runs. The 10 Tier 2 cases are designed to make this
-   highly likely; if the architect somehow first-shots all 10 on
-   all 3 runs, Section 10 should investigate whether the cases
-   are too easy (and re-tighten Tier 2 in a follow-up commit
-   before Phase 2 baseline).
+4. **`integration/data/` is removed.** Deleted during the §10
+   scope-reduction cleanup along with all 14 fixture files; the
+   surviving `hello-file` case has no `setup_files`. A fresh
+   checkout no longer needs the directory.
+5. **Tier 2 acceptance is dropped.** The "≥1 Tier 2 case observably
+   triggers a reflection/rewrite/backtrack" criterion was retired
+   alongside Tier 2 itself in the §10 scope reduction. Phase 4 will
+   need its own mechanism-stress workload when ablation work
+   actually starts; the deleted cluster-targeted cases remain
+   recoverable from git history if useful then.
+
+**Scope reduced post-completion.**
+
+After §1–§9 closed, the project owner directed a scope reduction
+of the test suite to fit a ~10-minute budget instead of the
+original 9–14h full-benchmark run. Specifically:
+
+- 34 of the 35 authored cases were deleted in a single commit;
+  only `cases/trivial/hello-file.json` survives.
+- `integration/data/` (14 fixtures) was deleted — none of them
+  were referenced by `hello-file`.
+- Default `--runs` was lowered from 3 to 1 in `eval.py`. Multi-run
+  variance remains available via explicit `--runs N`.
+
+The §1–§8 infrastructure (metadata capture, JSONL persistence,
+per-tier aggregation, LLM-as-judge module, deterministic check
+types, etc.) is unchanged and still loads cleanly against the
+1-case suite — `--list` returns 1 case in tier `trivial`, the
+aggregator handles single-case input, and the per-tier report
+renders the one populated row. The cluster-targeted cases and
+fixture-content checks are recoverable from `git log` if Phase 4
+ever needs them; deletion is reversible. Per the project's
+"deletion is as valuable as addition" principle, the smaller
+surface is a feature, not a regression.
 
 ## Section 10 — `uas-eval` entry point + end-to-end validation
 
-**Goal.** Stable contract surface, then verify Phase 1's exit
-criterion: two consecutive runs on the same commit must produce
-statistically indistinguishable results.
+**Goal.** Stable contract surface, then run the reduced 1-case
+suite end-to-end on the unified Opus 4.7 policy and confirm
+every plumbing path produces the expected artefacts inside the
+~10-minute budget. The original "two consecutive runs produce
+statistically indistinguishable results" exit criterion was
+dropped under the §9 scope-reduction note above; with `--runs 1`
+as the default there is no in-default variance to compare. The
+multi-run path remains exercised by the §6 unit tests
+(`test_eval_variance.py`) and is opt-in via `--runs N`.
 
 **Steps.**
 
-1. Add a thin `uas-eval` shell wrapper at repo root:
-   `exec python3 -P -m integration.eval "$@"`. Permissions: `+x`.
-2. Add `integration/__init__.py` if missing so the module path
-   `integration.eval` is importable.
-3. Run `uas-eval --runs 3` end-to-end. Confirm:
-   - Exit code reflects pass-rate (preserve current "0 if all
-     passed else 1" — Phase 2 tightens the gate).
-   - JSONL log gains `35 * 3 = 105` rows.
-   - Aggregate file is well-formed.
-   - Per-tier table renders.
-   - Reproducibility metadata captured.
-4. Run `uas-eval --runs 3` a second time on the same commit, same
-   working tree, same env. Compare aggregate files: per-case
-   pass rates should overlap within 1 stdev for every case;
-   per-case wall times within 2 stdev.
-5. If the comparison fails, investigate before declaring Phase 1
-   complete. This is the noise floor that Phase 2 measurements
-   depend on; getting it wrong here corrupts everything downstream.
-6. Append both runs' aggregate files to this section's `Results`
-   subsection so the noise floor is on record before Phase 2 starts.
+1. ~~Add a thin `uas-eval` shell wrapper at repo root.~~
+   Done in commit `070e10f`. `uas-eval` is executable at repo
+   root and shells into `python3 -P -m integration.eval "$@"`.
+2. ~~Add `integration/__init__.py`.~~ Done; empty file present.
+3. Run `./uas-eval` (default args: 1 case, 1 run). Confirm:
+   - Exit code reflects pass-rate (`0` iff the case passed).
+   - JSONL log gains exactly **1 row** (1 case × 1 run).
+   - Aggregate file (`integration/eval_results_aggregate.json`)
+     is well-formed: `by_case` has 1 entry, `by_tier.trivial`
+     has `n_cases=1, n_rows=1`.
+   - Per-tier table renders (single `trivial` row).
+   - Reproducibility metadata captured (git_sha, git_branch,
+     git_dirty, config_hash, harness_version, env_snapshot,
+     timestamp_utc) and stamped on the JSONL row.
+   - Wallclock fits in the ~10-minute target. Acceptable
+     overshoot threshold: ≤15 min on Opus 4.7 (architect
+     retries can extend a single trivial case beyond the
+     nominal ~6–10 min observed). Anything beyond 15 min
+     warrants an investigation note in §10 Results.
+4. Append the run aggregate (and a one-paragraph wallclock
+   summary) to this section's `Results` subsection.
 
 **Acceptance.**
 
-- `./uas-eval --runs 3` is the canonical command and works from a
-  fresh checkout.
-- Two consecutive runs produce statistically indistinguishable
-  per-case pass rates (within 1 stdev) and per-case wall times
-  (within 2 stdev).
-- Phase 1 exit criterion from `ROADMAP.md` is satisfied.
+- `./uas-eval` is the canonical command and works from a fresh
+  checkout (no `--runs` flag needed for the default smoke).
+- The single end-to-end run produces a well-formed JSONL row
+  + aggregate + per-tier table within ~10 minutes (≤15 min
+  hard ceiling).
+- Phase 1 exit criterion (per the softened ROADMAP wording):
+  `uas-eval` runs end-to-end, produces deterministic pass/fail,
+  and appends to the persistent log. Multi-run variance bounds
+  are no longer required for Phase 1 closure.
 
-**Status:** pending
+**Status:** completed
+
+**Results.**
+
+End-to-end `./uas-eval` run on the reduced 1-case suite under the
+unified Opus 4.7 policy. Run started 2026-04-27T07:21Z on
+`fa1c8fe0` (dirty), commenced after a self-refresh failure that
+fell through cleanly to stage 2 (borrowed the host
+`~/.claude/.credentials.json` token, 2.1h remaining). Image was
+auto-rebuilt on first invocation.
+
+| Metric | Value |
+|---|---|
+| Wallclock | **2309.9 s ≈ 38.5 min** |
+| LLM time | 2372.6 s |
+| Sandbox time | 2.65 s |
+| Pass | **FAIL** (0/1) |
+| Architect status | `blocked` |
+| Steps planned | 5 |
+| Step status counts | 4 failed, 1 completed |
+| Attempts (sum of `rewrites + 1`) | 9 |
+| Tokens | 100 in, 221 796 out |
+| Architect-reported cost | $16.64 |
+| Workspace size | populated `report.py`, `test_report.py`, no `hello.txt` |
+| Exit code | 1 |
+
+**Harness verdict — every plumbing path passed.** Image build,
+OAuth fallback, container launch, architect subprocess, output
+JSON capture, deterministic check execution (`file_exists` +
+`file_contains`), Section 1 metric surfacing, Section 4
+reproducibility metadata, Section 5 JSONL append, Section 6
+aggregator + report, Section 7 by-tier rollup all worked
+exactly as designed. The JSONL row carries every documented
+field: `git_sha=fa1c8fe0…`, `git_branch=main`, `git_dirty=true`,
+`harness_version=phase1`, `config_hash=e3ed7766…`, full
+`env_snapshot`, ISO-8601 `timestamp_utc`, all per-step token /
+cost / rewrites counters, full step-status breakdown,
+human-readable `log` field with the architect's tabular summary.
+The aggregate file's `by_case.hello-file` and `by_tier.trivial`
+blocks contain `n_runs=1, n_cases=1, n_rows=1` with mean ± 0
+stdev — exactly the documented N=1 shape.
+
+**Investigation note (≥15 min ceiling tripped).**
+Wallclock came in at 2.5× the §10 acceptance hard ceiling. This
+is not a harness fault — it is the architect-on-Opus-4.7
+behaviour exposed by the harness, and is the kind of signal
+Phase 1 was built to surface:
+
+1. The architect decomposed `Create a file called hello.txt` into
+   **5 steps**, expanding it into a TDD pair for the file
+   creator, an explicit verification step, a TDD pair for a
+   "report" step, and a final report step. The TDD gate
+   (mechanism row #8 / cluster F) and the planning-gate
+   coverage filler (#10) both fired on a goal that arguably
+   needs neither.
+2. Step 1 (`test: Write tests for hello.txt creation`) consumed
+   1483 s and $8.47, completing 2 spec rewrites before the
+   3-strike spec budget ran out. The blocker on every attempt
+   was the validator scanning source files for hardcoded
+   `/workspace` literals (mechanism row #32 output-quality
+   guardrail). The architect's own progress.md self-diagnosed
+   this twice and kept emitting the same shape.
+3. Step 4 (`test: Write tests for created-file report`) **passed**
+   on its own (2155 s, $8.10) — confirming the architect can
+   complete an isolated TDD test step. The failure mode is
+   specifically the spec-rewrite-cycle on Step 1, not a global
+   architect breakdown.
+4. Steps 2 (`Write hello.txt`), 3 (`Verify`), and 5 (`Report`)
+   were never run because the dependency-skip mechanism short-
+   circuits any step whose ancestors failed. `hello.txt` itself
+   was never created — the architect spent 38 min and $16 on
+   tests for files that never existed.
+
+This is precisely the failure pattern the ROADMAP's "scaffold
+ceiling" thesis describes: a more capable model takes the
+scaffold's hints harder, runs every guardrail at full strength,
+and the scaffold's coupling cost dominates the trivial task.
+Phase 4 ablation will be the place to test whether removing the
+TDD gate, the planning coverage filler, the spec-rewrite loop,
+or the `/workspace`-literal validator changes the outcome on
+the same hello-file goal. The data needed to make that call
+now exists; producing it was Phase 1's job.
+
+**Acceptance criteria, reconciled:**
+
+- `./uas-eval` is the canonical command from a fresh checkout —
+  satisfied.
+- Well-formed JSONL row + aggregate + per-tier table — satisfied.
+- ~10-min target — **not satisfied** (38.5 min, 2.5× over the
+  hard ceiling). Investigation note above.
+- Phase 1 exit criterion (softened): runs end-to-end, produces
+  deterministic pass/fail, appends to persistent log —
+  satisfied. The fail is a real architect-quality fail, not a
+  harness fault.
+
+**Phase 1 is functionally complete.** The harness runs, the
+log persists, the metadata round-trips, the metrics are
+observable. Whether to formally close Phase 1 (`Mark Phase 1
+complete` commit + `Remove completed PLAN file` commit) and
+move to Phase 2 vs. patch §10 to address the budget overshoot
+first is the next decision point and is left to the project
+owner. Phase 2's "baseline measurement" deliverable would
+inherit the same wallclock characteristics under the current
+scaffold and would benefit from a Phase 4-style ablation
+performed first — but that is a roadmap question, not a §10
+question.
 
 ---
 

@@ -238,9 +238,11 @@ ALLOWED_TIERS = ("trivial", "moderate", "hard", "open_ended")
 # before invoking uas-eval.
 
 # OAuth token refresh.  Claude Max OAuth tokens last ~8 hours.
-# Long benchmark runs (--runs 3 over 35 cases is ~30 hours on Haiku)
-# outlive a single token cycle.  Four-stage fallback ensures the eval
-# can survive multi-day runs even as a detached background process:
+# The token-refresh fallback predates the 1-case scope reduction and
+# is retained because even a single Opus 4.7 architect run can take
+# 10+ minutes; opt-in --runs N variance sweeps stay well inside one
+# token cycle but the machinery is harmless and useful in degraded
+# auth states.  Four-stage fallback:
 #   1. Self-refresh: exchange the eval token's own refresh_token at
 #      the Anthropic OAuth endpoint — no external dependency.
 #   2. Borrow from ~/.claude/ if it has a valid token.
@@ -1379,7 +1381,7 @@ def main():
         help="Override path for the append-only JSONL results log "
              "(default: integration/eval_results.jsonl)",
     )
-    _default_runs = int(os.environ.get("UAS_EVAL_RUNS", "3"))
+    _default_runs = int(os.environ.get("UAS_EVAL_RUNS", "1"))
     parser.add_argument(
         "--runs", type=int, default=_default_runs,
         help=(

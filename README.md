@@ -487,7 +487,11 @@ remaining time, so the user always knows the system is still working.
 
 **Terminal dashboard:** During execution, a Rich Live dashboard shows
 the DAG structure with step statuses (pending/executing/completed/failed),
-active step details, and a timing breakdown. All panels support
+active step details, and a timing breakdown.
+
+![Terminal Dashboard](screenshot.png)
+
+All panels support
 scrolling: use `↑`/`↓` or `j`/`k` to scroll, `Tab` to cycle the
 focused panel (DAG, Activity Log, Claude Code Output), `g`/`G` or
 `Home`/`End` to jump to the top or bottom, and `PgUp`/`PgDn` for

@@ -185,13 +185,14 @@ scheduling-and-budgeting role.
 
 ## Current phase
 
-**Phase 3 — Orchestrator core** (active)
+**Phase 4 — Prune** (active)
 
-Phase 2 closed at the same commit that added its "Completed phases"
-entry below. Phase 3 builds the orchestrator daemon — see the
-Phase 3 entry under "Phase details" for the deliverables, and
-`docs/substrate.md` for the substrate APIs the daemon will consume.
-The Phase 3 PLAN is pending — draft it before executing any Phase 3
+Phase 3 closed at the same commit that added its "Completed phases"
+entry below. Phase 4 deletes most of the existing scaffold — see
+`docs/cut_surface.md` for the Phase 2 §4 sized estimate the prune
+verdicts start from, and the Phase 4 entry under "Phase details"
+below for the keep list, cut surface, and deliverables. The
+Phase 4 PLAN is pending — draft it before executing any Phase 4
 work, and pause for user review before starting Section 1 (per the
 decision protocol in `CLAUDE.md`).
 
@@ -202,8 +203,8 @@ decision protocol in `CLAUDE.md`).
 | 0 | Audit | completed | Catalog mechanisms, eval infra, flags, dependencies. No code changes. |
 | 1 | Eval harness hardening | completed | Turn eval.py into canonical measurement tool. Curated benchmark. Deterministic + LLM-judge grading. Persistent results with noise bounds. |
 | 2 | Substrate verification | completed | Verify empirical TBDs (statusline-during-print, percentage-cap behavior). Document substrate boundaries from Phase 1. Estimate cut surface. |
-| 3 | Orchestrator core | **active** | Build the daemon: usage-limit ledger from statusline JSON, paid-buffer ledger from per-call usage, headless-worker primitive, three-state policy machine, task-state surviving invocation boundaries. |
-| 4 | Prune | pending | Delete most of the scaffold. Default verdict on any mechanism is **cut**; keep list is short and explicit (Docker sandbox, OAuth refresh, JSONL log, provenance, workspace isolation, resume-from-JSONL, eval harness substrate). README rewritten from scratch. |
+| 3 | Orchestrator core | completed | Build the daemon: usage-limit ledger from statusline JSON, paid-buffer ledger from per-call usage, headless-worker primitive, three-state policy machine, task-state surviving invocation boundaries. |
+| 4 | Prune | **active** | Delete most of the scaffold. Default verdict on any mechanism is **cut**; keep list is short and explicit (Docker sandbox, OAuth refresh, JSONL log, provenance, workspace isolation, resume-from-JSONL, eval harness substrate). README rewritten from scratch. |
 | 5 | Policy & long-horizon UX | pending | Policy configuration interface, task definition spec, resume-summary format, human-checkpoint design. End-to-end real long-horizon task with project owner observing. |
 | 6+ | Informed iteration | pending | Add new orchestrator capabilities responsibly, each justified by real-task evidence not speculation. Slim discipline (no re-implementing what Claude Code does natively) holds indefinitely. |
 
@@ -719,6 +720,68 @@ bounded to verification + documentation — no orchestrator code, no
 per-mechanism verdicts, no architectural commitments. The phase's
 working file `PLAN.md` was removed on phase close per project
 convention.
+
+### Phase 3 — Orchestrator core
+
+Closed in the same commit that populated this entry. Deliverables
+completed: §1 skeleton + substrate-extraction (auth / provenance
+lifted into `integration/`, `uas-orchestrate` shell wrapper,
+`orchestrator/cli.py` argparse skeleton, `docs/orchestrator.md`
+design notes); §2 headless-worker primitive
+(`orchestrator/worker.py` spawning `claude --print
+--dangerously-skip-permissions --output-format stream-json
+--verbose` against `uas-engine:latest` with line-by-line capture,
+container cleanup on timeout, OAuth refresh + image precondition);
+§3 usage-limit ledger (`orchestrator/rate_ledger.py` consuming the
+Phase 2 §1 stream-json `rate_limit_event` read pattern;
+`current_status` / `internal_count` / `check_divergence`); §4
+paid-buffer ledger (`orchestrator/buffer_ledger.py` +
+`orchestrator/pricing.py` against the project's pricing table;
+locally-priced `cost_usd` plus `claude_reported_cost_usd` carrying
+Claude's own figure for policy threshold use per the live-trace
+~5× divergence finding); §5 three-state policy machine
+(`orchestrator/policy.py` decide-rules go / pause_until /
+wrap_up / halt with rule-order seven_day → five_hour → buffer →
+default; ablatable `enabled = false` short-circuit; per-task TOML
+override merged over `orchestrator/policy.default.toml`); §6
+task-state model (`orchestrator/task.py` Task / Subtask / Decision
+dataclasses, `task_events.jsonl` per-task append-only log, write-
+path operations enqueue / start / complete / fail / record_decision;
+`orchestrator/workspace.py` resume-safe per-task workspace setup);
+§7 resume-from-state replay (`load_task` reconstructs Task by
+forward-replaying the JSONL, end-of-replay sweep re-enqueues
+`in_flight` subtasks back to `pending` and writes a `task_resume`
+decision, per-event `survives_git_sha_flip` gate; `cmd_start` /
+`cmd_resume` / `cmd_status` wired); §8 end-to-end window-boundary
+run (main orchestration loop driving policy → spawn → repeat;
+`--simulate-rate-status` flag; `cmd_pause` / `cmd_halt`
+decision-recording exit subcommands;
+`orchestrator/cases/synthetic-multistep{,-policy}.toml`).
+
+End-to-end §8 run on commit `4754488` (dirty, with §8 working
+changes) under the unified Opus 4.7 policy — though the headless
+`claude --print` path defaulted to Haiku 4.5 per the CLI's own
+default for that subcommand — produced a clean 3-subtask run
+(20.4 s wallclock, $0.1531 reported buffer drain, all four state
+artefacts populated) plus a clean explicit pause + resume cycle
+without operator intervention beyond the three subcommand calls.
+Phase 3 exit criteria satisfied; full per-step detail lives in
+the §8 Results subsection of `PLAN.md`'s git history. The phase's
+working file `PLAN.md` was removed on phase close per project
+convention.
+
+Substrate findings to carry into Phase 4 / 5 / 6+: (a) the live
+worker's `rate_limit_info.resetsAt` is a unix epoch integer in
+real stream-json output, not the ISO-8601 string `policy.py`'s
+docstring claims — `_parse_iso8601` returns `None` for numeric
+input which is harmless under §8 because the orchestrator does
+not consume `pause_until.until`, but the substrate-doc claim
+needs an amendment when a real long-horizon run actually wants
+to wait until `until`; (b) the OAuth four-stage refresh path
+fired a `[oauth] Self-refresh HTTP 400: invalid_grant` then
+recovered via fallback on first worker spawn — the
+keep-listed substrate works as documented, surfacing because the
+trace would otherwise look alarming.
 
 ## Amending this roadmap
 

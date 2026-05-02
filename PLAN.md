@@ -272,7 +272,115 @@ it does not use `orchestrator/sandbox.py::run_in_sandbox`.
 - Engine image is built on first call if absent and reused on
   subsequent calls.
 
-**Status:** pending
+**Results.**
+
+- `orchestrator/container.py` (~80 lines) ships a narrow
+  `ensure_engine_image()` that builds `uas-engine:latest` from
+  `<repo>/Containerfile` only when the image is absent locally,
+  plus `find_engine()` (podman preferred, docker fallback) and
+  an `EngineUnavailable` error type. Staleness vs source-mtime
+  is **not** rechecked here (eval.py's `_ensure_image` keeps
+  that role for the eval harness); the orchestrator's narrower
+  contract is "image is available before spawn".
+- `orchestrator/worker.py` (~190 lines) ships `spawn_worker(
+  prompt, *, workspace, task_id, subtask_id, timeout_seconds=
+  None) -> dict` returning the documented shape `{exit_code,
+  rate_limit_events, result, output, raw_lines}`. OAuth refresh
+  fires before every spawn via
+  `integration.auth._maybe_refresh_oauth()`; the engine-image
+  precondition follows. The container name is
+  `uas-orchestrator-<safe(task_id)>-<safe(subtask_id)>-<8 hex>`
+  via a small `_safe_segment()` sanitiser. Stream-json output
+  drains on a background thread so a long-running spawn cannot
+  block the OS pipe buffer; on timeout the container is killed
+  via fire-and-forget `kill` + `rm -f` (mirrors
+  `orchestrator/sandbox.py`) and `result.terminal_reason` is
+  set to `"timeout"`.
+- **Engine-flag deviation from PLAN literal.** PLAN step 4
+  prescribed `--storage-driver=vfs` "mirrors `orchestrator/
+  sandbox.py` precedent". That flag is podman-specific; on this
+  host only docker is on PATH and docker rejects the flag
+  (whereas `integration/eval.py`'s container path already runs
+  on docker without it). Resolved with a tiny `_engine_prefix()`
+  helper that emits `--storage-driver=vfs` only when the binary
+  basename is `podman`. Substrate doc §1 phrases this surface
+  as "podman/docker run" (engine-agnostic) so the deviation
+  preserves PLAN intent. New unit test
+  `test_docker_omits_storage_driver_flag` pins the gate.
+- **Worker entrypoint shape.** `Containerfile` declares
+  `ENTRYPOINT ["/uas/entrypoint.sh"]`; that script only forwards
+  argv when `UAS_TASK` / `UAS_GOAL` / `UAS_GOAL_FILE` is set
+  (otherwise it launches interactive `claude` or runs
+  `architect.main`). Worker overrides with `--entrypoint
+  /bin/bash` plus a one-line shell payload that (a) installs a
+  `chown -R $UAS_HOST_UID:$UAS_HOST_GID /workspace` EXIT trap
+  when the host UID is non-root, mirroring entrypoint.sh, and
+  (b) `exec`s `claude --print --dangerously-skip-permissions
+  --output-format stream-json --verbose "$UAS_WORKER_PROMPT"`.
+  The prompt is forwarded via env var rather than as a shell
+  positional so callers do not have to worry about quoting
+  arbitrary text. `cd /workspace` is set so claude defaults its
+  cwd to the bind-mounted workspace.
+- `tests/test_orchestrator_worker.py` (~140 lines, 8 tests).
+  Pure-Python helper coverage (run on every CI invocation):
+  `TestSafeSegment` × 4 (alnum passthrough, unsafe-run collapse,
+  empty fallback, leading/trailing strip), `TestBuildCommand` ×
+  3 (required flags, host UID forwarding, docker storage-driver
+  gate). Live integration coverage (`@pytest.mark.integration`):
+  `TestSpawnWorkerLive::test_trivial_done_prompt` spawns the
+  PLAN-prescribed `Reply with the literal word: done` worker,
+  asserts `exit_code == 0`, `usage.input_tokens > 0`,
+  `len(rate_limit_events) >= 1`, `"done"` substring in
+  `output.lower()`, and that no `uas-orchestrator-*` containers
+  survive afterwards.
+- **Live spawn confirmation (Opus 4.7).** Manual one-shot
+  invocation against an ephemeral `tmp_path` workspace returned
+  the documented shape end-to-end. Wallclock 2.89 s; claude
+  self-reported `duration_ms=1475`, `duration_api_ms=2318`.
+  Captured 4 raw stream-json lines (`system/init`,
+  `rate_limit_event`, `assistant`, `result`). Terminal `result`
+  carried `usage = {input_tokens: 6, cache_read_input_tokens:
+  19903, output_tokens: 5, ...}` and `total_cost_usd =
+  0.010512`. Single `rate_limit_event` with
+  `rate_limit_info.status="allowed"`, `rateLimitType="five_hour"`,
+  `isUsingOverage=false`, plus `overageStatus`/`overageResetsAt`
+  fields — exactly the schema substrate doc §8 documents and §3
+  will consume. Output text reconstructed cleanly to `'done'`.
+- **§4 hand-off note.** `result["model"]` is `None`. Claude
+  Code emits the active model id under `result["modelUsage"]`
+  (keyed by model id, e.g. `claude-opus-4-7`) and on every
+  `assistant` event's `message.model` field. §4's
+  `BufferLedger.record` must therefore source the model id
+  from `next(iter(result["modelUsage"]))` (or one of the
+  assistant messages) rather than from a top-level `model`
+  key. Worker's return shape is unchanged; the consumer in §4
+  picks the right key.
+- **Test outcomes.** `python3 -m pytest
+  tests/test_orchestrator_worker.py -x -q` → 7 passed, 1
+  deselected (the live test). `python3 -m pytest
+  tests/test_orchestrator_worker.py::TestSpawnWorkerLive -m
+  integration -s -v --timeout=600` → 1 passed in 2.66 s.
+  `python3 -m pytest tests/ -q --timeout=120` → 1813 passed, 4
+  deselected, 5 m 02 s — +7 over §1 baseline (1806) matching
+  the seven new helper tests; no regression on existing tests.
+  `docker ps -a --filter name=uas-orchestrator-` → empty after
+  every run (cleanup contract honoured).
+- **Engine image lifecycle.** Pre-existing
+  `uas-engine:latest` image was reused; conftest.py's
+  session-scoped `uas_engine` fixture rebuilt once during the
+  integration session because new Phase 3 source files (the §2
+  module additions) bumped the source mtime past the image's
+  build time. `orchestrator.container.ensure_engine_image()`
+  itself was a no-op because the image was present at every
+  call site; the absent-build path is exercisable by removing
+  the image (`docker rmi uas-engine:latest`) before the next
+  run.
+- **NEEDS-PHASE-3-DECISION trio status.** Still untouched —
+  §2 consumed neither `uas_config.py`, `uas_hooks.py`, nor
+  `uas.example.toml`. Default-CUT trajectory continues to hold
+  per the §1 decision summary.
+
+**Status:** completed
 
 ## Section 3 — Usage-limit ledger
 

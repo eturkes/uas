@@ -499,6 +499,103 @@ class TestTotalSpent:
 
 
 # ---------------------------------------------------------------------------
+# total_spent_reported() — added in §5 per §4 hand-off note
+# ---------------------------------------------------------------------------
+
+class TestTotalSpentReported:
+    """Sum of claude_reported_cost_usd; consumed by the §5 policy machine."""
+
+    def test_missing_file_returns_zero(self, ledger):
+        assert ledger.total_spent_reported("never-recorded") == 0.0
+
+    def test_single_row_returns_claude_reported_cost(self, ledger):
+        # ``total_cost_usd`` flows through to ``claude_reported_cost_usd``.
+        ledger.record(
+            make_result(input_tokens=1_000_000, total_cost_usd=0.05),
+            run_metadata=make_metadata(),
+            task_id="t1", subtask_id="s1",
+        )
+        assert ledger.total_spent_reported("t1") == pytest.approx(0.05)
+
+    def test_sums_across_rows(self, ledger):
+        ledger.record(
+            make_result(total_cost_usd=0.10),
+            run_metadata=make_metadata(),
+            task_id="t1", subtask_id="s1",
+        )
+        ledger.record(
+            make_result(total_cost_usd=0.20),
+            run_metadata=make_metadata(),
+            task_id="t1", subtask_id="s2",
+        )
+        ledger.record(
+            make_result(total_cost_usd=0.30),
+            run_metadata=make_metadata(),
+            task_id="t1", subtask_id="s3",
+        )
+        assert ledger.total_spent_reported("t1") == pytest.approx(0.60)
+
+    def test_skips_rows_with_none_reported_cost(self, ledger):
+        # ``total_cost_usd=None`` is what Claude emits on some
+        # hard-failure shapes; ``record`` still writes the row.
+        ledger.record(
+            make_result(total_cost_usd=0.10),
+            run_metadata=make_metadata(),
+            task_id="t1", subtask_id="s1",
+        )
+        ledger.record(
+            make_result(total_cost_usd=None),
+            run_metadata=make_metadata(),
+            task_id="t1", subtask_id="s2",
+        )
+        assert ledger.total_spent_reported("t1") == pytest.approx(0.10)
+
+    def test_skips_rows_missing_reported_cost_field(self, ledger, tmp_path):
+        # Older rows from before the field existed should not blow up.
+        path = os.path.join(str(tmp_path), "t1", "buffer.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "event": "buffer",
+                "cost_usd": 0.50,
+                "claude_reported_cost_usd": 0.75,
+            }) + "\n")
+            # No claude_reported_cost_usd key at all.
+            fh.write(json.dumps({
+                "event": "buffer",
+                "cost_usd": 1.00,
+            }) + "\n")
+            fh.write(json.dumps({
+                "event": "buffer",
+                "cost_usd": 2.00,
+                "claude_reported_cost_usd": "free",
+            }) + "\n")
+        assert ledger.total_spent_reported("t1") == pytest.approx(0.75)
+
+    def test_diverges_from_total_spent(self, ledger):
+        """Both sums coexist — one is the local figure, one is Claude's.
+
+        Recreates the §4 live-trace finding (~5x divergence) on a
+        controlled fixture so future readers can see the property
+        the policy hand-off note relied on.
+        """
+        ledger.record(
+            make_result(
+                input_tokens=1_000_000,  # local cost = $15.00 at Opus
+                output_tokens=0,         # keep arithmetic clean
+                total_cost_usd=75.00,    # Claude's reported figure
+            ),
+            run_metadata=make_metadata(),
+            task_id="t1", subtask_id="s1",
+        )
+        local = ledger.total_spent("t1")
+        reported = ledger.total_spent_reported("t1")
+        assert local == pytest.approx(15.00)
+        assert reported == pytest.approx(75.00)
+        assert reported > local
+
+
+# ---------------------------------------------------------------------------
 # total_spent_since()
 # ---------------------------------------------------------------------------
 

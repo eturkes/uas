@@ -1,0 +1,52 @@
+# Phase 3 §5 — committed default policy.
+#
+# Per-task overrides live at orchestrator/state/<task_id>/policy.toml
+# and merge over this default key-by-key (omitted keys keep their
+# default value). See orchestrator/policy.py for the rule semantics
+# and the validator schema.
+
+# Master ablation flag (CLAUDE.md core principle 2). Set false to
+# short-circuit Policy.decide() to {"action": "go"} regardless of
+# cap state — the principle-2 disable required so the policy machine
+# can be ablated cleanly when measuring its contribution.
+enabled = true
+
+[five_hour]
+# Action when the 5h soft cap fires (rate_status.five_hour.status
+# != "allowed"). Currently only "pause" is a valid value: the rule
+# in Policy.decide() pairs 5h-non-allowed with the pause action.
+# Validator rejects other strings until §5+ informed iteration adds
+# a corresponding rule.
+soft_cap_action = "pause"
+
+[seven_day]
+# Action when the 7d soft cap fires. Currently only "wrap_up" is
+# valid. Validator rejects other strings until §5+ adds the
+# corresponding rule.
+soft_cap_action = "wrap_up"
+
+[buffer]
+# Hard stop in USD. Threshold compared against the sum of
+# claude_reported_cost_usd across the task's buffer.jsonl rows
+# (BufferLedger.total_spent_reported) per the Phase 3 §4 hand-off
+# note in PLAN git history — Claude's own cost figure tracks real
+# buffer drain ~5× more accurately than the locally-priced cost
+# does. 200.00 USD is the pivot-section default the project owner
+# called out as the conservative ceiling; revisit when real-task
+# experience shows a different breakpoint matters.
+hard_stop_usd = 200.00
+
+# Informational warn threshold (USD). Currently surfaced as a
+# config knob only — Policy.decide() does not change action when
+# crossed, leaving the orchestrator's main loop free to log /
+# notify on its own schedule (avoids per-decide stderr spam).
+warn_usd = 100.00
+
+[divergence]
+# Threshold for RateLedger.check_divergence(). When the in-window
+# five_hour internal_count exceeds this while the latest five_hour
+# event still reports status="allowed", the recorded rate-limit
+# signal has fallen behind reality and a stderr alert fires. Set
+# above the typical worker count per 5h window under normal
+# operation; 50 is a conservative starting point.
+threshold = 50

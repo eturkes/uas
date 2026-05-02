@@ -156,6 +156,33 @@ class BufferLedger:
                 total += cost
         return total
 
+    def total_spent_reported(self, task_id: str) -> float:
+        """Sum of ``claude_reported_cost_usd`` across every row.
+
+        Per the Phase 3 §4 hand-off note (PLAN.md git history), the
+        §5 policy machine reads this rather than ``total_spent``: a
+        live trace showed Claude's own figure ran ~5× above the
+        locally-priced cost, so a ``hard_stop_usd`` threshold against
+        the local sum would only trip at ~5× the buffer drain the
+        operator actually authorised. ``claude_reported_cost_usd``
+        tracks real billing; ``cost_usd`` stays the
+        pricing-table-grounded figure used for audit and divergence
+        detection.
+
+        Rows whose ``claude_reported_cost_usd`` is missing or
+        non-numeric (older rows, hard-failure rows where Claude
+        emitted no terminal ``result``, synthetic test fixtures)
+        contribute zero. The locally-priced row is preserved
+        as-is — only its contribution to the reported sum is
+        skipped.
+        """
+        total = 0.0
+        for row in self._iter_rows(task_id):
+            cost = row.get("claude_reported_cost_usd")
+            if isinstance(cost, (int, float)):
+                total += cost
+        return total
+
     def total_spent_since(self, task_id: str, *, since_iso: str) -> float:
         """Sum of ``cost_usd`` for rows with ``timestamp_utc >= since_iso``.
 

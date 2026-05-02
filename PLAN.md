@@ -838,7 +838,185 @@ principle 2.
 - Per-task TOML overrides the default committed file.
 - Tests pass.
 
-**Status:** pending
+**Results.**
+
+- `orchestrator/policy.py` (~360 lines) ships the `Policy` class
+  with `load()` / `decide()` plus the `PolicyDecision` TypedDict,
+  the `ActionVerdict` Literal, the `PolicyError(ValueError)`
+  exception, and the four module-level helpers
+  (`_parse_iso8601`, `_load_toml`, `_deep_merge`, plus per-field
+  validators). Construction goes through `Policy.load(default_path,
+  task_id, state_root)` so callers never bypass the validator;
+  the `Policy.__init__` is exposed for tests that want to skip
+  the TOML round-trip but is not the main entry point. Module
+  docstring records the rule order, the time semantics
+  (`resetsAt` ISO-8601 → unix epoch), and the §4 hand-off
+  pointer to `total_spent_reported`.
+- `orchestrator/policy.default.toml` (52 lines) holds the
+  committed defaults exactly as the PLAN's "Default thresholds"
+  list specifies — `enabled = true`,
+  `[five_hour] soft_cap_action = "pause"`,
+  `[seven_day] soft_cap_action = "wrap_up"`,
+  `[buffer] hard_stop_usd = 200.00 / warn_usd = 100.00`,
+  `[divergence] threshold = 50`. Inline comments explain each
+  field's role and the §4 hand-off rationale for the
+  `hard_stop_usd` figure; per-task overrides land at
+  `<state_root>/<task_id>/policy.toml` and merge field-by-field
+  via `_deep_merge`.
+- **PLAN-deviation absorbed (§4 hand-off, cost source-of-truth).**
+  PLAN §4 step 3 had documented but not implemented the §5
+  recommendation that the policy machine read
+  `claude_reported_cost_usd` instead of `cost_usd`. §5 absorbs
+  it by adding `BufferLedger.total_spent_reported(task_id) ->
+  float` (sums `claude_reported_cost_usd`; rows missing or
+  carrying non-numeric values contribute 0) and pointing
+  `Policy.decide()`'s `buffer_total` parameter at it via the
+  module docstring. The local-cost `total_spent` method is
+  preserved unchanged for audit / divergence detection. The
+  PLAN's `hard_stop_usd = 200.00` default now means real
+  Claude-reported buffer drain rather than a 5×-off figure
+  against the locally-priced ledger.
+- **Validator-strictness decision (preserved verbatim).** PLAN
+  step 4 calls out "unknown-action TOML value → load error"
+  without specifying the allowed set. Chose to restrict
+  `five_hour.soft_cap_action` to `{"pause"}` and
+  `seven_day.soft_cap_action` to `{"wrap_up"}` exactly — the
+  only pairings the PLAN's step 2 rule list actually fires on.
+  Loosening to also accept `"halt"` or cross-paired actions is
+  left for §5+ informed iteration where a corresponding rule
+  expansion would land. This guarantees the policy machine can
+  never sit in a "valid TOML, rule does not fire, behaviour
+  silently broken" state. The two `_VALID_*_ACTIONS` tuples in
+  `policy.py` are the single source of truth; `_require_action`
+  raises `PolicyError` on violations with a message naming the
+  field and the allowed list.
+- **Bool-on-numeric reject.** Python's `bool` subclasses `int`,
+  so `hard_stop_usd = true` would silently coerce to `1.0` if
+  the validator only checked `isinstance(value, (int, float))`.
+  `_require_number` and `_require_int` explicitly reject
+  `bool` first; tested by
+  `TestPolicyValidator::test_bool_hard_stop_rejected`.
+- **`now` parameter accepted but not consumed.** PLAN signature
+  lists `now: float` on `decide()`. The current ruleset doesn't
+  read it — the rule precedence is purely on
+  `(rate_status, buffer_total, policy_config)`. The parameter
+  is retained for forward compatibility (and so callers that
+  already compute `time.time()` for logging do not have to
+  change the call site if §5+ adds time-based rules). Docstring
+  flags this explicitly and `decide()` body opens with a
+  visible `del now` so future readers see the deliberate
+  non-use.
+- **`resetsAt` parsing fallback.** `_parse_iso8601` accepts the
+  `Z` suffix Claude Code emits (rewrites to `+00:00`), accepts
+  explicit offsets, treats naive timestamps as UTC, and returns
+  `None` on missing / malformed input. When `decide()` is
+  called for `pause_until` and the parser returns `None`, the
+  function still returns `pause_until` but with `until=None` and
+  prints a stderr alert flagging that the orchestrator's main
+  loop must choose a fallback wake time. Decision deferred to
+  §7/§8 where the loop is wired up.
+- **Decision precedence (preserved verbatim).** The four-rule
+  cascade in `decide()` is evaluated top-to-bottom; first match
+  wins:
+  1. `not self.enabled` → `go` (ablation short-circuit).
+  2. `buffer_total >= hard_stop_usd` → `halt`.
+  3. seven_day non-allowed + soft_cap_action == "wrap_up" → `wrap_up`.
+  4. five_hour non-allowed + soft_cap_action == "pause" →
+     `pause_until`.
+  5. (default) → `go`.
+  Tests assert the precedence cascade explicitly — buffer beats
+  seven_day beats five_hour beats default — so future edits to
+  rule order break a named test rather than silently changing
+  policy.
+- **Defensive snapshot handling.** `decide()` tolerates an
+  empty `rate_status`, `rate_status` with `None` snapshots, and
+  snapshots with `None` status fields — all flow to "go" as if
+  no signal was emitted. This matches what
+  `RateLedger.current_status()` returns on a fresh task with no
+  recorded events; without the defensive checks the
+  orchestrator would crash on first decide() call before the
+  first worker had emitted anything.
+- `tests/test_orchestrator_policy.py` (~660 lines, 60 tests
+  across 10 classes): `TestParseISO8601` × 8 (Z suffix, +00:00
+  suffix, non-UTC offset, naive→UTC, malformed→None,
+  empty→None, None→None, non-string→None);
+  `TestDeepMerge` × 6 (top-level override, missing-key add,
+  nested merge, non-dict replaces dict, dict replaces non-dict,
+  no input mutation); `TestPolicyLoad` × 8 (synthetic default,
+  shipped default loadable, partial override merge,
+  enabled-via-override, missing-override-falls-back,
+  missing-default-raises, no-task-id-skips-override-lookup,
+  malformed-TOML-raises); `TestPolicyValidator` × 15 (every
+  required field type-checked + every soft_cap_action
+  allow-list violation); `TestDecideGo` × 5 (all-allowed,
+  empty rate_status, both-snapshots-None, status-None inside
+  snapshot, buffer-just-below-hard_stop); `TestDecideHalt` × 4
+  (at-boundary, far-above, halt-wins-over-7d,
+  halt-wins-over-5h); `TestDecideWrapUp` × 3 (warning,
+  limit_reached, 7d-wins-over-5h); `TestDecidePauseUntil` × 4
+  (warning, limit_reached, missing-resetsAt, malformed-resetsAt
+  — both stderr-asserted); `TestDecideAblation` × 5 (no-trigger,
+  short-circuits-buffer, short-circuits-7d, short-circuits-5h,
+  via-per-task-override); `TestPerTaskOverride` × 2
+  (lower-hard-stop-triggers-earlier, divergence-threshold-override).
+- `tests/test_orchestrator_buffer_ledger.py` extended with
+  `TestTotalSpentReported` × 6 covering the new method:
+  missing-file→0, single-row, sum-across-rows, skip-None-cost,
+  skip-missing-field, divergence-from-`total_spent` on a
+  controlled fixture (~5× ratio reproducing the §4 live-trace
+  finding so the property the policy hand-off note relied on is
+  pinned by a named test). Total
+  `tests/test_orchestrator_buffer_ledger.py` test count rises
+  to 49 (was 43 at §4 close).
+- **NEEDS-PHASE-3-DECISION trio status.** Still untouched. §5
+  consumed neither `uas_config.py`, `uas_hooks.py`, nor
+  `uas.example.toml` — `policy.py` uses `tomllib` directly with
+  the small per-section validator helpers it owns. The
+  default-CUT trajectory continues to hold per the §1 decision
+  summary; if §6–§8 also close without consumption, all three
+  default to CUT for Phase 4.
+- **§6 hand-off note (decision-event shape).** §6's
+  `task_events.jsonl` will record `policy_pause` /
+  `policy_wrap_up` / `policy_halt` decision rows. `decide()`'s
+  return shape (`{action, reason, until}`) is the natural
+  payload for those events — the `reason` string is already
+  formatted for human consumption ("buffer_total 1.50 >=
+  hard_stop_usd 1.50", "seven_day.status='warning' and ...");
+  the `action` field maps 1:1 to the decision `kind`
+  enumeration in the §6 PLAN. Recommend §6's `Decision.note`
+  field carry the verbatim `reason` string from `decide()` so
+  the timeline in `task_events.jsonl` is grep-friendly without
+  an extra reconstruction step.
+- **§5 lines added vs PLAN scope.** 360 (policy.py) + 52
+  (policy.default.toml) + 660 (tests) + 38 (BufferLedger
+  total_spent_reported addition + tests) ≈ 1110 net lines.
+  Larger than §3's ~520 because the §5 surface is wider
+  (validator + decide rules + helpers + ablation + override
+  merge) and because every transition cell of the
+  (rate_status × buffer_total) table got a named test per the
+  PLAN's "each transition cell" acceptance bullet.
+- **Test outcomes.** `python3 -m pytest
+  tests/test_orchestrator_policy.py -v --timeout=60` → 60
+  passed in 0.24 s. `python3 -m pytest
+  tests/test_orchestrator_buffer_ledger.py -v --timeout=60` →
+  49 passed in 0.21 s (was 43 at §4 close; +6 from the new
+  `TestTotalSpentReported` class). `python3 -m pytest
+  tests/test_orchestrator_buffer_ledger.py
+  tests/test_orchestrator_policy.py
+  tests/test_orchestrator_rate_ledger.py
+  tests/test_orchestrator_worker.py -v --timeout=60` → 142
+  passed, 1 deselected (live), 0.38 s. `python3 -m pytest
+  tests/ -q --timeout=120` → **1948 passed, 4 deselected**
+  in 305.34 s (5 m 05 s) — exactly +66 over the §4 baseline
+  (1882), matching the 60 new policy tests + 6 new
+  `TestTotalSpentReported` tests; no regressions on existing
+  tests. Live integration test (`@pytest.mark.integration`)
+  not re-run for §5 because §5's worker.py changes are nil
+  (only the BufferLedger gained a new method; the §4 wire-in
+  is unchanged); the §4 live trace's assertions on
+  buffer.jsonl still hold.
+
+**Status:** completed
 
 ## Section 6 — Task-state model
 

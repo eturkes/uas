@@ -586,7 +586,197 @@ apply a pricing table, persist cumulative spend, expose
   on synthetic fixtures.
 - Tests pass.
 
-**Status:** pending
+**Results.**
+
+- `orchestrator/pricing.py` (119 lines) ships a hard-coded
+  ``PRICING: dict[str, dict[str, float]]`` keyed by model id with
+  four ``*_per_m`` rate fields per entry, plus
+  ``compute_cost(model_id, usage) -> float`` and a
+  ``UnknownModelError(KeyError)`` subclass. Sums input + output +
+  cache_creation + cache_read tokens at their respective rates;
+  missing keys (and ``None`` values, which some SDK versions emit
+  for absent counts) are treated as 0. Subclassing ``KeyError``
+  preserves backward compatibility for any caller that catches
+  ``KeyError`` generically.
+- **Pricing-table contents (PLAN-deviation, Haiku entry).** PLAN
+  step 1 prescribed a single-entry table — ``claude-opus-4-7``
+  only. The §4 live wire-in test against a real
+  ``Reply with done`` worker surfaced a second model id:
+  ``claude-haiku-4-5-20251001`` appears in
+  ``result.modelUsage`` (and as the first key in some traces)
+  even when the worker is launched with no ``--model`` flag.
+  Claude Code 2026 routes some internal turns through Haiku
+  regardless of the user-default Opus 4.7 setting; this is a
+  Claude Code routing behaviour the orchestrator cannot opt out
+  of, not a violation of ROADMAP §Model policy. Adding the
+  Haiku 4.5 entry alongside Opus is the minimal deviation that
+  lets the ledger function on real workers while preserving the
+  PLAN's "raise on unknown model" safety property — and the
+  pricing-table comment block explicitly calls this out so the
+  next reader does not re-introduce a single-entry table by
+  mistake.
+- **Pricing-table approximations.** Two known imprecisions are
+  documented inline in the module docstring rather than fixed,
+  on the principle that the §5 policy machine wants an
+  approximate dollar-headroom signal not a billing-grade figure:
+  (i) Opus rates use the ≤200K-prompt tier; the >200K tier
+  (1.5× input, 1.5× output) is not modelled separately —
+  acceptable until long-context prompts become routine in the
+  orchestrator's traffic mix. (ii) Cache-write rate uses the
+  5-minute tier (1.25× input); the 1-hour tier (2× input) is
+  not modelled separately even though real workers do hit it
+  (the earlier-failing trace showed ``ephemeral_1h_input_tokens
+  = 3760`` of 1h-tier cache writes). Under-bills 1h cache writes
+  by ~40%; revisit if §5 buffer accuracy matters below the 10%
+  margin.
+- `orchestrator/buffer_ledger.py` (176 lines) ships the
+  ``BufferLedger`` class with ``record``, ``total_spent``,
+  ``total_spent_since``, plus the module-level
+  ``DEFAULT_STATE_ROOT`` constant and an internal ``_iter_rows``
+  reader. Layout mirrors §3's ``RateLedger`` exactly: same
+  ``state_root`` constructor parameter, same per-task directory
+  ``<state_root>/<task_id>/`` (filename ``buffer.jsonl``), same
+  forgiving-reader posture (malformed lines, non-dict rows, blank
+  lines all silently skipped). ``total_spent_since`` compares
+  ISO-8601 timestamps lexicographically — safe because every
+  row's ``timestamp_utc`` carries the ``+00:00`` suffix from
+  ``capture_run_metadata``.
+- **Row schema decision (preserved verbatim).** Each persisted
+  row is ``{**run_metadata, "event": "buffer", "task_id",
+  "subtask_id", "model", "usage", "cost_usd",
+  "claude_reported_cost_usd"}``. ``cost_usd`` is the
+  locally-computed figure via ``pricing.compute_cost``;
+  ``claude_reported_cost_usd`` mirrors Claude's own
+  ``result.total_cost_usd`` for traceability. The §5 policy
+  machine reads ``cost_usd`` for its threshold checks (PLAN's
+  intent — pricing table is the project-controlled ground
+  truth); the parallel ``claude_reported_cost_usd`` field is for
+  audit and divergence detection.
+- **Model-id resolution.** The PLAN step 2 wording "Reads
+  ``result["model"]``" is misleading on real Claude Code
+  traces — ``result["model"]`` is always ``None`` per the §2
+  hand-off note. ``_extract_model_id`` implements the documented
+  fallback chain: top-level ``result["model"]`` if a non-empty
+  string (legacy/older SDK), else the first key of
+  ``result["modelUsage"]`` (Claude Code 2026's actual emission
+  shape), else ``ValueError`` with a descriptive message. The
+  ``ValueError`` failure mode is distinguishable from
+  ``UnknownModelError`` (resolved id but no pricing row) so the
+  policy machine can route them differently if §5 ever needs
+  to.
+- **Wire-in (PLAN step 3).** ``orchestrator/worker.py`` adds
+  ``buffer_ledger`` to its imports and inserts a 9-line block
+  immediately after ``rate_ledger.record``: instantiate
+  ``BufferLedger(state_root=state_root)`` and call ``record(
+  result, run_metadata=metadata, task_id=task_id, subtask_id=
+  subtask_id)`` when ``state["result"]`` is non-None and carries
+  a dict-typed ``usage`` field. Hard failures (no terminal
+  ``result`` event at all) and timeouts (synthetic result dict
+  with no ``usage`` key) skip the call — the audit trail for
+  those failures lives in §6's ``task_events.jsonl``. The shared
+  ``metadata`` dict from the rate-ledger call is reused so both
+  ledgers stamp the same provenance snapshot for the same worker
+  call.
+- **Live spawn confirmation (Opus 4.7 + Haiku 4.5).** Manual
+  one-shot ``spawn_worker`` invocation against an ephemeral
+  ``tmp_path`` workspace produced one well-formed ``buffer.jsonl``
+  row carrying ``model="claude-haiku-4-5-20251001"``,
+  ``usage={input_tokens: 6, cache_read_input_tokens: 19903,
+  output_tokens: 5, ...}``, ``cost_usd=0.0020213``,
+  ``claude_reported_cost_usd=0.0105175``. Run wallclock 2.66 s
+  including image rebuild (the Phase 3 §4 source additions
+  bumped the source mtime past the engine image's build time,
+  triggering one rebuild on first §4 live run). ``result.
+  modelUsage`` carried both keys
+  (``[claude-haiku-4-5-20251001, claude-opus-4-7]``);
+  ``_extract_model_id`` returned the first key per design.
+- **Cost-discrepancy finding (~5x under-bill on this trace).**
+  Local ``cost_usd`` ($0.0020) vs Claude's
+  ``claude_reported_cost_usd`` ($0.0105) diverged by ~5× on the
+  trivial sample run. Likely root cause: (a) top-level
+  ``result.usage`` reports the dominant-iteration token counts
+  but ``modelUsage`` lists every model the trace touched, so
+  applying one model's rates to the top-level totals
+  systematically under-bills multi-model fan-out; and
+  (b) Claude Code's ``total_cost_usd`` likely includes
+  session-level overhead tokens (system init, prompt-cache
+  bookkeeping, statusline pings) that never surface in the
+  ``usage`` payload. Recording both numbers preserves the audit
+  trail; §5 hand-off below pins the policy decision.
+- `tests/test_orchestrator_buffer_ledger.py` (598 lines, 43
+  tests across 8 classes): ``TestPricingTable`` × 3 (entry
+  exists, all 4 fields present, ``UnknownModelError``
+  subclasses ``KeyError``), ``TestComputeCost`` × 10 (per-rate
+  unit math, mixed sums, zero/missing/None handling, unknown
+  raise + KeyError compatibility), ``TestExtractModelId`` × 5
+  (top-level model wins, modelUsage fallback, empty-string
+  fallback, raises on neither, raises on empty modelUsage),
+  ``TestRecord`` × 10 (file creation, return value, persisted
+  cost matches compute_cost, model id, usage round-trip,
+  claude_reported_cost handling, run-metadata stamping, append,
+  task isolation), ``TestRecordErrors`` × 3 (unknown-model
+  propagates with no row written, unresolvable id raises
+  ValueError, missing usage dict treated as empty), ``TestTotalSpent``
+  × 5 (missing file, single row, sum across rows, malformed
+  line skip, non-numeric cost skip), ``TestTotalSpentSince``
+  × 5 (missing file, ≥-since filter, equality boundary
+  included, all-before returns 0, missing/None timestamp skip),
+  ``TestDefaultStateRoot`` × 2 (default path shape +
+  constructor wiring). All pure-Python, no engine.
+- **§2 live test extended for §4 verification.**
+  ``tests/test_orchestrator_worker.py``'s
+  ``TestSpawnWorkerLive::test_trivial_done_prompt`` now also
+  asserts that exactly one ``buffer.jsonl`` row was written
+  under ``<tmp_path>/state/<task_id>/``, that ``cost_usd`` is
+  numeric and positive, that ``model`` is a non-empty string,
+  and that the persisted ``usage`` dict round-trips the
+  worker's ``result.usage``. The 8-line assertion block lives
+  inside the same ``@pytest.mark.integration`` test rather
+  than as a separate test so the wire-in is verified in the
+  same Claude call that exercises §2.
+- **Test outcomes.** ``python3 -m pytest
+  tests/test_orchestrator_buffer_ledger.py -v`` → 43 passed in
+  0.13 s. ``python3 -m pytest
+  tests/test_orchestrator_buffer_ledger.py
+  tests/test_orchestrator_worker.py
+  tests/test_orchestrator_rate_ledger.py -v --timeout=120`` →
+  76 passed, 1 deselected (live), 0.19 s. ``python3 -m pytest
+  tests/ -q --timeout=120`` → 1882 passed, 4 deselected,
+  5 m 25 s — exactly +43 over the §3 baseline (1839), no
+  regressions. ``python3 -m pytest
+  tests/test_orchestrator_worker.py::TestSpawnWorkerLive -m
+  integration -s -v --timeout=600`` → 1 passed in 3.64 s
+  (excluding the engine rebuild step); both rate-ledger and
+  buffer-ledger wire-ins exercised end-to-end against a real
+  worker, ``buffer.jsonl`` assertions held. Post-test check:
+  ``<repo>/orchestrator/state/`` does not exist (state_root
+  override worked, no repo pollution).
+- **NEEDS-PHASE-3-DECISION trio status.** Still untouched. §4
+  consumed neither ``uas_config.py``, ``uas_hooks.py``, nor
+  ``uas.example.toml`` — the pricing table is hard-coded in
+  ``orchestrator/pricing.py``, the ledger paths come from a
+  per-task ``state_root`` parameter. Default-CUT trajectory
+  continues to hold per the §1 decision summary.
+- **§5 hand-off note (cost source-of-truth).** §5's
+  ``Policy.decide()`` reads ``buffer_total`` derived from
+  ``BufferLedger.total_spent()``, which sums the
+  locally-computed ``cost_usd``. Given the ~5× discrepancy
+  found in §4's live trace, the policy machine's
+  ``hard_stop_usd`` threshold will trigger far above the actual
+  buffer drain unless §5 either (a) switches the source of
+  truth to ``claude_reported_cost_usd`` (a parallel sum method
+  on ``BufferLedger`` would be the minimal addition), or
+  (b) sets the threshold against the locally-computed under-bill
+  with intent — i.e. treat ``hard_stop_usd`` as a
+  pricing-table-grounded ceiling, knowing real spend tracks
+  higher. The PLAN's §5 step 1 default of
+  ``buffer.hard_stop_usd = 200.00`` predates this finding and
+  should be revisited at §5 start. Recommend option (a): add
+  ``total_spent_reported(task_id) -> float`` to the ledger and
+  switch §5's ``buffer_total`` source. Logged here so §5 does
+  not silently inherit a 5×-off threshold semantics.
+
+**Status:** completed
 
 ## Section 5 — Three-state policy machine
 

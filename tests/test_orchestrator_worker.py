@@ -18,6 +18,7 @@ The pure-Python helpers in ``orchestrator.worker`` (``_safe_segment``,
 exercise on every CI run.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -156,6 +157,37 @@ class TestSpawnWorkerLive:
         )
         assert "done" in result["output"].lower(), (
             f"Expected 'done' in output; got {result['output']!r}"
+        )
+
+        # §4 wire-in: a buffer.jsonl row was written, cost was
+        # computed against the pricing table, and the original
+        # usage dict round-tripped.
+        buffer_path = os.path.join(
+            str(tmp_path), "state", "phase3-section2", "buffer.jsonl",
+        )
+        assert os.path.isfile(buffer_path), (
+            f"Expected buffer.jsonl at {buffer_path}; "
+            f"directory contains: {os.listdir(os.path.dirname(buffer_path))}"
+        )
+        with open(buffer_path, "r", encoding="utf-8") as fh:
+            buffer_rows = [json.loads(l) for l in fh if l.strip()]
+        assert len(buffer_rows) == 1, (
+            f"Expected exactly one buffer row; got {len(buffer_rows)}"
+        )
+        row = buffer_rows[0]
+        assert row["event"] == "buffer"
+        assert row["task_id"] == "phase3-section2"
+        assert row["subtask_id"] == "trivial-done"
+        assert isinstance(row["cost_usd"], (int, float))
+        assert row["cost_usd"] > 0, (
+            f"Expected nonzero cost_usd; got {row['cost_usd']}"
+        )
+        assert isinstance(row["model"], str) and row["model"], (
+            f"Expected resolved Claude model id; got {row['model']!r}"
+        )
+        assert row["usage"] == usage, (
+            "Persisted usage dict diverged from worker result.usage; "
+            f"row={row['usage']!r} result={usage!r}"
         )
 
         # Confirm cleanup left no stale orchestrator-managed containers.

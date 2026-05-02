@@ -20,7 +20,7 @@ import threading
 import uuid
 
 from integration import auth, provenance
-from orchestrator import container, rate_ledger
+from orchestrator import buffer_ledger, container, rate_ledger
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -231,6 +231,20 @@ def spawn_worker(
     ledger.record(
         rate_limit_events, run_metadata=metadata, task_id=task_id,
     )
+
+    # §4: persist paid-buffer cost when the worker produced a terminal
+    # ``result`` event with usage data. Hard failures (no result line
+    # at all) and timeouts (synthetic result dict carries no ``usage``
+    # key) skip this step — those failure modes have no token data to
+    # cost out, and §6's task_events.jsonl will log them separately.
+    result_obj = state["result"]
+    if result_obj is not None and isinstance(result_obj.get("usage"), dict):
+        buffer_ledger.BufferLedger(state_root=state_root).record(
+            result_obj,
+            run_metadata=metadata,
+            task_id=task_id,
+            subtask_id=subtask_id,
+        )
 
     if timed_out:
         return {

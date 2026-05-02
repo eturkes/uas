@@ -19,8 +19,8 @@ import subprocess
 import threading
 import uuid
 
-from integration import auth
-from orchestrator import container
+from integration import auth, provenance
+from orchestrator import container, rate_ledger
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -125,6 +125,7 @@ def spawn_worker(
     task_id: str,
     subtask_id: str,
     timeout_seconds: int | None = None,
+    state_root: str | None = None,
 ) -> dict:
     """Spawn one headless Claude Code worker and return its result.
 
@@ -132,7 +133,14 @@ def spawn_worker(
     ensures ``uas-engine:latest`` exists before the spawn (substrate
     §1 Gap precondition). Reads the worker's stream-json output
     line-by-line on a background thread so a long-running spawn
-    cannot block the reader's pipe buffer.
+    cannot block the reader's pipe buffer. Persists every
+    ``rate_limit_event`` from the run via ``rate_ledger.RateLedger``
+    before returning, regardless of exit code.
+
+    ``state_root`` overrides the default
+    ``<repo>/orchestrator/state`` location for ledger persistence;
+    tests pass a ``tmp_path`` so the suite never writes into the
+    canonical repo state directory.
 
     Returns a dict with keys ``exit_code``, ``rate_limit_events``,
     ``result``, ``output``, ``raw_lines``. On timeout the container
@@ -212,6 +220,17 @@ def spawn_worker(
         reader.join(timeout=5)
         if proc.stdout is not None:
             proc.stdout.close()
+
+    # Persist rate_limit_events before returning, regardless of exit
+    # code or timeout — events emitted before a hard failure or kill
+    # are still useful for the policy machine.
+    ledger = rate_ledger.RateLedger(state_root=state_root)
+    metadata = provenance.capture_run_metadata(
+        include_orchestrator_version=True,
+    )
+    ledger.record(
+        rate_limit_events, run_metadata=metadata, task_id=task_id,
+    )
 
     if timed_out:
         return {

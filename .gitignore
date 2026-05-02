@@ -23,6 +23,9 @@ integration/.uas_auth/
 integration/.uas_state/
 integration/.judge_cache.json
 
+# Orchestrator per-task runtime state (Phase 3 §3+)
+orchestrator/state/
+
 # Past run workspaces (contain large generated artifacts)
 rehab/
 

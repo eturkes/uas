@@ -437,7 +437,101 @@ message-count-divergence sanity check per ROADMAP.
 - Divergence check triggers on synthetic test conditions.
 - Tests pass.
 
-**Status:** pending
+**Results.**
+
+- `orchestrator/rate_ledger.py` (~190 lines) ships the `RateLedger`
+  class with `record`, `current_status`, `internal_count`,
+  `check_divergence`, plus the `DEFAULT_STATE_ROOT` module
+  constant and an internal `_iter_events` reader. The class is a
+  stateless wrapper bound to a `state_root` path at construction
+  time so tests can redirect persistence to a `tmp_path` rather
+  than monkeypatch a module global.
+- **Row schema decision (preserved verbatim).** Each persisted
+  row is `{**run_metadata, "event": "rate_limit", "task_id":
+  <id>, "rate_limit_event": <original event>}` — the upstream
+  stream-json event nests under one key rather than being
+  flattened, so the §2 schema (`type`, `uuid`, `session_id`,
+  `rate_limit_info.{status,resetsAt,rateLimitType,overageStatus,
+  overageResetsAt,isUsingOverage}`) round-trips intact and
+  future schema additions land without a migration.
+- **`internal_count` window semantics.** Counts five_hour events
+  whose own `rate_limit_info.resetsAt` matches the most-recent-
+  seen value among five_hour rows. When the 5h window flips (new
+  event with a larger `resetsAt`), older-window rows drop out and
+  the count effectively "resets" — the behaviour the PLAN's
+  "internal_count() resets correctly across resetsAt boundaries"
+  acceptance asks for. seven_day events are excluded from the
+  tally (the divergence check is scoped to the 5h cap).
+- **`check_divergence` is strict-greater-than (`>`).** PLAN
+  wording was "exceeds threshold"; chose `>` not `>=`, pinned by
+  `test_threshold_at_count_does_not_fire`. Fires only when both
+  conditions hold: latest five_hour `status == "allowed"` AND
+  in-window `internal_count > threshold`. Stderr alert format is
+  `[rate_ledger] divergence: task_id=<id> internal_count=<n> >
+  threshold=<t> while five_hour.status='allowed'; ...`.
+- **Wire-in (PLAN step 3).** `orchestrator/worker.py::spawn_worker`
+  gained a `state_root: str | None = None` kwarg and a single
+  post-spawn call to `RateLedger(state_root=state_root).record(
+  rate_limit_events, run_metadata=metadata, task_id=task_id)`
+  with `metadata = provenance.capture_run_metadata(
+  include_orchestrator_version=True)`. The call lives between the
+  `proc.wait` / timeout block and the return statements so events
+  emitted before a timeout (or before a hard failure with no
+  terminal `result`) are still durably persisted — matches the
+  PLAN's "regardless of exit code" wording. Worker rows therefore
+  carry both `harness_version` and `orchestrator_version` (eval
+  rows continue to carry `harness_version` only, per the
+  Phase 3 §1 opt-in design).
+- **§2 live test updated.** `tests/test_orchestrator_worker.py`'s
+  `TestSpawnWorkerLive::test_trivial_done_prompt` now passes
+  `state_root=str(tmp_path / "state")` so the live spawn no
+  longer writes to `<repo>/orchestrator/state/`. No other §2
+  tests touched; the helper-test surface is unchanged.
+- **`.gitignore` updated.** Added `orchestrator/state/` under a
+  new "Orchestrator per-task runtime state (Phase 3 §3+)"
+  section. First time anything is persisted under that path, so
+  the rule lands here rather than waiting for §6 / §7.
+- `tests/test_orchestrator_rate_ledger.py` (~330 lines, 26
+  tests across 5 classes): `TestRecord` × 6 (file creation, row
+  schema, metadata stamping, empty-noop, append-across-calls,
+  round-trip preservation, task isolation), `TestCurrentStatus`
+  × 7 (missing file, five_hour-only, both rate types, latest-
+  per-type, buffer-state preservation, malformed-line skip,
+  unknown-rate-type ignore), `TestInternalCount` × 5 (missing,
+  in-window, seven_day exclusion, single window flip, three-
+  window walk), `TestCheckDivergence` × 6 (no data, below
+  threshold, non-allowed status, fires + logs, equality boundary,
+  window flip clears), `TestDefaultStateRoot` × 2 (default path
+  shape + constructor wiring). All pure-Python, no engine.
+- **NEEDS-PHASE-3-DECISION trio status.** Still untouched. §3
+  consumed neither `uas_config.py`, `uas_hooks.py`, nor
+  `uas.example.toml` — the per-task `state_root` parameterisation
+  needed nothing from the layered config loader. Default-CUT
+  trajectory holds for now per the §1 decision summary.
+- **§4 hand-off note.** §4's `BufferLedger` will mirror this
+  layout: per-task `buffer.jsonl` under the same
+  `<state_root>/<task_id>/` directory, same `state_root`
+  constructor parameter, same `event="..."` discriminator
+  pattern (likely `event="buffer"`). The §2 Results' model-id
+  hand-off note (`result["model"]` is None; the active model id
+  lives under `result["modelUsage"]`'s key or any `assistant`
+  event's `message.model`) remains the relevant pointer for §4.
+- **Test outcomes.** `python3 -m pytest
+  tests/test_orchestrator_rate_ledger.py -v` → 26 passed in
+  0.13 s. `python3 -m pytest
+  tests/test_orchestrator_worker.py -v` → 7 passed, 1 deselected
+  (live), 0.07 s — confirms the §3 wire-in didn't break §2's
+  helper coverage. `python3 -m pytest tests/ -q --timeout=120` →
+  1839 passed, 4 deselected, 5 m 45 s — exactly +26 over the §2
+  baseline (1813), no regressions. `python3 -m pytest
+  tests/test_orchestrator_worker.py::TestSpawnWorkerLive -m
+  integration -s -v --timeout=600` → 1 passed in 4.14 s; the
+  live spawn exercised the wire-in path against a real worker
+  and the assertion suite (rate_limit_events ≥ 1, etc.) held.
+  Post-test check: `<repo>/orchestrator/state/` does not exist
+  (state_root override worked, no repo pollution).
+
+**Status:** completed
 
 ## Section 4 — Paid-buffer ledger
 

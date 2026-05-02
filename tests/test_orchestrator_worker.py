@@ -124,12 +124,16 @@ class TestSpawnWorkerLive:
         self, require_auth, uas_engine, tmp_path,
     ):
         """Spawn a worker that should reply with 'done' and verify shape."""
+        # state_root redirects §3's rate-ledger persistence into
+        # tmp_path so the suite never writes into the canonical
+        # <repo>/orchestrator/state directory.
         result = worker.spawn_worker(
             "Reply with only the literal word: done",
             workspace=str(tmp_path),
             task_id="phase3-section2",
             subtask_id="trivial-done",
             timeout_seconds=300,
+            state_root=str(tmp_path / "state"),
         )
 
         # Surface the captured raw lines on failure so the cause is

@@ -1,10 +1,11 @@
-"""Long-horizon task state model for Phase 3 §6.
+"""Long-horizon task state model for Phase 3 §6 + §7.
 
 Defines the ``Task`` / ``Subtask`` / ``Decision`` dataclasses, the
 per-task append-only event log at
-``<state_root>/<task_id>/task_events.jsonl``, and the operations
-that mutate ``Task`` in-memory state while writing one event row
-per call.
+``<state_root>/<task_id>/task_events.jsonl``, the operations that
+mutate ``Task`` in-memory state while writing one event row per
+call, and the §7 ``load_task`` replay that reconstructs a ``Task``
+from its persisted log.
 
 Persistence layout mirrors §3 / §4: per-task directory, append-only
 JSONL, every row stamped with
@@ -13,11 +14,10 @@ synthetic ``event=...`` discriminator so this file coexists cleanly
 with ``rate_limits.jsonl`` and ``buffer.jsonl`` in the same
 directory.
 
-Replay (§7's ``load_task``, not in this file) reads the JSONL
-forward and reconstructs the ``Task`` by applying each event's
-mutation in order. Each operation here is therefore designed so
-its persisted event carries enough payload to reproduce its
-in-memory effect.
+Replay (``load_task``) reads the JSONL forward and reconstructs the
+``Task`` by applying each event's mutation in order. Each operation
+here is therefore designed so its persisted event carries enough
+payload to reproduce its in-memory effect.
 
 Event types written by this module:
 
@@ -38,13 +38,20 @@ Event types written by this module:
   canonical Decision kinds (policy_pause / wrap_up / halt,
   worker_spawn / complete / fail, task_create / task_resume).
 
-§7 will add an additional ``task_resume`` event when ``load_task``
-re-enqueues in-flight subtasks.
+Per-event resume gate (§7). Every persisted row carries a
+``survives_git_sha_flip: bool`` field (default ``True``). On
+replay, rows with ``survives_git_sha_flip == False`` whose recorded
+``git_sha`` differs from the current commit are dropped with a
+stderr note — the per-event escape hatch for events that
+explicitly depend on tree state. ``True`` is the safe default per
+``docs/substrate.md`` §6: a too-strict gate would erase progress
+across normal long-horizon edits.
 """
 
 import datetime
 import json
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from typing import Literal
@@ -282,7 +289,13 @@ class Task:
     def _events_path(self) -> str:
         return os.path.join(self.state_root, self.task_id, "task_events.jsonl")
 
-    def _append_event(self, event_type: str, payload: dict) -> None:
+    def _append_event(
+        self,
+        event_type: str,
+        payload: dict,
+        *,
+        survives_git_sha_flip: bool = True,
+    ) -> None:
         """Append one event row to ``task_events.jsonl``.
 
         Stamps every row with ``capture_run_metadata(
@@ -290,6 +303,13 @@ class Task:
         the same provenance fingerprint §3 / §4 use, plus the
         ``event`` discriminator and ``task_id`` for cross-file
         correlation.
+
+        ``survives_git_sha_flip`` is the per-event resume gate
+        consumed by ``load_task``. Default ``True`` — events
+        survive normal long-horizon code edits. Callers writing
+        events that explicitly depend on tree state pass ``False``;
+        ``load_task`` will drop those events on replay if the
+        current ``git_sha`` differs from the recorded one.
         """
         path = self._events_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -300,6 +320,7 @@ class Task:
             **metadata,
             "event": event_type,
             "task_id": self.task_id,
+            "survives_git_sha_flip": survives_git_sha_flip,
             **payload,
         }
         with open(path, "a", encoding="utf-8") as fh:
@@ -455,3 +476,213 @@ class Task:
             {"kind": kind, "note": note, "decision_timestamp": timestamp},
         )
         return decision
+
+
+# ---------------------------------------------------------------------------
+# §7 — Resume-from-state
+# ---------------------------------------------------------------------------
+
+
+def _events_path_for(state_root: str, task_id: str) -> str:
+    return os.path.join(state_root, task_id, "task_events.jsonl")
+
+
+def load_task(
+    task_id: str,
+    *,
+    state_root: str | None = None,
+    mark_resume: bool = True,
+) -> Task:
+    """Reconstruct a ``Task`` from its persisted ``task_events.jsonl``.
+
+    Reads the log forward and applies each event's recorded
+    mutation to a fresh ``Task`` in order. Replay is deliberately
+    tolerant: blank / malformed / unknown-event lines are skipped,
+    state transitions are applied directly without the write-path
+    validators (``start_subtask`` does not require ``status ==
+    'pending'`` here, etc.) so a normal start → kill → restart
+    sequence does not crash on the original ``start_subtask``
+    event.
+
+    Per-event resume gate. Each row carries
+    ``survives_git_sha_flip`` (default ``True`` for missing,
+    matching pre-§7 events). Rows with the field set to ``False``
+    are dropped when their recorded ``git_sha`` differs from the
+    current commit; a stderr note records each drop.
+
+    End-of-replay sweep. Any subtask still ``in_flight`` when the
+    log is exhausted is re-enqueued as ``pending`` with
+    ``started_at`` cleared. A ``task_resume`` decision is then
+    appended to the in-memory ``decisions`` list AND persisted
+    to the log so future replays observe the resumption boundary.
+    Subsequent ``start_subtask`` events that would have re-set the
+    same subtask to ``in_flight`` are tolerated by the
+    no-validator replay.
+
+    ``mark_resume=False`` skips the in-flight reset and the
+    ``task_resume`` write, returning a read-only snapshot of the
+    persisted state. Used by ``cmd_status`` so a status print does
+    not pollute the log with a resume marker.
+
+    Raises ``TaskError`` if the log is missing or contains no
+    ``task_create`` event (an unrecoverable corruption).
+    """
+    if not isinstance(task_id, str) or not task_id:
+        raise TaskError(f"task_id must be a non-empty string; got {task_id!r}")
+
+    sr = state_root if state_root is not None else DEFAULT_STATE_ROOT
+    events_path = _events_path_for(sr, task_id)
+    if not os.path.isfile(events_path):
+        raise TaskError(f"task_events.jsonl not found: {events_path}")
+
+    current_sha = provenance._git_capture(["rev-parse", "HEAD"])
+
+    task: Task | None = None
+    skipped_sha_drift = 0
+
+    with open(events_path, "r", encoding="utf-8") as fh:
+        for lineno, raw_line in enumerate(fh, 1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                # Forgiving reader: malformed rows are dropped silently.
+                # Same posture as RateLedger / BufferLedger.
+                continue
+            if not isinstance(row, dict):
+                continue
+
+            survives = row.get("survives_git_sha_flip", True)
+            if not survives and row.get("git_sha") != current_sha:
+                print(
+                    f"[load_task] dropping event at line {lineno}: "
+                    f"git_sha mismatch (recorded="
+                    f"{row.get('git_sha')!r}, current="
+                    f"{current_sha!r}, event={row.get('event')!r})",
+                    file=sys.stderr,
+                )
+                skipped_sha_drift += 1
+                continue
+
+            event_type = row.get("event")
+
+            if event_type == "task_create":
+                if task is not None:
+                    print(
+                        f"[load_task] duplicate task_create event at "
+                        f"line {lineno}; ignoring",
+                        file=sys.stderr,
+                    )
+                    continue
+                task = Task(
+                    task_id=task_id,
+                    goal=row.get("goal", ""),
+                    workspace_path=row.get("workspace_path", ""),
+                    created_at=row.get("created_at", ""),
+                    state_root=sr,
+                )
+                task.decisions.append(
+                    Decision(
+                        timestamp=row.get("created_at", ""),
+                        kind="task_create",
+                        note=row.get("decision_note", ""),
+                    ),
+                )
+                continue
+
+            if task is None:
+                # Events before the bootstrap row are unrecoverable in
+                # isolation; skip until task_create lands.
+                continue
+
+            if event_type == "enqueue_subtask":
+                sid = row.get("subtask_id")
+                prompt = row.get("prompt")
+                if not isinstance(sid, str) or not isinstance(prompt, str):
+                    continue
+                task.subtasks.append(
+                    Subtask(subtask_id=sid, prompt=prompt, status="pending"),
+                )
+            elif event_type == "start_subtask":
+                st = _replay_lookup(task, row, lineno)
+                if st is not None:
+                    st.status = "in_flight"
+                    st.started_at = row.get("started_at")
+            elif event_type == "complete_subtask":
+                st = _replay_lookup(task, row, lineno)
+                if st is not None:
+                    st.status = "done"
+                    st.finished_at = row.get("finished_at")
+                    st.result_summary = row.get("result_summary")
+                    cost = row.get("cost_usd")
+                    st.cost_usd = (
+                        float(cost) if isinstance(cost, (int, float))
+                        and not isinstance(cost, bool) else None
+                    )
+            elif event_type == "fail_subtask":
+                st = _replay_lookup(task, row, lineno)
+                if st is not None:
+                    st.status = "failed"
+                    st.finished_at = row.get("finished_at")
+                    st.result_summary = row.get("result_summary")
+            elif event_type == "decision":
+                kind = row.get("kind")
+                if kind in _VALID_DECISION_KINDS:
+                    task.decisions.append(
+                        Decision(
+                            timestamp=row.get("decision_timestamp", ""),
+                            kind=kind,
+                            note=row.get("note", ""),
+                        ),
+                    )
+            # else: unknown event_type — silently skip.
+
+    if task is None:
+        raise TaskError(
+            f"task_events.jsonl at {events_path} contained no "
+            f"task_create event; cannot reconstruct Task"
+        )
+
+    if not mark_resume:
+        return task
+
+    # End-of-replay sweep: re-enqueue any subtask still in_flight.
+    re_enqueued: list[str] = []
+    for st in task.subtasks:
+        if st.status == "in_flight":
+            st.status = "pending"
+            st.started_at = None
+            re_enqueued.append(st.subtask_id)
+
+    if re_enqueued:
+        note = (
+            "resumed; re-enqueued in-flight subtasks: "
+            + ", ".join(re_enqueued)
+        )
+    else:
+        note = "resumed; no in-flight subtasks"
+    if skipped_sha_drift:
+        note += f" (dropped {skipped_sha_drift} git_sha-gated events)"
+
+    task.record_decision("task_resume", note)
+    return task
+
+
+def _replay_lookup(task: Task, row: dict, lineno: int) -> Subtask | None:
+    """Find ``row['subtask_id']`` in ``task.subtasks`` for replay.
+
+    Returns ``None`` and logs a stderr note on miss — replay tolerates
+    log corruption rather than crashing the whole reconstruction.
+    """
+    sid = row.get("subtask_id")
+    for st in task.subtasks:
+        if st.subtask_id == sid:
+            return st
+    print(
+        f"[load_task] dropping event at line {lineno}: unknown "
+        f"subtask_id={sid!r} for event={row.get('event')!r}",
+        file=sys.stderr,
+    )
+    return None

@@ -1314,7 +1314,202 @@ substrate doc §6 Gap.
 - `resume` subcommand prints a summary and continues the loop.
 - Test passes.
 
-**Status:** pending
+**Results.**
+
+- `orchestrator/task.py` net +230 lines (459 → 688). Module-level
+  `load_task(task_id, *, state_root=None, mark_resume=True) ->
+  Task` plus the small `_replay_lookup` helper and the
+  `_events_path_for` filename builder. `Task._append_event` gained
+  a `survives_git_sha_flip: bool = True` keyword-only parameter
+  that lands as a top-level field on every persisted row from §7
+  forward. The module docstring was updated to document the
+  per-event resume gate (`survives_git_sha_flip` field) and to
+  reframe the file as §6 + §7 rather than §6-only.
+- `orchestrator/cli.py` net +143 lines (96 → 239). `cmd_start` /
+  `cmd_resume` / `cmd_status` are wired against `Task.from_toml` /
+  `task_mod.load_task` (plus `workspace_mod.setup_task_workspace`
+  for the resume-safe per-task dir). `cmd_pause` / `cmd_halt`
+  remain `NotImplementedError` stubs scoped to §8. New
+  `--state-root` / `--cases-dir` / `--workspaces-dir` flags
+  attached to `start` / `resume` / `status` via the shared
+  `_add_path_flags` helper so tests can inject `tmp_path` and
+  production runs leave them at the canonical defaults
+  (`<repo>/orchestrator/state`, `<repo>/orchestrator/cases`,
+  `<repo>/integration/workspace`). `_print_summary` ships the
+  five-field recovered-state digest the PLAN named: task id, goal,
+  per-status subtask counts, `${total_spend:.4f}` summed across
+  subtasks, and the last decision.
+- **Replay design (preserved verbatim).** Replay is deliberately
+  tolerant — blank / malformed / non-dict / unknown-event rows are
+  skipped silently (matching the RateLedger / BufferLedger
+  forgiving-reader posture); state-mutation events apply directly
+  without the write-path validators (`start_subtask` does not
+  re-check `status == "pending"`, etc.) so a normal start → kill
+  → restart sequence does not crash on the original
+  `start_subtask` event. The write-path's transition checks remain
+  in `Task.start_subtask` / `complete_subtask` / `fail_subtask`;
+  validation lives in user code, replay is pure state
+  reconstruction. Unknown subtask_ids in state events emit a
+  stderr note via `_replay_lookup` and skip the mutation.
+  Duplicate `task_create` events are tolerated (first wins, with
+  stderr note). Decision events with kinds outside
+  `_VALID_DECISION_KINDS` are silently dropped.
+- **End-of-replay sweep (preserved verbatim).** Once the log is
+  exhausted, any subtask still in `in_flight` is re-enqueued
+  (status flipped to `pending`, `started_at` cleared) and a
+  `task_resume` decision is appended in-memory AND persisted via
+  `Task.record_decision`. The decision note enumerates the
+  re-enqueued subtask ids when present (`"resumed; re-enqueued
+  in-flight subtasks: s2, s3"`), or notes the absence
+  (`"resumed; no in-flight subtasks"`). Drop counts from the
+  `survives_git_sha_flip` gate are appended to the same note for
+  durable audit. The `task_resume` decision row is itself written
+  with `survives_git_sha_flip=True` (the default), so subsequent
+  replays see the resumption boundary and reproduce the
+  `Decision(kind="task_resume")` entry in `task.decisions`.
+- **`mark_resume=False` decision (preserved verbatim).** PLAN
+  step 4 names a `status` subcommand among the five
+  argparse-stubbed commands at §1 close. §7 wired it as a
+  read-only sibling of `resume`: same `load_task` call,
+  `mark_resume=False`, no in-flight reset, no `task_resume`
+  write. This split lets an operator inspect a paused task's
+  state without nudging the log — distinct from `resume`'s
+  intent of "pick up where we left off". Both subcommands share
+  the same summary print so output format stays consistent.
+- **Per-event resume gate (preserved verbatim).**
+  `survives_git_sha_flip` is a row-level field defaulting to
+  `True`. Replay reads `provenance._git_capture(["rev-parse",
+  "HEAD"])` once, then for each row checks
+  `row.get("survives_git_sha_flip", True)` — the missing-field
+  default-True is the §6-pre-§7-row compatibility shim the §6
+  hand-off note specified. When `survives == False` and the
+  recorded `git_sha` differs from current, the row is dropped
+  with a `[load_task] dropping event at line N: git_sha
+  mismatch (recorded=..., current=..., event=...)` stderr note,
+  and the drop count is summed into the `task_resume` decision
+  note for visibility. Rows with `survives == True` (the default
+  on every §7-and-later write) replay regardless of SHA drift,
+  directly addressing `docs/substrate.md` §6's "too-strict gate
+  erases progress" concern.
+- **CLI flag-injection vs. monkeypatching.** Per-subcommand
+  `--state-root` / `--cases-dir` / `--workspaces-dir` flags rather
+  than a global flag: the wired subcommands (`start`, `resume`,
+  `status`) accept them; the unwired ones (`pause`, `halt`) do
+  not. Tests construct `argparse.Namespace` directly with the
+  three fields (`_make_args` helper) rather than invoking the
+  parser, since CLI flag-parsing is covered separately in
+  `TestCliBuildParser`. This keeps test coverage of `cmd_*`
+  behaviour decoupled from argparse internals.
+- **`start` route-to-resume contract (preserved verbatim).**
+  `cmd_start` checks `<state_root>/<task_id>/task_events.jsonl`
+  presence and dispatches to `cmd_resume` if the file exists; only
+  the no-log path goes through `Task.from_toml`. The unit test
+  `test_start_routes_to_resume_when_log_exists` pins the gate by
+  pre-priming an existing log without a corresponding case TOML
+  — `cmd_start` invoked against this state must NOT raise
+  FileNotFoundError, proving it never reached the
+  `Task.from_toml(case_path)` branch.
+- `tests/test_orchestrator_resume.py` (1088 lines, 59 tests
+  across 11 classes):
+  - `TestAppendEventGateField` × 2 — default-True on every
+    event; explicit-False persists.
+  - `TestLoadTaskBasic` × 7 — missing file / empty log /
+    no-task_create-row raises; minimal round-trip;
+    DEFAULT_STATE_ROOT honoured when state_root omitted;
+    non-string and empty task_id raise.
+  - `TestLoadTaskReplay` × 7 — subtasks replayed in order;
+    done / failed / pending preservation; decision replay;
+    unknown decision kind skipped; replay tolerant of
+    repeated `start_subtask` events for the same id (the
+    practical post-resume re-spawn case).
+  - `TestInFlightReset` × 9 — single in-flight re-enqueued
+    to pending; started_at cleared; task_resume decision
+    appended in-memory; decision persisted to JSONL;
+    no-in-flight note variant; done / failed preservation
+    alongside in-flight reset; multiple in-flight all
+    re-enqueued; `mark_resume=False` skips reset and skips
+    write.
+  - `TestGitShaGate` × 6 — default-True missing-field
+    replays under SHA drift; explicit-True replays; False
+    + matching-SHA replays; False + mismatched-SHA
+    dropped; stderr note format; drop count summed into
+    task_resume note.
+  - `TestReaderTolerance` × 7 — blank-line skip, malformed
+    JSON skip, non-dict-row skip, unknown-event skip,
+    unknown-subtask-id stderr-and-skip, enqueue with
+    missing/wrong-type fields skipped, duplicate
+    task_create dropped with stderr note.
+  - `TestRoundTripWithRealTask` × 4 — from_toml → load
+    round-trip; kill-mid-subtask resume (the PLAN's
+    headline test); one-done-one-in-flight resume
+    preserves the done one and re-enqueues the in-flight;
+    resumed Task is writable (start_subtask +
+    complete_subtask succeed against the re-enqueued
+    subtask, and a subsequent `load_task` observes the new
+    state).
+  - `TestCliStart` × 3 — no-log creates fresh; existing-log
+    routes to resume (proven by absent case TOML);
+    summary printed.
+  - `TestCliResume` × 3 — calls load_task and prints
+    summary; missing log raises; workspace setup is
+    idempotent (pre-existing marker preserved).
+  - `TestCliStatus` × 2 — no resume decision written;
+    in-flight preserved in the printed summary.
+  - `TestCliBuildParser` × 6 — argparse subcommand parsing
+    for start / resume / status with flags; pause and halt
+    still raise NotImplementedError.
+  - `TestPrintSummary` × 3 — empty subtasks renders zero
+    counts; total_spend sums Subtask.cost_usd; last
+    decision rendered with kind+note.
+- **NEEDS-PHASE-3-DECISION trio status.** Still untouched. §7
+  consumed neither `uas_config.py`, `uas_hooks.py`, nor
+  `uas.example.toml` — the CLI uses `argparse` directly,
+  `load_task` uses `tomllib`-free JSONL replay, and no per-task
+  config knob landed. The default-CUT trajectory continues to
+  hold per the §1 decision summary; if §8 also closes without
+  consumption, all three default to CUT for Phase 4.
+- **§8 hand-off note (loop integration).** §8's
+  `synthetic-multistep` run will exercise `cmd_start` →
+  worker spawn loop → `--simulate-rate-status` policy fire →
+  `cmd_pause` → process exit → `cmd_resume` → loop continues to
+  completion. The §7 deliverables wire the recovery half of that
+  cycle (`load_task`, `cmd_resume`, `cmd_status`) and the
+  fresh-start half (`cmd_start` route to `Task.from_toml` when no
+  log). The remaining §8 work is the actual loop body inside
+  `cmd_start` / `cmd_resume` (after `_print_summary` returns):
+  iterate pending subtasks, call `Task.start_subtask`,
+  `worker.spawn_worker`, `Task.complete_subtask` /
+  `fail_subtask`, then `Policy.decide()` between subtasks. §8
+  also adds `cmd_pause` / `cmd_halt` bodies (currently
+  `NotImplementedError`) and the `--simulate-rate-status` flag.
+  `_print_summary` will likely move from "called once at the end
+  of the §7 subcommand" to "called periodically by the loop"; the
+  current implementation already accepts a `file` parameter so
+  redirecting to a logger is trivial.
+- **Pre-§7 row compatibility.** The §6 close baseline at commit
+  `99f8fb2` had test_orchestrator_task.py producing event rows
+  WITHOUT `survives_git_sha_flip`. §7's `_append_event` change
+  makes new writes carry the field, but existing on-disk rows
+  written before §7 (none in this repo, but possible in any
+  future workflow that resumes across the §6 / §7 boundary)
+  default-True on read. `TestGitShaGate::test_default_true_
+  missing_field_replays` pins the property — strip the field
+  from a synthetic bootstrap row, force a SHA mismatch, replay
+  succeeds.
+- **Test outcomes.** `python3 -m pytest
+  tests/test_orchestrator_resume.py -v --timeout=60` → 59 passed
+  in 0.64 s. `python3 -m pytest tests/ -q --timeout=120` →
+  **2073 passed, 4 deselected** in 275.14 s (4 m 35 s) —
+  exactly +59 over the §6 baseline (2014), matching the 59 new
+  §7 tests; no regressions on existing tests. Live integration
+  test (`@pytest.mark.integration`) not re-run for §7 because
+  §7's `worker.py` surface is unchanged (no edits); the §4 / §5
+  live trace's assertions still hold. Post-test pollution check:
+  `<repo>/orchestrator/state/` does not exist;
+  `<repo>/integration/workspace/` contains only the pre-existing
+  `hello-file/` from prior eval runs (untouched).
+
+**Status:** completed
 
 ## Section 8 — End-to-end window-boundary run
 

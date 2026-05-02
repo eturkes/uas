@@ -1,0 +1,25 @@
+# Phase 3 §8 — per-task policy override for synthetic-multistep.
+#
+# Merges over orchestrator/policy.default.toml; missing keys keep
+# their default values. cmd_start seeds this file into
+# <state_root>/<task_id>/policy.toml on fresh-task bootstrap so
+# Policy.load(task_id=...) picks it up via the canonical
+# per-task override path documented in policy.py's docstring.
+#
+# Threshold rationale: the §8 PLAN calls for hard_stop_usd = 1.50 /
+# warn_usd = 0.50 — well below the production default 200 / 100
+# pair so the integration run cannot drain real paid-buffer beyond
+# the stated ceiling no matter how the simulated rate transitions
+# behave. Soft-cap actions are restated explicitly even though
+# they match the defaults so the override is self-describing for
+# future readers.
+
+[buffer]
+hard_stop_usd = 1.50
+warn_usd = 0.50
+
+[five_hour]
+soft_cap_action = "pause"
+
+[seven_day]
+soft_cap_action = "wrap_up"

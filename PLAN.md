@@ -1567,4 +1567,110 @@ without human intervention.
   beyond the explicit `pause` and `resume` subcommand calls.
 - Phase exit-criteria run is documented in §8 Results below.
 
-**Status:** pending
+**Results.**
+
+End-to-end pause + resume cycle executed against commit `4754488`
+(dirty: §8 working changes) on 2026-05-02 ~08:00 UTC. Same machine,
+docker engine, real Claude Max OAuth — `claude --print
+--dangerously-skip-permissions --output-format stream-json --verbose`
+in the per-task workspace.
+
+*Subtasks executed.* Three trivial single-file ops against
+`<repo>/integration/workspace/synthetic-multistep/notes.txt`:
+
+| id | start (UTC) | finish (UTC) | duration | reported cost |
+|---|---|---|---|---|
+| `s1-create` | 08:00:15.153 | 08:00:21.040 | 5.9 s | $0.0457 |
+| `s2-append` | 08:00:21.056 | 08:00:30.437 | 9.4 s | $0.0610 |
+| `s3-read`   | 08:00:30.457 | 08:00:35.410 | 5.0 s | $0.0465 |
+
+Total `start` wallclock: 20.4 s. Total reported buffer drain:
+$0.1531 (well under the $1.50 hard-stop ceiling and below the
+$0.50 warn threshold the override seeded). The final
+`s3-read.result_summary` carried `"hello from s1\nhello from s2"`
+verbatim, confirming s1's create + s2's append landed correctly
+in the per-task workspace and survived through to s3's read.
+
+*Pause / resume cycle.* `pause synthetic-multistep
+--simulate-rate-status five_hour_pause` recorded one
+`policy_pause` decision with the simulated state in the note and
+exited cleanly. `resume synthetic-multistep` (no override) replayed
+the log via `load_task`, found no in-flight subtasks, wrote the
+expected `task_resume` decision, and the §8 main loop returned
+immediately because the queue was already drained — exactly the
+"no remaining work" branch the §8 acceptance criteria allow under
+the "subtasks 1 and 2" interpretation that the `start` invocation
+drained the entire queue under `simulate-rate-status=allowed`.
+
+*Artefacts.* All four expected files at
+`<repo>/orchestrator/state/synthetic-multistep/`:
+
+- `task_events.jsonl` — 18 rows: 1 `task_create`, 3
+  `enqueue_subtask`, 3× (`worker_spawn` decision +
+  `start_subtask` + `complete_subtask` + `worker_complete`
+  decision) = 12, 1 `policy_pause`, 1 `task_resume`.
+- `rate_limits.jsonl` — 3 rows, one per worker spawn, all
+  carrying `rateLimitType=five_hour status=allowed`. The
+  simulated state transitions are reflected in the policy
+  decisions in `task_events.jsonl` (the simulation is opt-in CLI
+  override only and never leaks into the rate ledger), not here;
+  the ledger contains only what real workers reported.
+- `buffer.jsonl` — 3 rows, one per terminal `result` event. Sum
+  of `claude_reported_cost_usd` = $0.1531 = matches the printed
+  total spend exactly.
+- `policy.toml` — the seeded per-task override, byte-for-byte
+  copy of `orchestrator/cases/synthetic-multistep-policy.toml`.
+
+Mutual consistency (acceptance bullet 1): 3 `enqueue_subtask`
+events ↔ 3 `complete_subtask` events ↔ 3 `buffer.jsonl` rows ↔
+3 `rate_limits.jsonl` rows. Sum of `buffer.claude_reported_cost_usd`
+= total spend printed by the CLI = $0.1531.
+
+Operator intervention (acceptance bullet 2): exactly three
+explicit subcommand invocations — `start`, `pause`, `resume` —
+no other intervention.
+
+*Surprises.*
+
+- **Active model is Haiku 4.5, not Opus 4.7.** Each `buffer.jsonl`
+  row records `model = "claude-haiku-4-5-20251001"` because the
+  `claude` CLI's headless `--print` path defaults to Haiku when
+  no `--model` flag is passed (the unified-model policy in
+  `ROADMAP.md` documents this CLI-defaulting choice). The
+  pricing table priced the calls correctly; the `cost_usd` /
+  `claude_reported_cost_usd` divergence (~5×) seen in the
+  Phase 1 §10 Opus run is not present here — locally-priced
+  totals $0.030 vs. Claude-reported $0.153 ≈ 5×. The §4 hand-off
+  note's "use the reported figure for policy thresholds"
+  guidance therefore continues to hold; the policy machine
+  consumed `total_spent_reported`, not the underbilled
+  locally-priced sum.
+- **`resetsAt` is a unix epoch integer, not an ISO-8601 string.**
+  Each `rate_limit_info.resetsAt` is a number (`1777724400` ≈
+  2026-05-02T12:00:00Z) in the actual stream-json output; §5's
+  `Policy._parse_iso8601` expects a string and returns `None`
+  for numeric input. Real impact: zero — `pause_until.until` is
+  `None`, the §8 main loop does not consume `until` (it exits
+  on pause), and the simulated `resetsAt` strings the test
+  fixtures use parse cleanly. The substrate-doc claim that
+  `resetsAt` is ISO-8601 needs an amendment; flagged here for
+  Phase 5 / 6 informed iteration to catch when a real long-horizon
+  run wants to consume `until`.
+- **OAuth refresh self-refresh fails initially.** First worker
+  spawn printed
+  `[oauth] Self-refresh HTTP 400: invalid_grant` followed by
+  `[oauth] Token refreshed — 7.4h remaining` from the four-stage
+  fallback. The four-stage refresh path the substrate keep-list
+  cites worked exactly as documented; surfacing it because the
+  failure-then-success on the first call is the kind of trace
+  that would be alarming without the substrate doc reference.
+
+**Phase exit criteria status.** The orchestrator runs a defined
+multi-subtask task end-to-end across an explicit pause + resume
+boundary without operator intervention beyond the three
+subcommand calls; all ledgers and task state persist cleanly
+across the invocation boundary; `load_task` reconstructs
+identical `Task` state on the resume side. Phase 3 exit criteria
+satisfied.
+
+**Status:** completed

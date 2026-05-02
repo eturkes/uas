@@ -832,6 +832,7 @@ def _make_args(
     state_root: str | None = None,
     cases_dir: str | None = None,
     workspaces_dir: str | None = None,
+    simulate_rate_status: str | None = None,
 ) -> argparse.Namespace:
     """Build a Namespace mirroring argparse output."""
     return argparse.Namespace(
@@ -839,13 +840,24 @@ def _make_args(
         state_root=state_root,
         cases_dir=cases_dir,
         workspaces_dir=workspaces_dir,
+        simulate_rate_status=simulate_rate_status,
     )
+
+
+@pytest.fixture
+def stub_loop(monkeypatch):
+    """Disable ``cli._run_loop`` so §7 CLI tests verify the bootstrap /
+    replay scaffolding without engaging the §8 main loop. §8-specific
+    tests live in ``tests/test_orchestrator_loop.py`` and exercise the
+    real loop with a stubbed worker.
+    """
+    monkeypatch.setattr(cli_mod, "_run_loop", lambda *a, **kw: None)
 
 
 class TestCliStart:
 
     def test_start_creates_fresh_task_when_no_log(
-        self, state_root, cases_dir, workspaces_dir,
+        self, state_root, cases_dir, workspaces_dir, stub_loop,
     ):
         os.makedirs(cases_dir)
         with open(os.path.join(cases_dir, "t1.toml"), "w") as fh:
@@ -863,7 +875,7 @@ class TestCliStart:
         assert os.path.isdir(os.path.join(workspaces_dir, "t1"))
 
     def test_start_routes_to_resume_when_log_exists(
-        self, state_root, cases_dir, workspaces_dir, capsys,
+        self, state_root, cases_dir, workspaces_dir, stub_loop, capsys,
     ):
         # Prime an existing log without a corresponding case TOML —
         # if start tried to load TOML it would FileNotFound.
@@ -882,7 +894,7 @@ class TestCliStart:
         assert rows[-1]["kind"] == "task_resume"
 
     def test_start_prints_summary(
-        self, state_root, cases_dir, workspaces_dir, capsys,
+        self, state_root, cases_dir, workspaces_dir, stub_loop, capsys,
     ):
         os.makedirs(cases_dir)
         with open(os.path.join(cases_dir, "t1.toml"), "w") as fh:
@@ -903,7 +915,7 @@ class TestCliStart:
 class TestCliResume:
 
     def test_resume_calls_load_task_and_prints_summary(
-        self, state_root, workspaces_dir, capsys, seeded_task,
+        self, state_root, workspaces_dir, stub_loop, capsys, seeded_task,
     ):
         seeded_task.start_subtask("s1")
         args = _make_args(
@@ -931,7 +943,7 @@ class TestCliResume:
             cli_mod.cmd_resume(args)
 
     def test_resume_workspace_setup_idempotent(
-        self, state_root, workspaces_dir, seeded_task,
+        self, state_root, workspaces_dir, stub_loop, seeded_task,
     ):
         # Pre-populate workspace with a marker; resume must not destroy.
         ws = os.path.join(workspaces_dir, "t1")
@@ -1016,17 +1028,29 @@ class TestCliBuildParser:
         assert args.task == "t1"
         assert args.state_root == "/tmp/sr"
 
-    def test_pause_still_unimplemented(self):
+    def test_pause_subcommand_accepts_flags(self):
+        # §8 wires pause/halt; their parser entries gained the same
+        # path + simulate flags as start/resume.
         parser = cli_mod.build_parser()
-        args = parser.parse_args(["pause", "t1"])
-        with pytest.raises(NotImplementedError):
-            args.func(args)
+        args = parser.parse_args([
+            "pause", "t1",
+            "--state-root", "/tmp/sr",
+            "--simulate-rate-status", "five_hour_pause",
+        ])
+        assert args.task == "t1"
+        assert args.state_root == "/tmp/sr"
+        assert args.simulate_rate_status == "five_hour_pause"
 
-    def test_halt_still_unimplemented(self):
+    def test_halt_subcommand_accepts_flags(self):
         parser = cli_mod.build_parser()
-        args = parser.parse_args(["halt", "t1"])
-        with pytest.raises(NotImplementedError):
-            args.func(args)
+        args = parser.parse_args([
+            "halt", "t1",
+            "--state-root", "/tmp/sr",
+            "--simulate-rate-status", "seven_day_wrap_up",
+        ])
+        assert args.task == "t1"
+        assert args.state_root == "/tmp/sr"
+        assert args.simulate_rate_status == "seven_day_wrap_up"
 
 
 # ---------------------------------------------------------------------------

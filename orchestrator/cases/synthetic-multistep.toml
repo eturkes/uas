@@ -1,0 +1,42 @@
+# Phase 3 §8 — synthetic multi-subtask task for the end-to-end
+# window-boundary integration run.
+#
+# Each subtask is a trivial single-file create / append / read
+# against the per-task workspace at
+# <repo>/integration/workspace/synthetic-multistep/. Together they
+# exercise §6's queue / start_subtask / complete_subtask write path,
+# §3's rate_limits.jsonl from the worker's stream-json output, and
+# §4's buffer.jsonl from each terminal result event.
+#
+# The companion policy override at
+# orchestrator/cases/synthetic-multistep-policy.toml caps the
+# paid-buffer budget low enough that the suite can be discussed in
+# §8 Results without burning real Claude Max paid-buffer dollars
+# beyond a sanity-check threshold; the rate windows still default to
+# pause / wrap_up so the policy machine's natural transitions are
+# exercised when the --simulate-rate-status CLI flag flips them.
+
+task_id = "synthetic-multistep"
+goal = "Synthetic three-step file-handling task to exercise Phase 3 §8 end-to-end."
+
+[[subtasks]]
+subtask_id = "s1-create"
+prompt = """
+Create a file named notes.txt in the current working directory containing exactly the single line:
+hello from s1
+Then reply with only the literal word: done
+"""
+
+[[subtasks]]
+subtask_id = "s2-append"
+prompt = """
+Append a new line to notes.txt in the current working directory so the file ends with the line:
+hello from s2
+Do not modify any existing lines. Then reply with only the literal word: done
+"""
+
+[[subtasks]]
+subtask_id = "s3-read"
+prompt = """
+Read notes.txt in the current working directory and reply with exactly two lines: the first line is the file's first line, the second line is the file's last line. Reply with nothing else.
+"""

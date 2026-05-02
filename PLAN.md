@@ -1078,7 +1078,194 @@ helper.
 - Workspace setup never destroys existing files.
 - Tests pass.
 
-**Status:** pending
+**Results.**
+
+- `orchestrator/task.py` (~457 lines) ships the three dataclasses
+  (`Task`, `Subtask`, `Decision`), the `TaskError(ValueError)`
+  exception, the `_VALID_DECISION_KINDS` frozenset (closed
+  allow-list of 8 kinds), and six operations: `Task.from_toml`,
+  `enqueue_subtask`, `start_subtask`, `complete_subtask`,
+  `fail_subtask`, `record_decision`. Persistence layout mirrors
+  §3 / §4 exactly: per-task directory at
+  `<state_root>/<task_id>/`, append-only `task_events.jsonl`,
+  every row stamped with
+  `provenance.capture_run_metadata(include_orchestrator_version=True)`
+  plus an `event="..."` discriminator and `task_id` for
+  cross-file correlation.
+- **Event schema (preserved verbatim).** Six event types written
+  by §6 (§7 will add a seventh, `task_resume`):
+  - `task_create` — from `Task.from_toml`; payload
+    `{goal, workspace_path, created_at, decision_note}`. Doubles
+    as the bootstrap event AND the `task_create` Decision row,
+    so §7's replay reconstructs both effects from one line.
+  - `enqueue_subtask` — `{subtask_id, prompt}`.
+  - `start_subtask` — `{subtask_id, started_at}`.
+  - `complete_subtask` — `{subtask_id, finished_at,
+    result_summary, cost_usd}`.
+  - `fail_subtask` — `{subtask_id, finished_at,
+    result_summary}`.
+  - `decision` — from `record_decision`;
+    `{kind, note, decision_timestamp}`. `kind` is validated
+    against `_VALID_DECISION_KINDS`; unknown kinds raise
+    `TaskError` so the timeline cannot accumulate free-form
+    strings that future tooling has to defend against.
+- **Decision-kinds enum (preserved verbatim).** Eight kinds:
+  `policy_pause`, `policy_wrap_up`, `policy_halt`,
+  `worker_spawn`, `worker_complete`, `worker_fail`,
+  `task_create`, `task_resume`. The `DecisionKind` Literal type
+  alias and the `_VALID_DECISION_KINDS` frozenset both list the
+  same eight; `TestModuleConstants::test_decision_kinds_match_plan`
+  pins them to a closed set so a future drift breaks a named
+  test.
+- **PLAN-deviation absorbed (single-line `task_create`).** PLAN
+  step 5 says "each operation appends one event to
+  `task_events.jsonl`". `Task.from_toml` is a single operation
+  but logically does two things: bootstraps the Task and records
+  the inaugural `task_create` Decision. Resolved by encoding both
+  effects in one event: the `task_create` row carries
+  `goal` / `workspace_path` / `created_at` (bootstrap fields) AND
+  `decision_note` (the human-readable note for the Decision
+  mirror). §7's `load_task` parses one line and applies both
+  effects. Avoids the alternative of writing two rows from one
+  `from_toml` call.
+- **Decision auto-mirror semantics.** Subtask state transitions
+  (`enqueue_subtask` / `start_subtask` / `complete_subtask` /
+  `fail_subtask`) write their own typed events but do **not**
+  auto-create Decision rows in the in-memory list. The
+  orchestrator's main loop (§7 / §8) chooses when to call
+  `record_decision` for the high-level timeline (e.g. write a
+  `worker_spawn` Decision when it spawns a worker for a subtask).
+  The exception is `task_create`: `from_toml` mirrors a
+  `Decision(kind="task_create")` into `decisions` because the
+  bootstrap event canonically IS a decision row in the timeline.
+- **Bool-on-numeric reject for `cost_usd`.** Mirrors the
+  `_require_number` reject pattern from §5's `policy.py`: Python's
+  `bool` subclasses `int`, so `cost_usd = True` would silently
+  coerce to 1.0 if the validator only checked
+  `isinstance(value, (int, float))`. Pinned by
+  `test_bool_cost_rejected`. Companion test
+  `test_int_cost_coerced_to_float` confirms `cost_usd = 2`
+  (int) ends up as `2.0` (float) in both the in-memory
+  `Subtask.cost_usd` and the persisted row.
+- `orchestrator/workspace.py` (~49 lines) ships
+  `setup_task_workspace(task_id, *, workspaces_dir=None) -> str`.
+  Resume-safe variant per `docs/substrate.md` §5 Gap: never
+  `rmtree`s, never destroys existing files. Path layout matches
+  the eval harness convention (`<workspaces_dir>/<task_id>`) so
+  the bind-mount contract used by §2's `spawn_worker` is
+  unchanged. Tests pass `workspaces_dir=str(tmp_path /
+  "workspaces")` to redirect from the canonical
+  `<repo>/integration/workspace/`.
+- **Why a separate file rather than `eval.setup_workspace` with
+  a `reset=False` parameter.** Per `docs/substrate.md` §5
+  Phase-3 consumption notes: "Phase 3 either parameterises
+  `setup_workspace` (`reset=False` on resume) or writes a sibling
+  `setup_task_workspace` and leaves the eval's variant alone."
+  Picked the sibling — eval continues to be destructive by
+  default (its regression case depends on a clean workspace) and
+  the orchestrator's variant has the inverse default, with no
+  shared code path. Cleaner separation than parameterising a
+  helper that two consumers want with opposite defaults.
+- `tests/test_orchestrator_task.py` (~838 lines, 66 tests
+  across 9 classes):
+  - `TestSetupTaskWorkspace` × 9 (creates dir, idempotent under
+    repeated calls, non-destructive on existing files,
+    preserves nested subdirectories, returns absolute path,
+    task isolation, empty / non-string id rejected, default
+    `DEFAULT_WORKSPACES_DIR` constant points under
+    `integration/workspace`).
+  - `TestTaskFromToml` × 16 (minimal TOML loads, single
+    `task_create` event written, provenance fields stamped on
+    the row, `task_create` Decision appended in-memory,
+    `[[subtasks]]` enqueue in declared order, one event per
+    `[[subtasks]]` row, missing file / `task_id` / `goal`
+    raises with field-named match, malformed TOML raises,
+    subtask validation paths — missing id / missing prompt /
+    empty id, default `DEFAULT_STATE_ROOT` honoured via
+    monkeypatch).
+  - `TestEnqueueSubtask` × 7 (pending append, single event
+    written with `event="enqueue_subtask"`, ordered across
+    multiple calls, duplicate id rejected, empty id /
+    empty prompt rejected, non-string id rejected).
+  - `TestStartSubtask` × 5 (pending → in_flight transition +
+    `started_at` ISO-8601 set, event written, double-start
+    rejected, start-after-done rejected, unknown subtask
+    raises).
+  - `TestCompleteSubtask` × 9 (in_flight → done + finished_at /
+    result_summary / cost_usd set, event payload round-trip,
+    optional fields default to None, complete-when-pending
+    rejected, double-complete rejected, type validation for
+    `result_summary` (str | None) / `cost_usd` (numeric | None),
+    bool rejected, int coerced to float).
+  - `TestFailSubtask` × 5 (in_flight → failed transition,
+    event written, fail-when-pending rejected, fail-when-done
+    rejected, `result_summary` type validated).
+  - `TestRecordDecision` × 6 (Decision appended to in-memory
+    list, event row written with `event="decision"` and
+    `decision_timestamp`, all 8 valid kinds accepted, unknown
+    kind rejected, non-string note rejected, multi-decision
+    order preserved).
+  - `TestPersistence` × 5 (events_path under `state_root`,
+    every row carries provenance + `event` + `task_id` +
+    `orchestrator_version`, log is append-only across multiple
+    operations, task isolation across separate task_ids,
+    full-lifecycle 8-event sequence with two subtasks ending
+    in `done`/`failed` and decisions list containing
+    `task_create` + the explicit `policy_pause`).
+  - `TestModuleConstants` × 4 (default state-root path, default
+    workspaces-dir path, decision-kinds frozenset matches PLAN
+    exactly, `Subtask` defaults to `pending` / None / None /
+    None / None).
+- **NEEDS-PHASE-3-DECISION trio status.** Still untouched. §6
+  consumed neither `uas_config.py`, `uas_hooks.py`, nor
+  `uas.example.toml` — `task.py` uses `tomllib` directly with
+  field-by-field validators it owns (paralleling §5's
+  `policy.py`). The default-CUT trajectory continues to hold per
+  the §1 decision summary; if §7 and §8 also close without
+  consumption, all three default to CUT for Phase 4.
+- **§7 hand-off note (replay schema).** Each event type's
+  payload is sufficient to reproduce its in-memory effect on
+  replay:
+  - `task_create` → construct fresh `Task` with `goal` /
+    `workspace_path` / `created_at`; append
+    `Decision(timestamp=created_at, kind="task_create",
+    note=decision_note)` to the decisions list.
+  - `enqueue_subtask` → append
+    `Subtask(subtask_id, prompt, status="pending")`.
+  - `start_subtask` → find subtask by id, set
+    `status="in_flight"`, `started_at` from event payload.
+  - `complete_subtask` → find subtask, set `status="done"`,
+    `finished_at` / `result_summary` / `cost_usd`.
+  - `fail_subtask` → find subtask, set `status="failed"`,
+    `finished_at` / `result_summary`.
+  - `decision` → append `Decision(timestamp=decision_timestamp,
+    kind, note)` to decisions list.
+
+  §7's `load_task` reads `task_events.jsonl` forward and applies
+  these mutations in order. In-flight subtasks at end-of-replay
+  get re-enqueued (status flipped back to `pending`) and a
+  `task_resume` decision is logged — that's the new event type
+  §7 introduces. The `survives_git_sha_flip` gate in PLAN §7
+  step 2 lands as an additional row-level field defaulting to
+  `True` for §6 events; §6's writer doesn't emit the field
+  today, so §7 must default-True on missing.
+- **Test outcomes.** `python3 -m pytest
+  tests/test_orchestrator_task.py -v --timeout=60` → 66 passed
+  in 0.98 s (pure-Python; no engine, no live Claude).
+  `python3 -m pytest tests/ -q --timeout=120` → **2014 passed,
+  4 deselected** in 357.34 s (5 m 57 s) — exactly +66 over the
+  §5 baseline (1948), matching the 66 new §6 tests; no
+  regressions on existing tests. Live integration test
+  (`@pytest.mark.integration`) not re-run for §6 because §6's
+  worker.py / ledger surface is unchanged (only new files
+  added; no edits to `worker.py` / `rate_ledger.py` /
+  `buffer_ledger.py` / `policy.py`); the §4 / §5 live trace's
+  assertions still hold. Post-test pollution check:
+  `<repo>/orchestrator/state/` does not exist;
+  `<repo>/integration/workspace/` contains only the
+  pre-existing `hello-file/` from prior eval runs (untouched).
+
+**Status:** completed
 
 ## Section 7 — Resume-from-state
 

@@ -23,6 +23,13 @@ integration/.uas_auth/
 integration/.uas_state/
 integration/.judge_cache.json
 
+# Tracked case fixtures live under integration/data/. The
+# top-level "hello.txt" rule above is a legacy runtime-artefact
+# guard from the pre-prune era; these exceptions keep the
+# Phase 4 §5 substrate-self-test fixture in tree.
+!integration/data/
+!integration/data/hello.txt
+
 # Orchestrator per-task runtime state (Phase 3 §3+)
 orchestrator/state/
 

@@ -682,7 +682,128 @@ judge-shaped goes.
 - `./uas-eval` exits cleanly.
 - §5 Results subsection records counts.
 
-**Status:** pending
+**Status:** completed
+
+### Section 5 — Results
+
+LLM-judge module + ML-class quality gate + architect-runner shell
+script cut. `integration/eval.py` surgically reshaped from
+"architect-runner" to "substrate self-tester": the LLM-judge
+dispatcher gone, the architect subprocess replaced by a no-op
+producer stub, the architect-coupled `collect_metrics` removed, the
+hello-file case restructured to use `setup_files` instead of relying
+on a producer.
+
+**Counts.**
+
+| Metric | Value |
+|---|---|
+| `integration/llm_judge.py` cut | 470 lines |
+| `integration/test_project_quality.py` cut | 245 lines |
+| `integration/quick_test.sh` cut | 113 lines |
+| `tests/test_llm_judge.py` cut | 899 lines |
+| **Subtotal: file deletions** | **4 files, 1,727 lines** |
+| `integration/eval.py` surgery (net) | 1342 → 1090 lines (−252) |
+| `integration/cases/trivial/hello-file.json` restructure | 5 lines changed |
+| `integration/data/hello.txt` added (substrate self-test fixture) | +1 line |
+| `.gitignore` exception for fixture | +5 lines (rule + comment) |
+| **§5 net text-line shrinkage** | **≈ 1,973 lines** |
+| Pre-cut PLAN §1 estimate | 4 file deletions ≈ 1,650 lines + 460 surgery ≈ 2,110 lines |
+| Delta vs estimate | identical file count, −137 lines (smaller surgery than estimate) |
+
+**eval.py surgery breakdown.**
+
+- Removed `_import_llm_judge` lazy-import dispatcher (~33 lines).
+- Removed `llm_judge` branch in `run_check` (~61 lines) + its
+  docstring entry (~12 lines).
+- Replaced `invoke_architect` body (~114 lines) with a 4-line
+  no-op stub that preserves the function signature for monkey-
+  patching tests (`tests/test_eval_resume.py` injects fakes via
+  `ev.run_case`, not `ev.invoke_architect`, so the stub is the
+  cleanest surface preservation).
+- Removed `collect_metrics` (~30 lines) — read architect's
+  `output.json` which no longer exists; defaults to `{}` would
+  have been benign but the function is dead.
+- Cleaned the module header docstring (line 4–14: "Runs prompt
+  cases through the Architect Agent…" → "Substrate smoke harness
+  for UAS.").
+- Trimmed the OAuth-block comment (line 142–158) — most of it
+  was justifying the Opus-architect run-time, now moot.
+- Tightened `run_case`, `run_checks`, and a few `architect`-
+  shaped phrasings in surrounding docstrings.
+
+`main()` is unchanged — `_find_engine`, `_ensure_image`, and
+`_maybe_refresh_oauth` remain wired in because
+`tests/test_eval_resume.py` integration tests monkey-patch
+`ev._find_engine` and `ev._maybe_refresh_oauth`. With the producer
+gone, those calls are dead in practice but the test surface needs
+the attributes to keep resolving.
+
+**Case-fixture restructure.** `integration/cases/trivial/hello-file.json`:
+
+- `goal` rewritten to describe the substrate self-test purpose
+  (was "Create a file called hello.txt …" — a producer-shaped
+  goal — now "Substrate self-test: verify the eval harness loads
+  a case, copies a setup file …").
+- Added `"setup_files": ["hello.txt"]` so `setup_workspace`
+  pre-populates the workspace.
+- `notes.purpose` rewritten: pre-prune "Smoke test that the
+  harness, container engine, auth, and architect/orchestrator
+  round-trip can produce a single text file" → post-prune
+  "Substrate smoke test. The pre-prune semantics are gone with
+  the architect (Phase 4 §3); this case now validates the
+  substrate."
+- `checks` array unchanged — same `file_exists` + `file_contains`
+  pair.
+
+**New fixture: `integration/data/hello.txt`** (15 bytes):
+
+```
+Hello from UAS
+```
+
+The `.gitignore` carried two pre-prune rules ignoring `hello.txt`
+anywhere (line 2) and `integration/hello.txt` (line 21) as
+runtime artefacts. The new fixture is intentional source; added a
+scoped `!integration/data/hello.txt` exception to allow it
+through. Pre-existing rules preserved as-is — they still apply to
+any runtime hello.txt produced under `integration/workspace/`.
+
+**Pytest verification.** `python3 -m pytest tests/ -q` →
+**425 passed, 1 deselected in 5.99s**. Down from 490 at §4 close
+(lost ~65 tests with `tests/test_llm_judge.py`).
+
+**Eval verification.** `./uas-eval --no-resume` →
+
+```
+[1/1] hello-file: Substrate self-test: verify the eval harness …
+        -> PASS (0.0s)
+  Overall pass rate: 1.000 across 1 cases
+  By tier: trivial: 1.00±0.00
+  1/1 passed, 0 failed
+EXIT: 0
+```
+
+Both deterministic checks PASS:
+
+- `[ok] file_exists: found`
+- `[ok] file_contains: matched`
+
+Latest JSONL row is well-formed and PASS — full provenance
+metadata, both checks recorded with `"passed": true`, exit code 0,
+elapsed 0.0 (no producer to wait for).
+
+**Acceptance check.**
+
+- ✅ `integration/llm_judge.py` no longer exists.
+- ✅ `integration/eval.py` does not import `llm_judge` (zero
+  references, including in docstrings).
+- ✅ `integration/cases/` contains only the hello-file fixture
+  (verified pre-§5 — only the trivial/hello-file.json case ever
+  shipped at PLAN-author commit).
+- ✅ Eval harness tests run green (425 passed, 1 deselected).
+- ✅ `./uas-eval` exits cleanly (exit code 0; hello-file PASSes via
+  setup_files-driven pre-population).
 
 ## Section 6 — Root-level cleanup
 

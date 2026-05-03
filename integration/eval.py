@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""Prompt evaluation system for UAS.
+"""Substrate smoke harness for UAS.
 
-Runs prompt cases through the Architect Agent, checks expected outcomes,
-and generates an assessment report.  Runs inside the uas-engine container
-by default; use ``--local`` for direct subprocess mode.
+Loads cases from ``integration/cases/<tier>/``, prepares per-case
+workspaces (copies declared ``setup_files`` from ``integration/data/``),
+runs deterministic checks (``file_exists``, ``file_contains``,
+``glob_exists``, ``pytest_pass``, ``exit_code``, ``file_shape``,
+``command_succeeds``), persists a self-describing JSONL row per
+(case × run), and emits per-case + per-tier aggregate reports.
+
+Phase 4 §3 deleted the architect producer this harness used to spawn;
+``invoke_architect`` is now a no-op stub. The harness is a substrate
+keep-list item — it validates the substrate (case loader / workspace
+setup / deterministic checks / JSONL persistence / resume), not any
+producer.
 
 Usage:
-    python3 integration/eval.py                # Run all cases (container mode)
+    python3 integration/eval.py                # Run all cases
     python3 integration/eval.py -k hello       # Run cases matching 'hello'
     python3 integration/eval.py --list         # List available cases
-    python3 integration/eval.py -v             # Verbose (show architect logs)
-    python3 integration/eval.py --local        # Use local subprocess mode
     python3 integration/eval.py --clean        # Remove previous workspaces first
 """
 
@@ -139,24 +146,12 @@ def load_prior_rows(path, run_metadata) -> list:
 # backward compat with pre-Section-7 prompt files.
 ALLOWED_TIERS = ("trivial", "moderate", "hard", "open_ended")
 
-# Eval harness model policy: track Claude's current default (Opus 4.7).
-# Per the unified UAS framework directive, every Claude invocation —
-# including the eval / measurement instrument — uses the model the CLI
-# selects when no --model flag is passed, so the eval harness no longer
-# injects a default UAS_MODEL. Callers can still pin a model explicitly
-# by exporting UAS_MODEL (or UAS_MODEL_PLANNER / UAS_MODEL_CODER)
-# before invoking uas-eval.
-
-# OAuth token refresh.  Claude Max OAuth tokens last ~8 hours.
-# The token-refresh fallback predates the 1-case scope reduction and
-# is retained because even a single Opus 4.7 architect run can take
-# 10+ minutes; opt-in --runs N variance sweeps stay well inside one
-# token cycle but the machinery is harmless and useful in degraded
-# auth states. The four-stage refresh now lives in
-# integration/auth.py since Phase 3 §1 (the orchestrator imports the
-# same helpers); names are re-exported here so existing callers and
-# monkeypatch targets (tests use ``ev._maybe_refresh_oauth``) keep
-# resolving without modification.
+# OAuth helpers re-exported from integration/auth.py so the
+# existing test surface (``ev._maybe_refresh_oauth``) keeps
+# resolving. The post-§5 harness does not call out to Claude — the
+# producer was deleted in §3 — so the refresh path is dead in
+# practice; the orchestrator owns the live consumer of these
+# helpers.
 from integration.auth import (  # noqa: E402
     _DEFAULT_CLAUDE_CREDS,
     _OAUTH_CLIENT_ID,
@@ -240,159 +235,25 @@ def setup_workspace(case) -> str:
 
 def invoke_architect(case, workspace, *, local, engine, verbose,
                      extra_env=None) -> dict:
-    """Run the architect subprocess (container or local) for one case.
+    """No-op producer stub — Phase 4 §5 removed the architect subprocess.
 
-    Returns a dict with keys:
-
-    - ``exit_code``: subprocess return code, or ``-1`` on Python-level
-      exception.
-    - ``elapsed``: wall-clock seconds the subprocess ran.
-    - ``stderr_tail``: last 2000 chars of captured stderr, or an empty
-      string when verbose mode streams stderr live.
-    - ``error``: only present when an exception was raised launching
-      the subprocess; signals the orchestrator to short-circuit.
-
-    ``extra_env`` is merged into the subprocess env (container or
-    local) for callers that need to override config knobs. Currently
-    unused at the call site but reserved for later sections.
+    The post-pivot eval harness is a substrate (case loader + workspace
+    setup + deterministic checks + JSONL persistence + resume); it does
+    not spawn a producer. Cases that need pre-populated workspace state
+    declare ``setup_files`` and `setup_workspace` copies them in. The
+    function is retained as a monkey-patchable seam for tests that
+    inject a fake producer.
     """
-    output_file = os.path.join(workspace, "output.json")
-    start = time.monotonic()
-    try:
-        if engine and not local:
-            # Container mode — run architect inside uas-engine.
-            # PYTHONPATH=/uas is required because the eval invokes
-            # python3 with -P (sandboxing flag that suppresses
-            # cwd-prepending), so the architect package would not
-            # otherwise be importable from /uas.
-            #
-            # Forward every ``UAS_*`` env var the parent process has
-            # set into the container so user-level configuration
-            # (notably ``UAS_MODEL``) reaches the architect. The
-            # per-case overrides below (``UAS_GOAL``, ``UAS_WORKSPACE``,
-            # ``UAS_OUTPUT``) win because they are applied after the
-            # parent forward.
-            container_env = {
-                k: v
-                for k, v in os.environ.items()
-                if k.startswith("UAS_")
-            }
-            container_env.update({
-                "UAS_GOAL": case["goal"],
-                "UAS_WORKSPACE": "/workspace",
-                "UAS_OUTPUT": "/workspace/output.json",
-                "PYTHONPATH": "/uas",
-            })
-            if verbose:
-                container_env["UAS_VERBOSE"] = "1"
-            if extra_env:
-                container_env.update(extra_env)
-            cmd = [
-                engine, "run", "--rm",
-                "--privileged",
-                "-e", "IS_SANDBOX=1",
-                "-v", f"{UAS_AUTH_DIR}:/root/.claude:Z",
-                "-v", f"{CLAUDE_JSON}:/root/.claude.json:Z",
-                "-v", f"{workspace}:/workspace:Z",
-            ]
-            for k, v in container_env.items():
-                cmd.extend(["-e", f"{k}={v}"])
-            # Use the image's default entrypoint (entrypoint.sh). It
-            # detects non-interactive mode via UAS_GOAL, runs
-            # ``python3 -P -m architect.main``, and on EXIT its trap
-            # chowns /workspace to UAS_HOST_UID:UAS_HOST_GID — the
-            # standard project pattern that other shell wrappers
-            # (install.sh, quick_test.sh, start_orchestrator.sh,
-            # run_container.sh) all use. Without this, the architect
-            # subprocess runs as root inside the container and leaves
-            # root-owned files in the host workspace dir, which
-            # subsequently breaks ``setup_workspace``'s rmtree.
-            cmd.append(IMAGE_TAG)
-            proc = subprocess.run(
-                cmd,
-                capture_output=not verbose,
-                text=True,
-                stdin=subprocess.DEVNULL,
-            )
-        else:
-            # Local subprocess mode.
-            env = os.environ.copy()
-            env["UAS_GOAL"] = case["goal"]
-            env["UAS_WORKSPACE"] = workspace
-            env["UAS_OUTPUT"] = output_file
-            env["PYTHONPATH"] = REPO_ROOT
-            env["CLAUDE_CONFIG_DIR"] = UAS_AUTH_DIR
-            if local:
-                env["UAS_SANDBOX_MODE"] = "local"
-            if verbose:
-                env["UAS_VERBOSE"] = "1"
-            if extra_env:
-                env.update(extra_env)
-            proc = subprocess.run(
-                [sys.executable, "-P", "-m", "architect.main"],
-                env=env,
-                cwd=workspace,
-                capture_output=not verbose,
-                text=True,
-                stdin=subprocess.DEVNULL,
-            )
-        elapsed = time.monotonic() - start
-        stderr_tail = ""
-        if not verbose and proc.stderr:
-            stderr_tail = proc.stderr[-2000:]
-        return {
-            "exit_code": proc.returncode,
-            "elapsed": elapsed,
-            "stderr_tail": stderr_tail,
-        }
-    except Exception as e:
-        return {
-            "exit_code": -1,
-            "elapsed": time.monotonic() - start,
-            "stderr_tail": "",
-            "error": str(e),
-        }
-
-
-def collect_metrics(workspace) -> dict:
-    """Read ``output.json`` from the workspace and project Section 1 fields.
-
-    Returns an empty dict if ``output.json`` is missing or unparseable.
-    Otherwise returns a flat metrics dict containing the raw output
-    plus the projected per-run metrics surfaced by the architect's
-    ``write_json_output()``.
-    """
-    output_file = os.path.join(workspace, "output.json")
-    if not os.path.exists(output_file):
-        return {}
-    try:
-        with open(output_file) as f:
-            output = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return {
-        "output": output,
-        "step_count": output.get("step_count", 0),
-        "step_status_counts": output.get("step_status_counts", {}),
-        "attempt_total": output.get("attempt_total", 0),
-        "total_elapsed": output.get("total_elapsed", 0.0),
-        "total_tokens": output.get(
-            "total_tokens", {"input": 0, "output": 0}
-        ),
-        "total_cost_usd": output.get("total_cost_usd", 0.0),
-        "workspace_size_bytes": output.get("workspace_size_bytes", 0),
-        "architect_status": output.get("status", "unknown"),
-    }
+    return {"exit_code": 0, "elapsed": 0.0, "stderr_tail": ""}
 
 
 def run_checks(case, workspace, invocation) -> list:
     """Run every check declared on a case and return the result list.
 
-    ``invocation`` is threaded through so check types like ``exit_code``
-    can read the architect's return code without re-invoking the
-    subprocess. ``case`` is threaded through so check types like
-    ``llm_judge`` can read the case goal and name for prompt assembly
-    and cache keying.
+    ``invocation`` is threaded through so the ``exit_code`` check type
+    can read the producer-stub's return code without re-invoking it.
+    ``case`` is threaded through so check types that need case-level
+    metadata can access it.
     """
     return [
         run_check(check, workspace, invocation=invocation, case=case)
@@ -435,9 +296,10 @@ def run_case(case, verbose=False, local=False, engine=None):
     """Run a single prompt case end-to-end and return a result row.
 
     Thin orchestrator over ``setup_workspace`` → ``invoke_architect``
-    → ``collect_metrics`` → ``run_checks`` → ``build_result``. The
-    pre-refactor result shape is preserved (Section 2 of Phase 1
-    PLAN — pure code motion, no behavior change).
+    → ``run_checks`` → ``build_result``. The ``verbose`` / ``local`` /
+    ``engine`` parameters are retained for back-compat with monkey-
+    patching tests (`tests/test_eval_resume.py` injects them) but are
+    not consumed in the no-producer flow.
     """
     try:
         workspace = setup_workspace(case)
@@ -456,47 +318,9 @@ def run_case(case, verbose=False, local=False, engine=None):
         local=local, engine=engine, verbose=verbose,
     )
     if invocation.get("error"):
-        # Subprocess raised an exception — short-circuit metrics +
-        # checks to match the pre-refactor early-return path.
         return build_result(case, workspace, invocation, {}, [])
-    metrics = collect_metrics(workspace)
     checks = run_checks(case, workspace, invocation)
-    return build_result(case, workspace, invocation, metrics, checks)
-
-
-def _import_llm_judge():
-    """Lazy-import the ``judge`` callable from the sibling llm_judge module.
-
-    Handles three invocation contexts in order of preference:
-
-    1. ``llm_judge`` already in ``sys.modules`` (tests import it
-       directly via ``sys.path`` injection — reuse that instance so
-       monkey-patches the test set up still apply).
-    2. ``python3 -m integration.eval`` (Phase 1 §10's planned
-       wrapper) — the package context exists, the sibling import
-       succeeds.
-    3. ``python3 integration/eval.py`` — no package context; load by
-       absolute file location and cache into ``sys.modules`` so
-       subsequent calls reuse the same instance.
-    """
-    if "llm_judge" in sys.modules:
-        return sys.modules["llm_judge"].judge
-    try:
-        from integration.llm_judge import judge as judge_fn
-        return judge_fn
-    except ImportError:
-        pass
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "llm_judge",
-        os.path.join(SCRIPT_DIR, "llm_judge.py"),
-    )
-    if spec is None or spec.loader is None:
-        raise ImportError("cannot locate integration/llm_judge.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["llm_judge"] = mod
-    spec.loader.exec_module(mod)
-    return mod.judge
+    return build_result(case, workspace, invocation, {}, checks)
 
 
 def run_check(check, workspace, invocation=None, case=None):
@@ -508,9 +332,8 @@ def run_check(check, workspace, invocation=None, case=None):
     be called from tests with synthetic data.
 
     ``case`` is the full case dict (name, goal, checks, …). It is
-    threaded through by ``run_checks`` and consumed by check types
-    that need case-level metadata (currently only ``llm_judge``).
-    Optional for the same testing reason.
+    threaded through by ``run_checks`` for check types that need
+    case-level metadata. Optional for the same testing reason.
 
     Supported check types
     ---------------------
@@ -555,19 +378,6 @@ def run_check(check, workspace, invocation=None, case=None):
         ``cwd_relative`` (workspace-relative subdir). Runs the
         command via ``subprocess.run`` with ``timeout=60``; passes
         iff exit code is 0.
-
-    ``llm_judge``
-        Required: ``criteria`` (str — explicit success criteria the
-        judge prompt is built around). Optional: ``files`` (list of
-        workspace-relative paths to include verbatim in the prompt;
-        defaults to auto-discovery of every ``.py``, ``.md``,
-        ``.json``, ``.txt``, ``.csv`` file under the workspace),
-        ``samples`` (int, default 5), ``model`` (default
-        ``claude-opus-4-7`` from ``llm_judge.DEFAULT_MODEL``). Calls
-        ``integration/llm_judge.judge``
-        with N parallel samples and majority-votes the result.
-        Requires ``case`` to be passed in (the orchestrator does this
-        automatically via ``run_checks``).
     """
     ctype = check["type"]
 
@@ -822,68 +632,6 @@ def run_check(check, workspace, invocation=None, case=None):
             "type": ctype, "cmd": cmd,
             "passed": proc.returncode == 0,
             "detail": f"exit_code={proc.returncode}",
-        }
-
-    if ctype == "llm_judge":
-        criteria = check.get("criteria")
-        if not criteria:
-            return {
-                "type": ctype, "passed": False,
-                "detail": "llm_judge check requires 'criteria' field",
-            }
-        if case is None:
-            return {
-                "type": ctype, "passed": False,
-                "detail": "llm_judge check requires case context",
-            }
-        try:
-            judge_fn = _import_llm_judge()
-        except Exception as e:
-            return {
-                "type": ctype, "passed": False,
-                "detail": f"llm_judge import failed: {e}",
-            }
-        files = check.get("files")
-        samples = check.get("samples", 5)
-        # Only forward `model` when the case explicitly pins one;
-        # otherwise let llm_judge.DEFAULT_MODEL track Claude's current
-        # default per UAS framework policy.
-        judge_kwargs = {
-            "case_goal": case.get("goal", ""),
-            "workspace": workspace,
-            "criteria": criteria,
-            "files": files,
-            "samples": samples,
-            "case_name": case.get("name"),
-        }
-        if "model" in check:
-            judge_kwargs["model"] = check["model"]
-        try:
-            result = judge_fn(**judge_kwargs)
-        except Exception as e:
-            return {
-                "type": ctype, "passed": False,
-                "detail": f"judge error: {type(e).__name__}: {e}",
-            }
-        votes = result.get("votes") or []
-        pass_votes = sum(1 for v in votes if v)
-        detail_parts = [
-            f"majority={result.get('majority', 0.0):.2f}",
-            f"votes={pass_votes}/{result.get('samples_used', len(votes))}",
-        ]
-        if result.get("cached"):
-            detail_parts.append("(cached)")
-        reasons = result.get("reasons") or []
-        if reasons and reasons[0]:
-            detail_parts.append(f"reason: {reasons[0][:120]}")
-        return {
-            "type": ctype,
-            "passed": bool(result.get("passed")),
-            "detail": "; ".join(detail_parts),
-            "majority": result.get("majority", 0.0),
-            "votes": votes,
-            "samples_used": result.get("samples_used", len(votes)),
-            "cached": bool(result.get("cached")),
         }
 
     return {"type": ctype, "passed": False, "detail": "unknown check type"}

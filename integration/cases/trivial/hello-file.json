@@ -1,11 +1,12 @@
 {
   "name": "hello-file",
-  "goal": "Create a file called hello.txt containing exactly the text: Hello from UAS",
+  "goal": "Substrate self-test: verify the eval harness loads a case, copies a setup file into the workspace, and the deterministic checks correctly identify the expected content.",
+  "setup_files": ["hello.txt"],
   "checks": [
     {"type": "file_exists", "path": "hello.txt"},
     {"type": "file_contains", "path": "hello.txt", "pattern": "Hello from UAS"}
   ],
   "notes": {
-    "purpose": "Smoke test that the harness, container engine, auth, and architect/orchestrator round-trip can produce a single text file. Failure here means the harness itself is broken, not the model."
+    "purpose": "Post-Phase-4 substrate smoke test. The pre-prune semantics — \"can the architect produce hello.txt?\" — are gone with the architect (Phase 4 §3). This case now validates the substrate (case loader + workspace setup + deterministic checks + JSONL persistence). A FAIL here means the harness itself is broken, not any producer."
   }
 }

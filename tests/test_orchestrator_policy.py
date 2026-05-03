@@ -8,8 +8,8 @@ Claude — every code path through ``Policy.load`` and
 
 Coverage:
 
-- ``_parse_iso8601`` helper (Z suffix, +00:00 suffix, naive,
-  malformed, non-string).
+- ``_parse_resets_at`` helper (Z suffix, +00:00 suffix, naive,
+  malformed, non-string, numeric epoch — int / float / bool reject).
 - ``Policy.load`` — committed default, per-task override merge,
   missing override falls back, missing default raises.
 - Validator — every required field, every type constraint, the
@@ -49,6 +49,11 @@ VALID_DEFAULT_TOML = textwrap.dedent(
 
     [divergence]
     threshold = 50
+
+    [auto_resume]
+    enabled = false
+    fallback_seconds = 1800
+    max_wait_seconds = 21600
     """
 )
 
@@ -96,42 +101,67 @@ NOW = 1_777_500_000.0  # arbitrary fixed unix epoch for deterministic tests
 
 
 # ---------------------------------------------------------------------------
-# _parse_iso8601 helper
+# _parse_resets_at helper
 # ---------------------------------------------------------------------------
 
-class TestParseISO8601:
+class TestParseResetsAt:
     def test_z_suffix(self):
         # 2026-05-01T20:00:00Z = 1777665600 unix epoch.
-        assert policy._parse_iso8601("2026-05-01T20:00:00Z") == 1777665600.0
+        assert policy._parse_resets_at("2026-05-01T20:00:00Z") == 1777665600.0
 
     def test_offset_suffix(self):
         assert (
-            policy._parse_iso8601("2026-05-01T20:00:00+00:00")
+            policy._parse_resets_at("2026-05-01T20:00:00+00:00")
             == 1777665600.0
         )
 
     def test_naive_treated_as_utc(self):
         # Naive iso parses in UTC per the helper's contract.
-        assert policy._parse_iso8601("2026-05-01T20:00:00") == 1777665600.0
+        assert policy._parse_resets_at("2026-05-01T20:00:00") == 1777665600.0
 
     def test_non_utc_offset_normalised(self):
         # 2026-05-01T20:00:00-05:00 = 2026-05-02T01:00:00Z =
         # 1777665600 (the Z baseline) + 5h × 3600 = 1777683600.
-        result = policy._parse_iso8601("2026-05-01T20:00:00-05:00")
+        result = policy._parse_resets_at("2026-05-01T20:00:00-05:00")
         assert result == 1777683600.0
 
     def test_malformed_returns_none(self):
-        assert policy._parse_iso8601("not-a-timestamp") is None
+        assert policy._parse_resets_at("not-a-timestamp") is None
 
     def test_empty_returns_none(self):
-        assert policy._parse_iso8601("") is None
+        assert policy._parse_resets_at("") is None
 
     def test_none_returns_none(self):
-        assert policy._parse_iso8601(None) is None
+        assert policy._parse_resets_at(None) is None
 
-    def test_non_string_returns_none(self):
-        assert policy._parse_iso8601(12345) is None
-        assert policy._parse_iso8601({"x": 1}) is None
+    def test_dict_returns_none(self):
+        assert policy._parse_resets_at({"x": 1}) is None
+
+    def test_int_epoch_returned_as_float(self):
+        # Phase 3 §8 finding: live workers emit unix-epoch ints in
+        # rate_limit_event.rate_limit_info.resetsAt.
+        result = policy._parse_resets_at(1777665600)
+        assert result == 1777665600.0
+        assert isinstance(result, float)
+
+    def test_float_epoch_returned_verbatim(self):
+        result = policy._parse_resets_at(1777665600.5)
+        assert result == 1777665600.5
+
+    def test_negative_int_passes_through(self):
+        # Pre-1970 epochs are nonsensical for resetsAt but the
+        # helper is intentionally type-only; the policy machine's
+        # downstream sleep clamp (Phase 5 §3) handles past-times.
+        assert policy._parse_resets_at(-1) == -1.0
+
+    def test_zero_int_passes_through(self):
+        assert policy._parse_resets_at(0) == 0.0
+
+    def test_bool_rejected_despite_int_subclass(self):
+        # ``bool`` subclasses ``int``; ``resetsAt = True`` would
+        # otherwise silently coerce to 1.0 (epoch second 1).
+        assert policy._parse_resets_at(True) is None
+        assert policy._parse_resets_at(False) is None
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +217,11 @@ class TestPolicyLoad:
         assert p.hard_stop_usd == 200.00
         assert p.warn_usd == 100.00
         assert p.divergence_threshold == 50
+        # Phase 5 §3 — auto-resume defaults to off; only the
+        # agent-survey-2026 per-task override flips it on.
+        assert p.auto_resume_enabled is False
+        assert p.auto_resume_fallback_seconds == 1800
+        assert p.auto_resume_max_wait_seconds == 21600
 
     def test_committed_default_in_repo_is_loadable(self):
         """Sanity-check the default TOML shipped in the repo."""
@@ -197,6 +232,51 @@ class TestPolicyLoad:
         assert p.hard_stop_usd == 200.00
         assert p.warn_usd == 100.00
         assert p.divergence_threshold == 50
+        assert p.auto_resume_enabled is False
+        assert p.auto_resume_fallback_seconds == 1800
+        assert p.auto_resume_max_wait_seconds == 21600
+
+    def test_per_task_override_flips_auto_resume_on(self, tmp_path):
+        """Phase 5 §3 — per-task override flips auto-resume on."""
+        default_path = write_default(tmp_path)
+        state_root = os.path.join(str(tmp_path), "state")
+        write_override(
+            state_root,
+            "agent-survey-2026",
+            "[auto_resume]\nenabled = true\n",
+        )
+        p = policy.Policy.load(
+            task_id="agent-survey-2026",
+            state_root=state_root,
+            default_path=default_path,
+        )
+        assert p.auto_resume_enabled is True
+        # Other auto_resume fields keep their default per the
+        # _deep_merge contract (override only specifies `enabled`).
+        assert p.auto_resume_fallback_seconds == 1800
+        assert p.auto_resume_max_wait_seconds == 21600
+
+    def test_per_task_override_tunes_fallback_and_max_wait(self, tmp_path):
+        default_path = write_default(tmp_path)
+        state_root = os.path.join(str(tmp_path), "state")
+        write_override(
+            state_root,
+            "task-a",
+            (
+                "[auto_resume]\n"
+                "enabled = true\n"
+                "fallback_seconds = 60\n"
+                "max_wait_seconds = 7200\n"
+            ),
+        )
+        p = policy.Policy.load(
+            task_id="task-a",
+            state_root=state_root,
+            default_path=default_path,
+        )
+        assert p.auto_resume_enabled is True
+        assert p.auto_resume_fallback_seconds == 60
+        assert p.auto_resume_max_wait_seconds == 7200
 
     def test_per_task_override_merges_partial_section(self, tmp_path):
         """Override changes one field; other fields stay default."""
@@ -408,6 +488,99 @@ class TestPolicyValidator:
         path = write_default(tmp_path, body=body)
         with pytest.raises(policy.PolicyError, match="'enabled'"):
             policy.Policy.load(default_path=path)
+
+    def test_missing_auto_resume_table_raises(self, tmp_path):
+        body = VALID_DEFAULT_TOML.replace(
+            (
+                "[auto_resume]\nenabled = false\n"
+                "fallback_seconds = 1800\nmax_wait_seconds = 21600\n"
+            ),
+            "",
+        )
+        path = write_default(tmp_path, body=body)
+        with pytest.raises(policy.PolicyError, match=r"\[auto_resume\]"):
+            policy.Policy.load(default_path=path)
+
+    def test_non_bool_auto_resume_enabled_raises(self, tmp_path):
+        body = VALID_DEFAULT_TOML.replace(
+            "[auto_resume]\nenabled = false",
+            '[auto_resume]\nenabled = "yes"',
+        )
+        path = write_default(tmp_path, body=body)
+        with pytest.raises(
+            policy.PolicyError, match="auto_resume.enabled",
+        ):
+            policy.Policy.load(default_path=path)
+
+    def test_missing_auto_resume_enabled_raises(self, tmp_path):
+        body = VALID_DEFAULT_TOML.replace(
+            "[auto_resume]\nenabled = false\n", "[auto_resume]\n",
+        )
+        path = write_default(tmp_path, body=body)
+        with pytest.raises(
+            policy.PolicyError, match="auto_resume.enabled",
+        ):
+            policy.Policy.load(default_path=path)
+
+    def test_negative_fallback_seconds_raises(self, tmp_path):
+        body = VALID_DEFAULT_TOML.replace(
+            "fallback_seconds = 1800",
+            "fallback_seconds = -1",
+        )
+        path = write_default(tmp_path, body=body)
+        with pytest.raises(
+            policy.PolicyError, match="auto_resume.fallback_seconds",
+        ):
+            policy.Policy.load(default_path=path)
+
+    def test_negative_max_wait_seconds_raises(self, tmp_path):
+        body = VALID_DEFAULT_TOML.replace(
+            "max_wait_seconds = 21600",
+            "max_wait_seconds = -10",
+        )
+        path = write_default(tmp_path, body=body)
+        with pytest.raises(
+            policy.PolicyError, match="auto_resume.max_wait_seconds",
+        ):
+            policy.Policy.load(default_path=path)
+
+    def test_float_fallback_seconds_raises(self, tmp_path):
+        body = VALID_DEFAULT_TOML.replace(
+            "fallback_seconds = 1800",
+            "fallback_seconds = 1800.5",
+        )
+        path = write_default(tmp_path, body=body)
+        with pytest.raises(
+            policy.PolicyError, match="auto_resume.fallback_seconds",
+        ):
+            policy.Policy.load(default_path=path)
+
+    def test_bool_fallback_seconds_rejected(self, tmp_path):
+        # bool subclasses int; must be rejected explicitly.
+        body = VALID_DEFAULT_TOML.replace(
+            "fallback_seconds = 1800",
+            "fallback_seconds = true",
+        )
+        path = write_default(tmp_path, body=body)
+        with pytest.raises(
+            policy.PolicyError, match="auto_resume.fallback_seconds",
+        ):
+            policy.Policy.load(default_path=path)
+
+    def test_zero_fallback_and_max_wait_accepted(self, tmp_path):
+        # 0 is the boundary of the non-negative range. The §3 PLAN
+        # allows it (a 0-second fallback collapses auto-resume to
+        # immediate re-evaluation, which is the operator's call to
+        # make via override).
+        body = VALID_DEFAULT_TOML.replace(
+            "fallback_seconds = 1800", "fallback_seconds = 0",
+        ).replace(
+            "max_wait_seconds = 21600", "max_wait_seconds = 0",
+        )
+        path = write_default(tmp_path, body=body)
+        p = policy.Policy.load(default_path=path)
+        assert p.auto_resume_fallback_seconds == 0
+        assert p.auto_resume_max_wait_seconds == 0
 
 
 # ---------------------------------------------------------------------------

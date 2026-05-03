@@ -523,7 +523,176 @@ overrides the §1 task surfaces. Possible additions (TBD per
   `synthetic-multistep`.
 - §3 Results subsection records additions + regression check.
 
-**Status:** pending
+**Status:** completed
+
+### Results
+
+**§1-driven scope.** §1 Results' "Audit-driven ask answers" b
+named the only concrete §3 deliverable: unattended auto-resume
+across 5h soft-cap pauses, plus the polling-loop fallback for an
+unparseable `resetsAt`. Every §3 change traces back to that
+requirement; the speculative "possible additions" listed in the
+PLAN sketch (per-stage policy overrides, project-level defaults,
+policy inspection CLI, policy validation/linting) were
+deliberately NOT implemented per the PLAN's "each addition must
+trace back to a §1 task requirement" gate.
+
+**Schema additions (TOML-level, all backward-compatible).**
+
+1. New `[auto_resume]` section in
+   `orchestrator/policy.default.toml`. Three keys, all required:
+   - `enabled` (bool; default `false` — preserves the pre-§3
+     "record + return" loop behaviour the
+     `synthetic-multistep` pause+resume cycle relies on).
+   - `fallback_seconds` (non-negative int; default `1800` =
+     30 min — sleep duration when `decision["until"]` is `None`,
+     i.e., `resetsAt` was missing or unparseable).
+   - `max_wait_seconds` (non-negative int; default `21600` =
+     6h — safety ceiling so a corrupted `until` cannot wedge the
+     loop indefinitely).
+
+2. New `orchestrator/cases/agent-survey-2026-policy.toml`
+   per-task override file: `[auto_resume] enabled = true`. Other
+   knobs keep the committed default. `_seed_policy_override`
+   (existing Phase 3 §8 mechanism) copies it to
+   `<state_root>/agent-survey-2026/policy.toml` on fresh-task
+   bootstrap; `Policy.load(task_id="agent-survey-2026", ...)`
+   deep-merges it over the default per the existing contract.
+
+**Schema additions (`Policy` dataclass + helpers).**
+
+- Three new fields on `Policy.__init__`:
+  `auto_resume_enabled: bool = False`,
+  `auto_resume_fallback_seconds: int = 1800`,
+  `auto_resume_max_wait_seconds: int = 21600`. Defaults preserve
+  pre-§3 construction shape (e.g., `test_orchestrator_loop.py`'s
+  inline `Policy(...)` calls) without rewrites.
+- Three new validator helpers in `orchestrator/policy.py`:
+  `_require_non_negative_int` (rejects negative values) and
+  `_require_subtable_bool` (sub-table bool variant of the
+  existing top-level `_require_bool`); plus reuse of
+  `_require_table` for the section itself.
+- `Policy._from_config` extended to wire the three new fields
+  via the new helpers.
+
+**Schema additions (other code surfaces).**
+
+- `_parse_iso8601` → `_parse_resets_at` rename in
+  `orchestrator/policy.py`. The helper now accepts numeric
+  (`int` / `float`, returned as `float`) **and** string
+  (ISO-8601 with `Z` / `+HH:MM` / naive-UTC, parsed via
+  `datetime.fromisoformat`) shapes. `bool` is rejected
+  explicitly even though it subclasses `int`. Tests renamed
+  `TestParseISO8601` → `TestParseResetsAt` and extended with
+  five new numeric / bool / boundary cases.
+- New `_compute_pause_sleep_seconds` helper in
+  `orchestrator/cli.py`: pure function consumed by `_run_loop`'s
+  `pause_until` branch when `auto_resume_enabled`. Computes
+  sleep duration from `decision["until"]` and the policy's
+  `fallback_seconds` / `max_wait_seconds`. Five test cases cover
+  the four paths (until=None / until-in-past /
+  until-in-future-under-cap / until-in-future-over-cap) plus
+  fallback-greater-than-max-wait clamp.
+- `_run_loop` extended with the auto-resume branch:
+  `policy.auto_resume_enabled` true → record `policy_pause`
+  carrying the sleep duration in the note, `time.sleep(...)`,
+  record `policy_auto_resume`, `continue`. Disabled branch
+  unchanged (record `policy_pause`, return).
+- `policy_auto_resume` added to
+  `orchestrator/task.py:_VALID_DECISION_KINDS` and the
+  `DecisionKind` Literal.
+- `integration/provenance.py:ORCHESTRATOR_VERSION` bumped from
+  `"phase3"` → `"phase5"` per the existing
+  "adding new kinds requires bumping ORCHESTRATOR_VERSION"
+  contract. Five test pins updated in lockstep
+  (`test_orchestrator_buffer_ledger.py`,
+  `test_orchestrator_rate_ledger.py`,
+  `test_orchestrator_resume.py`, `test_orchestrator_task.py`).
+  Pre-§5 logs replay cleanly because the kind is purely
+  additive — verified live by `./uas-orchestrate status
+  synthetic-multistep` against the Phase 4 §7-vintage state log
+  (commit `4754488`-era, `orchestrator_version: "phase3"`).
+
+**Implementation lines changed.** `git diff --stat`:
+
+| File | Diff |
+|---|---|
+| `orchestrator/policy.py` | +90 / −12 |
+| `orchestrator/cli.py` | +52 / −1 |
+| `orchestrator/task.py` | +2 / 0 |
+| `orchestrator/policy.default.toml` | +33 / 0 |
+| `orchestrator/cases/agent-survey-2026-policy.toml` | new (+24) |
+| `integration/provenance.py` | +5 / −1 |
+| `docs/substrate.md` | +12 / 0 |
+| `docs/phase5_scope.md` | +48 / −18 |
+| `tests/test_orchestrator_policy.py` | +201 / −22 |
+| `tests/test_orchestrator_loop.py` | +271 / 0 |
+| `tests/test_orchestrator_task.py` | +11 / −5 |
+| `tests/test_orchestrator_{buffer,rate}_ledger.py` + `test_orchestrator_resume.py` | +5 / −5 (version-pin bumps only) |
+
+Net ≈ +677 / −58 across 13 files. Largest contributors are the
+two new test classes (`TestComputePauseSleepSeconds` ×6 +
+`TestRunLoopAutoResume` ×4 in the loop file; ×8 new policy-load
++ validator + parse_resets_at numeric cases in the policy file).
+
+**New test count delta.** Full pytest baseline rose 443 →
+468 / 1 deselected (+25 new tests, all green; pre-§3 baseline
+was Phase 4 §7's 403 + §2's +40 = 443).
+
+- `TestParseResetsAt` (renamed): +5 tests (int/float/bool/
+  zero/negative numeric coverage).
+- `TestPolicyLoad`: +2 tests (per-task override flips
+  auto_resume on; per-task override tunes
+  fallback / max_wait).
+- `TestPolicyValidator`: +8 tests (missing table,
+  non-bool enabled, missing enabled, negative fallback,
+  negative max_wait, float fallback, bool fallback,
+  zero boundary).
+- `TestComputePauseSleepSeconds` (new class): 6 tests.
+- `TestRunLoopAutoResume` (new class): 4 tests
+  (sleep + drain queue; pause-decision note carries sleep
+  duration; auto_resume disabled records pause + returns;
+  unparseable `resetsAt` uses fallback).
+
+**Regression check.**
+
+- Full `pytest` green: 468 passed / 1 deselected (5.66s).
+  Confirms all 13 surviving test modules stay green under the
+  schema additions.
+- `./uas-orchestrate status synthetic-multistep` against the
+  Phase 4 §7-vintage state log replays cleanly: 3 done /
+  0 pending / `$0.1531` total spend / `task_resume` last
+  decision. Backward-compat verified live on a real pre-§3 log
+  (the log's rows still carry `orchestrator_version: "phase3"`
+  but the additive `policy_auto_resume` kind doesn't appear so
+  replay short-circuits cleanly).
+- `agent-survey-2026-policy.toml` smoke-tested via Python
+  (`Policy.load(task_id="agent-survey-2026", state_root=tmp)`
+  after `_seed_policy_override`-equivalent copy):
+  `auto_resume_enabled is True`, `fallback_seconds == 1800`,
+  `max_wait_seconds == 21600`, `hard_stop_usd == 200.00`
+  (default preserved).
+- The actual real-Claude end-to-end run on `agent-survey-2026`
+  is deferred to §6 pre-flight per the PLAN's "real Claude Max
+  budget will be spent" gating; §3 verifies plumbing only.
+
+**Substrate findings.**
+
+- `docs/substrate.md` component 8: clarified `<unix ts>`
+  precision is integer seconds-since-epoch (the live-worker
+  shape Phase 3 §8 found, matched against the
+  `synthetic-multistep/rate_limits.jsonl` artefacts: `resetsAt:
+  1777724400`).
+- `docs/phase5_scope.md` § "resetsAt parse mismatch" rewritten
+  to record §3 closure: pre-§3 state preserved as historical
+  context; post-§3 state reports the polymorphic helper plus
+  the auto-resume primitive plus the substrate-doc amendment.
+- The `[oauth] invalid_grant` first-spawn warning, the
+  `config_hash="unavailable"` cosmetic field, the
+  percentage-cap open question, and the `IS_SANDBOX=1`
+  worker-side injection are all unchanged by §3 (they sit
+  outside the policy / decision-kind surface this section
+  touched).
 
 ## Section 4 — Resume summary writer
 

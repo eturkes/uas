@@ -24,7 +24,10 @@ HARNESS_VERSION = "phase1"
 # Bumped manually when the orchestrator's persisted-event schema
 # changes. Stamped on rows the orchestrator writes when callers pass
 # include_orchestrator_version=True; eval rows do not include it.
-ORCHESTRATOR_VERSION = "phase3"
+# phase5 bump: Phase 5 §3 added the ``policy_auto_resume`` decision
+# kind to ``orchestrator/task.py``'s allow-list. Pre-§3 logs lacking
+# this kind replay cleanly because the kind is purely additive.
+ORCHESTRATOR_VERSION = "phase5"
 
 # Secret-suffix filter for env_snapshot in capture_run_metadata().
 # Anchored to end-of-string so legitimate names like UAS_KEY_NAME

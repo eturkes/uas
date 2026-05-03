@@ -672,6 +672,18 @@ invoke the architect. It uses the eval substrate two ways:
   Phase 2 §1 observed only `five_hour` events; whether `seven_day`
   also fires is left to Phase 3 iteration.
 
+  `<unix ts>` here is an **integer** seconds-since-epoch value in
+  the live worker's stream-json output (Phase 3 §8 hand-off
+  finding (a), confirmed against
+  `orchestrator/state/synthetic-multistep/rate_limits.jsonl`
+  rows: `resetsAt: 1777724400`). Earlier prose in `policy.py`
+  treated it as an ISO-8601 string — that documentation drift was
+  amended in Phase 5 §3 along with `_parse_resets_at` becoming
+  polymorphic over int / float / ISO-8601 string. Future readers
+  should expect the int shape from headless workers; the TUI
+  companion's `resets_at` (snake_case) carries the same integer
+  shape per Phase 2 §1 schema.
+
 - TUI companion: full statusline JSON payload, including
 
   ```

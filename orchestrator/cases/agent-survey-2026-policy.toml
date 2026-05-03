@@ -1,0 +1,24 @@
+# Phase 5 §3 — per-task policy override for the agent-survey-2026
+# long-horizon real-task run.
+#
+# `_seed_policy_override` (orchestrator/cli.py L179-201) copies this
+# file to <state_root>/<task>/policy.toml on fresh-task bootstrap,
+# where Policy.load(task_id="agent-survey-2026", ...) deep-merges it
+# over the committed default at orchestrator/policy.default.toml.
+#
+# The single override is `[auto_resume] enabled = true`. Every other
+# policy knob (5h soft-cap action, 7d soft-cap action, $200 hard-stop,
+# divergence threshold, fallback_seconds, max_wait_seconds) keeps its
+# committed default; per-task tuning of those is out of scope for §3
+# per the PLAN's "each addition must trace back to a §1 task
+# requirement" gate.
+#
+# Driven by §1 Results' "Audit-driven ask answers" b: the project
+# owner is unavailable for input across the multi-day run, so manual
+# re-invocation after every 5h soft-cap pause defeats the validation.
+# Auto-resume on this case lets the loop sleep until `resetsAt` (or
+# `fallback_seconds = 1800` if the timestamp is unparseable) and
+# re-evaluate without operator intervention.
+
+[auto_resume]
+enabled = true

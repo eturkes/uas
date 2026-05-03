@@ -72,7 +72,7 @@ def _baseline_meta(**overrides) -> dict:
         "env_snapshot": {},
         "config_hash": "deadbeef",
         "harness_version": "phase1",
-        "orchestrator_version": "phase3",
+        "orchestrator_version": "phase5",
         "task_id": "t1",
         "survives_git_sha_flip": True,
     }

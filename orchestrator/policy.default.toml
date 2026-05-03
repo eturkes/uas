@@ -50,3 +50,36 @@ warn_usd = 100.00
 # above the typical worker count per 5h window under normal
 # operation; 50 is a conservative starting point.
 threshold = 50
+
+[auto_resume]
+# Phase 5 §3 — unattended auto-resume across 5h soft-cap pauses.
+#
+# When enabled, _run_loop on a `pause_until` verdict records a
+# `policy_pause` decision, sleeps until `decision["until"]` (or
+# `fallback_seconds` if `until` is None), records a
+# `policy_auto_resume` decision, and re-evaluates the policy
+# without operator intervention. Disabled (default) preserves the
+# pre-§3 behaviour: record `policy_pause` and exit so the operator
+# explicitly resumes via `./uas-orchestrate resume <task>`.
+#
+# Required by the Phase 5 §1 agent-survey-2026 task whose acceptance
+# criterion includes traversing 1-3 5h window boundaries unattended;
+# opted-in via that task's per-task override file rather than baked
+# into the committed default so the synthetic-multistep pause+resume
+# fixture continues to validate the explicit-operator path. Per
+# CLAUDE.md core principle 2 (every mechanism must be ablatable),
+# this section is the single ablation control for the primitive.
+enabled = false
+
+# Sleep seconds when `decision["until"]` is None — i.e., resetsAt
+# was missing or unparseable. 1800 (30 min) deliberately under-shoots
+# the 5h cap window so a malformed signal falls back to polling
+# rather than over-sleeping a real reset.
+fallback_seconds = 1800
+
+# Safety ceiling on a single sleep, in seconds. 21600 (6h) sits
+# comfortably above the 5h soft-cap worst-case wait so a clean
+# `until` always fits, and bounds a numeric-corruption case (e.g.,
+# a resetsAt that decoded as year 2050) so the loop cannot wedge
+# indefinitely.
+max_wait_seconds = 21600

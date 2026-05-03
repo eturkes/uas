@@ -176,6 +176,38 @@ def _find_next_pending(task: Task) -> Subtask | None:
     return None
 
 
+def _compute_pause_sleep_seconds(
+    decision: policy_mod.PolicyDecision,
+    policy: policy_mod.Policy,
+    *,
+    now: float,
+) -> float:
+    """Compute the auto-resume sleep duration for a ``pause_until`` verdict.
+
+    Phase 5 §3 helper. ``decision["until"]`` is the unix epoch float
+    ``Policy.decide()`` emits when ``rate_status.five_hour.resetsAt``
+    parses cleanly, ``None`` otherwise. The returned wait is clamped
+    to ``[0, policy.auto_resume_max_wait_seconds]`` so a corrupted
+    timestamp (e.g., a year-2050 ``until``) cannot wedge the loop.
+
+    - ``until = None`` → ``policy.auto_resume_fallback_seconds``,
+      clamped to ``max_wait_seconds``. The polling-loop fallback
+      called out in PLAN §1 ask "b" so an unparseable ``resetsAt``
+      doesn't strand the task indefinitely.
+    - ``until <= now`` → ``0.0`` (the cap is already past; immediately
+      re-evaluate).
+    - ``until > now`` → ``min(until - now, max_wait_seconds)``.
+    """
+    until = decision.get("until")
+    max_wait = float(policy.auto_resume_max_wait_seconds)
+    if until is None:
+        return min(float(policy.auto_resume_fallback_seconds), max_wait)
+    delta = float(until) - float(now)
+    if delta <= 0:
+        return 0.0
+    return min(delta, max_wait)
+
+
 def _seed_policy_override(task: Task, cases_dir: str) -> None:
     """Copy ``<cases_dir>/<task>-policy.toml`` to ``state/<task>/policy.toml``.
 
@@ -246,6 +278,26 @@ def _run_loop(
         action = decision["action"]
 
         if action == "pause_until":
+            if policy.auto_resume_enabled:
+                sleep_seconds = _compute_pause_sleep_seconds(
+                    decision, policy, now=time.time(),
+                )
+                task.record_decision(
+                    "policy_pause",
+                    (
+                        f"{decision['reason']}; auto-resume "
+                        f"after {sleep_seconds:.0f}s sleep"
+                    ),
+                )
+                time.sleep(sleep_seconds)
+                task.record_decision(
+                    "policy_auto_resume",
+                    (
+                        f"woke after {sleep_seconds:.0f}s sleep; "
+                        f"re-evaluating"
+                    ),
+                )
+                continue
             task.record_decision("policy_pause", decision["reason"])
             return
         if action == "wrap_up":

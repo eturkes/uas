@@ -559,6 +559,277 @@ class TestRunLoopDispatch:
 
 
 # ---------------------------------------------------------------------------
+# _compute_pause_sleep_seconds (Phase 5 §3)
+# ---------------------------------------------------------------------------
+
+
+class TestComputePauseSleepSeconds:
+    """Pure helper, no I/O. Exercises the four paths: until-None,
+    until-in-past, until-in-future-under-cap, until-over-cap."""
+
+    def _policy(
+        self,
+        *,
+        fallback: int = 1800,
+        max_wait: int = 21600,
+        enabled: bool = True,
+    ):
+        return policy_mod.Policy(
+            enabled=True,
+            five_hour_soft_cap_action="pause",
+            seven_day_soft_cap_action="wrap_up",
+            hard_stop_usd=10.0, warn_usd=5.0,
+            divergence_threshold=50,
+            auto_resume_enabled=enabled,
+            auto_resume_fallback_seconds=fallback,
+            auto_resume_max_wait_seconds=max_wait,
+        )
+
+    def test_until_none_uses_fallback(self):
+        decision = {"action": "pause_until", "reason": "x", "until": None}
+        result = cli_mod._compute_pause_sleep_seconds(
+            decision, self._policy(fallback=600), now=1000.0,
+        )
+        assert result == 600.0
+
+    def test_until_none_fallback_clamped_to_max_wait(self):
+        # fallback > max_wait — operator misconfiguration; clamp
+        # rather than oversleep.
+        decision = {"action": "pause_until", "reason": "x", "until": None}
+        result = cli_mod._compute_pause_sleep_seconds(
+            decision, self._policy(fallback=10_000, max_wait=300),
+            now=1000.0,
+        )
+        assert result == 300.0
+
+    def test_until_in_past_returns_zero(self):
+        decision = {
+            "action": "pause_until", "reason": "x", "until": 999.0,
+        }
+        result = cli_mod._compute_pause_sleep_seconds(
+            decision, self._policy(), now=1000.0,
+        )
+        assert result == 0.0
+
+    def test_until_equals_now_returns_zero(self):
+        decision = {
+            "action": "pause_until", "reason": "x", "until": 1000.0,
+        }
+        result = cli_mod._compute_pause_sleep_seconds(
+            decision, self._policy(), now=1000.0,
+        )
+        assert result == 0.0
+
+    def test_until_in_future_under_cap(self):
+        decision = {
+            "action": "pause_until", "reason": "x", "until": 1500.0,
+        }
+        result = cli_mod._compute_pause_sleep_seconds(
+            decision, self._policy(max_wait=21600), now=1000.0,
+        )
+        assert result == 500.0
+
+    def test_until_in_future_over_cap_is_clamped(self):
+        # Year-2050 corruption case — clamp to max_wait so the loop
+        # keeps polling rather than wedging indefinitely.
+        decision = {
+            "action": "pause_until", "reason": "x",
+            "until": 2_524_608_000.0,  # ~2050-01-01
+        }
+        result = cli_mod._compute_pause_sleep_seconds(
+            decision, self._policy(max_wait=3600), now=1000.0,
+        )
+        assert result == 3600.0
+
+
+# ---------------------------------------------------------------------------
+# _run_loop — auto-resume primitive
+# ---------------------------------------------------------------------------
+
+
+class TestRunLoopAutoResume:
+    """Phase 5 §3 — when ``policy.auto_resume_enabled`` is true,
+    the loop sleeps on a ``pause_until`` verdict and re-evaluates
+    rather than recording the pause and exiting.
+    """
+
+    _AUTO_RESUME_TOML = (
+        "[auto_resume]\n"
+        "enabled = true\n"
+        "fallback_seconds = 30\n"
+        "max_wait_seconds = 60\n"
+    )
+
+    def _seed_task(self, state_root, cases_dir, workspaces_dir):
+        path = os.path.join(cases_dir, "t1.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_FULL_TOML)
+        return Task.from_toml(
+            path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+
+    def _seed_override(self, state_root, body=_AUTO_RESUME_TOML):
+        os.makedirs(os.path.join(state_root, "t1"), exist_ok=True)
+        with open(
+            os.path.join(state_root, "t1", "policy.toml"),
+            "w", encoding="utf-8",
+        ) as fh:
+            fh.write(body)
+
+    def test_auto_resume_sleeps_then_drains_queue(
+        self, state_root, cases_dir, workspaces_dir,
+        stub_worker, monkeypatch,
+    ):
+        """First iteration → pause → sleep → second iteration → go."""
+        self._seed_override(state_root)
+        task = self._seed_task(state_root, cases_dir, workspaces_dir)
+
+        # Mutable state the stub-sleep flips to release the loop on
+        # second iteration.
+        sim_state = {"current": "five_hour_pause"}
+        sleep_calls: list[float] = []
+
+        def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            sim_state["current"] = "allowed"
+
+        def state_aware_resolve(rate_l, task_id, simulate):
+            return cli_mod._simulated_rate_status(sim_state["current"])
+
+        monkeypatch.setattr(cli_mod.time, "sleep", fake_sleep)
+        monkeypatch.setattr(
+            cli_mod, "_resolve_rate_status", state_aware_resolve,
+        )
+
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir,
+            simulate="five_hour_pause",
+        )
+
+        # Sleep fired once, queue drained on the second iteration.
+        assert len(sleep_calls) == 1
+        assert all(s.status == "done" for s in task.subtasks)
+        # Both spawn/complete pairs ran post-wake.
+        assert [c["subtask_id"] for c in stub_worker] == ["s1", "s2"]
+        # Decision timeline: policy_pause + policy_auto_resume
+        # surrounding the spawn/complete pairs.
+        kinds = [d.kind for d in task.decisions]
+        assert kinds.count("policy_pause") == 1
+        assert kinds.count("policy_auto_resume") == 1
+        # Order: pause precedes auto_resume which precedes spawns.
+        idx_pause = kinds.index("policy_pause")
+        idx_resume = kinds.index("policy_auto_resume")
+        idx_first_spawn = kinds.index("worker_spawn")
+        assert idx_pause < idx_resume < idx_first_spawn
+
+    def test_auto_resume_pause_decision_carries_sleep_duration(
+        self, state_root, cases_dir, workspaces_dir,
+        stub_worker, monkeypatch,
+    ):
+        self._seed_override(state_root)
+        task = self._seed_task(state_root, cases_dir, workspaces_dir)
+        sim_state = {"current": "five_hour_pause"}
+
+        def fake_sleep(seconds):
+            sim_state["current"] = "allowed"
+
+        def state_aware_resolve(rate_l, task_id, simulate):
+            return cli_mod._simulated_rate_status(sim_state["current"])
+
+        monkeypatch.setattr(cli_mod.time, "sleep", fake_sleep)
+        monkeypatch.setattr(
+            cli_mod, "_resolve_rate_status", state_aware_resolve,
+        )
+
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir,
+            simulate="five_hour_pause",
+        )
+        # Pause-decision note records the sleep duration so a reader
+        # of task_events.jsonl can audit the wait without correlating
+        # against rate_limits.jsonl.
+        pause = next(d for d in task.decisions if d.kind == "policy_pause")
+        assert "auto-resume after" in pause.note
+        assert "s sleep" in pause.note
+        resume = next(
+            d for d in task.decisions if d.kind == "policy_auto_resume"
+        )
+        assert "woke after" in resume.note
+        assert "re-evaluating" in resume.note
+
+    def test_auto_resume_disabled_records_pause_and_returns(
+        self, state_root, cases_dir, workspaces_dir,
+        stub_worker, monkeypatch,
+    ):
+        """Default-off branch: explicit-operator behaviour preserved."""
+        # No override → committed default has auto_resume.enabled = false.
+        task = self._seed_task(state_root, cases_dir, workspaces_dir)
+
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(
+            cli_mod.time, "sleep",
+            lambda s: sleep_calls.append(s),
+        )
+
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir,
+            simulate="five_hour_pause",
+        )
+
+        # No sleep fired; no auto_resume decision recorded.
+        assert sleep_calls == []
+        kinds = [d.kind for d in task.decisions]
+        assert "policy_pause" in kinds
+        assert "policy_auto_resume" not in kinds
+        # All subtasks remain pending — the loop exited.
+        assert all(s.status == "pending" for s in task.subtasks)
+
+    def test_auto_resume_with_unparseable_resets_at_uses_fallback(
+        self, state_root, cases_dir, workspaces_dir,
+        stub_worker, monkeypatch,
+    ):
+        """``until = None`` (resetsAt malformed) → fallback_seconds."""
+        self._seed_override(state_root)
+        task = self._seed_task(state_root, cases_dir, workspaces_dir)
+        sim_state = {"current": "malformed"}
+        sleep_calls: list[float] = []
+
+        def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            sim_state["current"] = "allowed"
+
+        # Synthesise a rate_status whose five_hour.resetsAt is a
+        # value Policy._parse_resets_at refuses (a dict; Phase 5 §3
+        # _parse_resets_at rejects non-numeric, non-string types).
+        def state_aware_resolve(rate_l, task_id, simulate):
+            if sim_state["current"] == "allowed":
+                return cli_mod._simulated_rate_status("allowed")
+            base = cli_mod._simulated_rate_status("five_hour_pause")
+            base["five_hour"]["resetsAt"] = {"corrupted": True}
+            return base
+
+        monkeypatch.setattr(cli_mod.time, "sleep", fake_sleep)
+        monkeypatch.setattr(
+            cli_mod, "_resolve_rate_status", state_aware_resolve,
+        )
+
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir,
+            simulate="five_hour_pause",
+        )
+
+        # The §3 override sets fallback_seconds=30. Policy emits
+        # until=None for the corrupted resetsAt; the helper falls
+        # back to 30s (under max_wait=60).
+        assert sleep_calls == [30.0]
+        assert all(s.status == "done" for s in task.subtasks)
+
+
+# ---------------------------------------------------------------------------
 # cmd_pause / cmd_halt
 # ---------------------------------------------------------------------------
 

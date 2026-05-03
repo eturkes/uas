@@ -237,23 +237,37 @@ TUI-statusline companion read pattern.
 
 ### resetsAt parse mismatch (Phase 3 §8 hand-off finding (a))
 
-**State.** `Policy._parse_iso8601` returns `None` for numeric
-`resetsAt` (live workers emit unix epoch integers; substrate doc
-claims ISO-8601). Phase 3 §8 declared this harmless because
-`_run_loop` records the pause decision and exits — it does not
-consume `pause_until.until`.
+**State (post-§3).** Closed in Phase 5 §3. `Policy._parse_iso8601`
+was renamed to `_parse_resets_at` and made polymorphic over
+int / float (unix epoch, the actual live-worker shape) and
+ISO-8601 string (the legacy doc claim, retained as a
+forward-compatibility path). The orchestrator's main loop now
+consumes `decision["until"]` via the §3 auto-resume primitive.
+Substrate-doc shape line in `docs/substrate.md` component 8 was
+amended to spell out that `<unix ts>` is an integer
+seconds-since-epoch.
 
-**Does it bite §1?** Only if Phase 5 wants the orchestrator to
-auto-resume at a specific wall-clock time. The current model is
-"orchestrator pauses; user (or cron) re-invokes
-`./uas-orchestrate resume`". If §1's task acceptance criteria
-include unattended multi-window operation, this becomes a real
-gap — `until=None` means the loop doesn't know when to wake.
+**Pre-§3 state (preserved for context).** `_parse_iso8601`
+returned `None` for numeric `resetsAt`. Phase 3 §8 declared this
+harmless because `_run_loop` recorded the pause decision and
+exited — it did not consume `pause_until.until`.
 
-**Suggested handling.** §1 user-input: if the task expects
-unattended resumes, flag this so §3 (or §6 pre-flight) covers it.
-If the user is OK manually re-invoking after each soft cap (or
-running a simple cron that polls), no code change needed.
+**Did it bite §1?** Yes — the §1 task acceptance criteria
+include unattended multi-window operation (project owner
+unavailable for input across the multi-day run; per §1 Results'
+ask "b"). §3 closed the gap so the §1 task's
+`agent-survey-2026-policy.toml` can opt into
+`[auto_resume] enabled = true` and have the loop sleep until
+`resetsAt` (or the `fallback_seconds = 1800` polling-loop
+fallback if the timestamp is unparseable) without operator
+intervention.
+
+**§6 pre-flight implication.** Auto-resume sleep durations
+beyond the typical 5h cap window are clamped to
+`max_wait_seconds = 21600` (6h) so a corrupted `resetsAt` cannot
+wedge the loop. If the live trace shows a sleep of exactly the
+clamp value, that's the malformed-timestamp branch firing —
+inspect `rate_limits.jsonl` for the offending event.
 
 ### OAuth invalid_grant noise on first spawn (Phase 3 §8 finding (b))
 

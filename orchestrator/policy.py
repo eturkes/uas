@@ -35,14 +35,17 @@ real buffer drain ~5× more accurately than the locally-priced
 sum on the §4 trace. The committed ``hard_stop_usd = 200.00``
 default is calibrated against the reported figure.
 
-Time semantics. ``rate_status.five_hour.resetsAt`` is an ISO-8601
-UTC timestamp (Claude Code's stream-json schema). ``decide()``
-parses it to a unix epoch float for the ``until`` field so the
-orchestrator's main loop can compare against wall-clock time
-without re-implementing the parsing. ``until = None`` is returned
-on a missing or malformed timestamp; the loop interprets that as
-"sleep for an implementation-chosen duration then re-evaluate"
-(decision deferred to §7/§8).
+Time semantics. ``rate_status.five_hour.resetsAt`` is polymorphic
+in Claude Code's stream-json schema: live workers under §8
+emitted unix-epoch integers (per the Phase 3 close note in
+``ROADMAP.md`` § "Phase 3 — Orchestrator core"), while older
+documentation and the prior helper assumed an ISO-8601 string.
+``_parse_resets_at`` accepts both shapes and normalises to a
+unix-epoch float for the ``until`` field. ``until = None`` is
+returned on a missing or malformed timestamp; the orchestrator's
+main loop falls back to ``policy.auto_resume_fallback_seconds``
+(the Phase 5 §3 polling-loop primitive) when auto-resume is
+enabled, or records the pause and exits when it is not.
 """
 
 import os
@@ -73,16 +76,31 @@ class PolicyError(ValueError):
     """Raised on malformed, missing, or unknown-value policy TOML."""
 
 
-def _parse_iso8601(value: object) -> float | None:
-    """Parse an ISO-8601 timestamp to a unix epoch float.
+def _parse_resets_at(value: object) -> float | None:
+    """Parse a ``resetsAt`` field to a unix epoch float.
 
-    Accepts the ``Z`` suffix Claude Code emits (``2026-05-01T20:00:00Z``)
-    by rewriting it to ``+00:00`` before delegating to
-    ``datetime.fromisoformat``. Naive timestamps (no tz) are treated
-    as UTC. Returns ``None`` on missing / malformed input so callers
-    can pass through whatever ``rate_status`` provided without
-    pre-validating.
+    Polymorphic over the two shapes Phase 3 §8 surfaced live
+    workers using:
+
+    - **Numeric** (``int`` / ``float``) — unix seconds since epoch,
+      returned verbatim as a float. The shape Phase 3's stream-json
+      ``rate_limit_event`` rows actually carry.
+    - **String** (ISO-8601) — accepts the ``Z`` suffix Claude Code
+      emits in some surfaces (``2026-05-01T20:00:00Z``) by
+      rewriting it to ``+00:00`` before delegating to
+      ``datetime.fromisoformat``. Naive timestamps (no tz) are
+      treated as UTC.
+
+    Returns ``None`` on missing / malformed input so callers can
+    pass through whatever ``rate_status`` provided without
+    pre-validating. ``bool`` is rejected explicitly even though it
+    subclasses ``int`` — ``resetsAt = True`` would otherwise
+    silently coerce to ``1.0`` (epoch second 1, 1970-01-01).
     """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
     if not isinstance(value, str) or not value:
         return None
     s = value
@@ -182,6 +200,28 @@ def _require_int(
     return value
 
 
+def _require_non_negative_int(
+    table: dict, table_name: str, key: str,
+) -> int:
+    value = _require_int(table, table_name, key)
+    if value < 0:
+        raise PolicyError(
+            f"{table_name}.{key} must be >= 0; got {value!r}"
+        )
+    return value
+
+
+def _require_subtable_bool(
+    table: dict, table_name: str, key: str,
+) -> bool:
+    value = table.get(key)
+    if not isinstance(value, bool):
+        raise PolicyError(
+            f"{table_name}.{key} must be a bool; got {value!r}"
+        )
+    return value
+
+
 class Policy:
     """Three-state policy machine.
 
@@ -200,6 +240,9 @@ class Policy:
         hard_stop_usd: float,
         warn_usd: float,
         divergence_threshold: int,
+        auto_resume_enabled: bool = False,
+        auto_resume_fallback_seconds: int = 1800,
+        auto_resume_max_wait_seconds: int = 21600,
     ) -> None:
         self.enabled = enabled
         self.five_hour_soft_cap_action = five_hour_soft_cap_action
@@ -207,6 +250,9 @@ class Policy:
         self.hard_stop_usd = hard_stop_usd
         self.warn_usd = warn_usd
         self.divergence_threshold = divergence_threshold
+        self.auto_resume_enabled = auto_resume_enabled
+        self.auto_resume_fallback_seconds = auto_resume_fallback_seconds
+        self.auto_resume_max_wait_seconds = auto_resume_max_wait_seconds
 
     @classmethod
     def load(
@@ -244,6 +290,7 @@ class Policy:
         seven_day = _require_table(config, "seven_day")
         buffer_section = _require_table(config, "buffer")
         divergence = _require_table(config, "divergence")
+        auto_resume = _require_table(config, "auto_resume")
 
         return cls(
             enabled=enabled,
@@ -261,6 +308,15 @@ class Policy:
             ),
             divergence_threshold=_require_int(
                 divergence, "divergence", "threshold",
+            ),
+            auto_resume_enabled=_require_subtable_bool(
+                auto_resume, "auto_resume", "enabled",
+            ),
+            auto_resume_fallback_seconds=_require_non_negative_int(
+                auto_resume, "auto_resume", "fallback_seconds",
+            ),
+            auto_resume_max_wait_seconds=_require_non_negative_int(
+                auto_resume, "auto_resume", "max_wait_seconds",
             ),
         )
 
@@ -334,7 +390,7 @@ class Policy:
             and five_hour.get("status") not in (None, "allowed")
             and self.five_hour_soft_cap_action == "pause"
         ):
-            until = _parse_iso8601(five_hour.get("resetsAt"))
+            until = _parse_resets_at(five_hour.get("resetsAt"))
             if until is None:
                 print(
                     f"[policy] pause_until requested but resetsAt is "

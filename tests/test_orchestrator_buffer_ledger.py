@@ -75,7 +75,7 @@ def make_metadata(**overrides) -> dict:
         "env_snapshot": {},
         "config_hash": "n/a",
         "harness_version": "phase1",
-        "orchestrator_version": "phase3",
+        "orchestrator_version": "phase5",
     }
     base.update(overrides)
     return base
@@ -363,7 +363,7 @@ class TestRecord:
         rows = _read_rows(str(tmp_path), "t1")
         assert rows[0]["git_sha"] == "cafef00d"
         assert rows[0]["harness_version"] == "phase1"
-        assert rows[0]["orchestrator_version"] == "phase3"
+        assert rows[0]["orchestrator_version"] == "phase5"
 
     def test_appends_across_multiple_calls(self, ledger, tmp_path):
         ledger.record(

@@ -228,7 +228,7 @@ class TestTaskFromToml:
         # capture_run_metadata is stamped at row root.
         assert "git_sha" in row
         assert row["harness_version"] == "phase1"
-        assert row["orchestrator_version"] == "phase3"
+        assert row["orchestrator_version"] == "phase5"
         assert "timestamp_utc" in row
         assert "config_hash" in row
 
@@ -430,7 +430,7 @@ class TestEnqueueSubtask:
         assert rows[0]["subtask_id"] == "s1"
         assert rows[0]["prompt"] == "do thing 1"
         assert rows[0]["task_id"] == "t1"
-        assert rows[0]["orchestrator_version"] == "phase3"
+        assert rows[0]["orchestrator_version"] == "phase5"
 
     def test_preserves_order_across_calls(self, fresh_task):
         fresh_task.enqueue_subtask("s1", "p1")
@@ -722,7 +722,7 @@ class TestPersistence:
         for r in rows:
             assert "git_sha" in r
             assert r["harness_version"] == "phase1"
-            assert r["orchestrator_version"] == "phase3"
+            assert r["orchestrator_version"] == "phase5"
             assert r["task_id"] == "t1"
             assert r["event"] in {
                 "enqueue_subtask",
@@ -1296,11 +1296,14 @@ class TestModuleConstants:
 
     def test_decision_kinds_match_plan(self):
         # Closed allow-list — adding new kinds requires bumping
-        # ORCHESTRATOR_VERSION per provenance.py's contract.
+        # ORCHESTRATOR_VERSION per provenance.py's contract. Phase 5
+        # §3 added ``policy_auto_resume`` and bumped the version
+        # constant from "phase3" → "phase5" in lockstep.
         assert task_mod._VALID_DECISION_KINDS == frozenset({
             "policy_pause",
             "policy_wrap_up",
             "policy_halt",
+            "policy_auto_resume",
             "worker_spawn",
             "worker_complete",
             "worker_fail",

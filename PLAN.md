@@ -557,7 +557,88 @@ plus `sandbox.py` (Phase 1 substrate keep-list).
    --simulate-rate-status allowed` runs end-to-end.
 - §4 Results subsection records counts.
 
-**Status:** pending
+**Status:** completed
+
+### Section 4 — Results
+
+Cuts the pre-Phase-3 `orchestrator/` legacy plus the `uas/`
+package. After §4 the `orchestrator/` directory contains only the
+Phase 3 deliverables plus `sandbox.py` (Phase 1 substrate
+keep-list) plus the `__init__.py` package marker, plus runtime
+`cases/` and `state/` directories.
+
+**Counts.**
+
+| Metric | Value |
+|---|---|
+| `orchestrator/` legacy source cut (4: main, llm_client, parser, claude_config) | 2,935 lines |
+| `uas/` source cut (4: fuzzy, fuzzy_models, janitor, __init__) | 334 lines |
+| Subtotal source | 3,269 lines |
+| Tests cut (6: test_janitor, test_claude_config, test_llm_client, test_llm_isolation, test_parser, test_framework_layout) | 1,648 lines |
+| **§4 total cut** | **14 files, 4,917 deletions** |
+| Pre-cut PLAN §1 estimate (post-§3 transitive) | 14 files (18 − 4 transitive cleanup), ≈ 5,200 lines |
+| Delta vs estimate | 0 files, −283 lines |
+
+`tests/test_fuzzy.py` (the §1-flagged crossover) and the 4
+transitive tests pulled forward in §3 (`test_best_of_n`,
+`test_orchestrator_main`, `test_pre_flight`,
+`test_version_resolution`) were already cut at §3 close — PLAN
+§4 step 3's enumeration of them becomes a no-op as predicted in
+§1's "Deviations" subsection.
+
+**Surviving `orchestrator/` contents (Phase 3 deliverables +
+substrate keep-list):**
+
+```
+__init__.py        cli.py            container.py
+buffer_ledger.py   pricing.py        rate_ledger.py
+policy.py          policy.default.toml
+task.py            workspace.py      worker.py
+sandbox.py         cases/            state/   __pycache__
+```
+
+`uas/` directory removed (`__pycache__` left as untracked
+artefact; cleanup happens organically when Python next runs).
+
+**Surviving import surface.** Re-grep at HEAD: zero importers of
+the cut modules anywhere in the keep set (architect importers also
+zero, modulo the documented dead-but-harmless residues in
+`tests/conftest.py` lazy-fixture body). The §3-deferred
+`orchestrator/main.py` import of `architect.git_state` retired
+together with `orchestrator/main.py` itself.
+
+**Pytest verification.** `python3 -m pytest tests/ -q` →
+**490 passed, 1 deselected in 6.09s**. Down from 605 passed at §3
+close (lost ~115 tests across the 6 cut test files).
+
+**Orchestrator end-to-end verification.** Per PLAN §4 step 5,
+ran `./uas-orchestrate start synthetic-multistep
+--simulate-rate-status allowed --state-root /tmp/uas-orch-§4-iee6`
+against a fresh state root. Outcome:
+
+- **Subtasks:** 0 pending / 0 in_flight / **3 done** / 0 failed.
+- **Spend:** $0.2021 (Claude-reported, not locally-priced).
+- **Last decision:** `worker_complete` on `s3-read` (the third
+  subtask in the synthetic-multistep fixture).
+- **State artefacts:** all four populated —
+  `buffer.jsonl` (3,392 bytes), `rate_limits.jsonl` (2,253 bytes),
+  `task_events.jsonl` (9,541 bytes), `policy.toml` (917 bytes).
+- §8 fixture's end-to-end cycle from Phase 3 still works
+  unchanged on the post-§3+§4 tree. The slim
+  orchestrator-plus-substrate is a self-sufficient working
+  system at this point in the prune.
+
+**Acceptance check.**
+
+- ✅ `orchestrator/` contains only Phase 3 keep-list files plus
+  `sandbox.py` and `__init__.py` (plus runtime `cases/`,
+  `state/`, `__pycache__`).
+- ✅ `uas/` no longer exists in the tracked tree.
+- ✅ No tracked file imports the cut modules.
+- ✅ `tests/` runs green (490 passed, 1 deselected by marker).
+- ✅ `./uas-orchestrate start synthetic-multistep
+  --simulate-rate-status allowed` runs end-to-end (3 subtasks
+  done, all four state artefacts populated).
 
 ## Section 5 — Delete integration/llm_judge.py and tighten eval.py
 

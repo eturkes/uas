@@ -415,7 +415,107 @@ those two and goes with them.
 - `./uas-eval` exits cleanly on the hello-file case.
 - §3 Results subsection records counts.
 
-**Status:** pending
+**Status:** completed
+
+### Section 3 — Results
+
+Largest single cut of the phase. `architect/` deleted in one
+atomic `git rm -r`; 62 architect-importing tests cut in one
+batch; pytest re-run surfaced a §3→§4 transitive edge through
+`orchestrator/main.py:25` (`from architect.git_state import …`)
+which broke collection on 4 §4-bucket tests; those were pulled
+forward into §3 to satisfy the "no § closes until pytest green"
+discipline.
+
+**Counts.**
+
+| Metric | Value |
+|---|---|
+| `architect/` source files cut (16) | 15,649 lines |
+| Direct architect-importing tests cut (62: 61 grep + `test_integration.py`) | 19,726 lines |
+| Transitive §4-bucket tests pulled forward (4) | 2,744 lines |
+| **§3 total cut** | **82 files, 38,119 deletions** |
+| Pre-cut PLAN §1 estimate | 78 files, ≈ 38,200 lines |
+| Delta vs estimate | +4 files (transitive), −81 lines |
+
+The 4 transitively-cut tests (originally scheduled for §4):
+`tests/test_best_of_n.py`, `tests/test_orchestrator_main.py`,
+`tests/test_pre_flight.py`, `tests/test_version_resolution.py`.
+All four import `orchestrator.main`, which imports
+`architect.git_state` at module top — collection failed on each
+with `ModuleNotFoundError: No module named 'architect.git_state'`.
+Pulling them forward removes that error class entirely.
+
+The other 5 top-level §4-source-importers
+(`test_janitor`, `test_claude_config`, `test_llm_client`,
+`test_llm_isolation`, `test_parser`) collected and ran green
+because the §4 sources they touch (`uas/janitor`,
+`orchestrator/claude_config`, `orchestrator/llm_client`,
+`orchestrator/parser`) do not transitively import architect.
+They stay in §4's deletion bucket as planned.
+
+**Surviving import surface.**
+
+- `tests/conftest.py:25-26` — `tmp_workspace` fixture body
+  imports `architect.main` and `architect.state` lazily. Per §1
+  deviation #5, this is the dead-but-harmless residue. No kept
+  test invokes the fixture; collection succeeds because the
+  imports are inside the function body, not at module top. Stays
+  as-is per "no test mutation" rule.
+- `orchestrator/main.py:25, 246, 1276, 1337, 1678` — top-level
+  + lazy `architect.{git_state,events,state}` imports. Module is
+  scheduled for §4 deletion; no kept test imports it after the
+  4 transitive cuts above.
+- `orchestrator/main.py` itself remains a §4 cut (the source-file
+  cut boundaries are unchanged from PLAN; only test-cut
+  boundaries shifted).
+
+**Pytest verification.** `python3 -m pytest tests/ -q` →
+**605 passed, 1 deselected in 6.96s**. The 1 deselected is the
+default-skipped integration-marked test per `pytest.ini:3`
+(`addopts = -m "not integration"`).
+
+**Eval verification.** `./uas-eval` → harness ran end-to-end,
+container built (`uas-engine:latest`), OAuth refreshed, hello-file
+case dispatched. Exit code: 1 (hello-file FAIL). The plumbing is
+intact — the FAIL is structurally expected because §5 has not yet
+removed the architect-coupled `invoke_architect` body in
+`integration/eval.py`; the call site attempts to spawn
+`python3 -m architect.main` inside the container which now reports
+`No module named architect.main` (captured in the JSONL row's
+`log` field). The JSONL row is well-formed and matches the
+existing schema bit-for-bit (provenance metadata + per-case
+fields: `name`, `goal`, `workspace`, `checks`, `exit_code`,
+`elapsed`, `log`, `passed`, `tier`). PLAN §3 step 4 +
+`docs/cut_list.md` Deletion-order §3 step 4 satisfied (well-formed
+JSONL row written; harness plumbing exercises the kept set
+unbroken). The hello-file pass returns once §5 surgery completes.
+
+A second `./uas-eval` invocation triggered the resume-from-JSONL
+substrate — `[resume] reusing 1 row(s)` — confirming that
+substrate component #6 is alive on the post-§3 tree.
+
+**Acceptance check.**
+
+- ✅ `architect/` no longer exists in the tree.
+- ✅ No tracked file imports `architect` at module top
+  (`orchestrator/main.py` does, but no kept test imports
+  `orchestrator/main.py` after the 4 transitive cuts; the lazy
+  `tests/conftest.py` imports stay per the "no test mutation"
+  rule).
+- ✅ `tests/` runs green (605 passed, 1 deselected by marker).
+- ✅ `./uas-eval` runs end-to-end and emits a well-formed JSONL
+  row (per cut_list.md's tighter wording of the §3 step 4
+  acceptance). Exit code 1 reflects the case FAIL, not a harness
+  crash; §5 fixes the call site.
+
+**Deviation flagged for §4.** §4's test-cut bucket loses 4 entries
+to §3's transitive cleanup (`test_best_of_n.py`,
+`test_orchestrator_main.py`, `test_pre_flight.py`,
+`test_version_resolution.py`). §4's `git rm` of those tests is now
+a no-op; the §4 step that lists them should be interpreted as "the
+listed tests, skipping any §3 already removed" (same handling as
+the `test_fuzzy.py` crossover documented in §1 Results).
 
 ## Section 4 — Delete cut orchestrator legacy and uas/ tree
 

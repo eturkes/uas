@@ -252,7 +252,131 @@ flips it.
 - §2 Results subsection records the verdict + reasoning in this
   PLAN's git history (preserved across the §6 deletion).
 
-**Status:** pending
+**Status:** completed
+
+### Section 2 — Results
+
+Verification + recording step. No source files modified. The trio's
+CUT verdict was pre-recorded in `docs/cut_list.md` § "DEFER → CUT
+under §6" (lines 118–130) and § "§6 owner — root-level cleanup +
+trio + `tools/`" (lines 350–358) during §1 authorship; this section
+re-runs the importer audit at HEAD and confirms the recording is
+correct.
+
+**Method.** `grep -rn --include='*.py' -E '(^|[^.\w])(import\s+<name>|from\s+<name>\s+import|importlib\..*<name>)' .` for each trio member, plus a free-text grep for `uas.example.toml`.
+
+**`uas_config.py` — 7 hard importers + 1 soft-load surface**
+
+| Importer | Line | Owner | Bucket |
+|---|---|---|---|
+| `architect/main.py` | 84 | §3 | CUT |
+| `architect/state.py` | 16 | §3 | CUT |
+| `architect/executor.py` | 15 | §3 | CUT |
+| `orchestrator/main.py` | 17 | §4 | CUT |
+| `orchestrator/llm_client.py` | 12 | §4 | CUT |
+| `uas/fuzzy.py` | 34 | §4 | CUT |
+| `uas/janitor.py` | 18 | §4 | CUT |
+| `integration/provenance.py` (soft) | 64–77 | KEEP | gracefully degrades |
+
+The soft-load surface (`integration/provenance.py:_hash_active_config`,
+lines 64–77) loads `uas_config` via
+`importlib.util.spec_from_file_location` and returns `"unavailable"`
+at three guard points:
+
+- L65–66: `if not os.path.isfile(config_path): return "unavailable"`
+  — fires when `uas_config.py` is absent (the post-§6 state).
+- L71–72: `if spec is None or spec.loader is None: return "unavailable"`.
+- L78–79: bare `except Exception: return "unavailable"`.
+
+After §6 cuts `uas_config.py`, the L65–66 guard fires; the
+`config_hash` JSONL field becomes the literal string `"unavailable"`.
+JSONL schema bit-for-bit preserved.
+
+Post-cut consumer count in keep-list code: **1 soft-load surface
+that gracefully degrades**. Effective hard-importer count post-cut:
+**0**.
+
+**`uas_hooks.py` — 3 importers**
+
+| Importer | Line | Owner | Bucket |
+|---|---|---|---|
+| `architect/main.py` | 85 | §3 | CUT |
+| `architect/planner.py` | 11 | §3 | CUT |
+| `tests/test_hooks.py` | 10 | §6 | CUT |
+
+Post-cut consumer count in keep-list code: **0**.
+
+**`uas.example.toml` — zero runtime consumers**
+
+No Python source file references it. Documentation references span:
+
+- `README.md` (placeholder until §8 rewrite from scratch; the
+  rewrite drops the reference).
+- `ROADMAP.md` (historical context — §Model policy line 84,
+  §Current state line 554, §Phase 2 close line 712; not a runtime
+  consumer).
+- `phase0_audit.md` (historical record).
+- `PLAN.md`, `docs/cut_list.md`, `docs/cut_surface.md`,
+  `docs/orchestrator.md` (Phase 4 / Phase 2 / Phase 3 working /
+  design docs).
+
+`uas.example.toml` is purely a config-key discovery aid for
+`uas_config.py`'s layered loader. It cuts together with
+`uas_config.py` under §6.
+
+**Provenance fallback coverage — location correction**
+
+PLAN §2 step 4–5 referenced "the existing-fixture coverage in
+`tests/test_provenance.py`" as the test that exercises
+`_hash_active_config`'s `"unavailable"` fallback. §1 surfaced that
+the attribution is wrong: `tests/test_provenance.py` line 1 reads
+`"""Tests for architect.provenance module."""` and line 6 imports
+`from architect.provenance import (...)` — it tests the §3 CUT
+module `architect/provenance.py`, not the keep-list
+`integration/provenance.py`. It was reclassified CUT under §3.
+
+The actual existing-fixture coverage of `_hash_active_config`'s
+fallback lives in `tests/test_eval_metadata.py`:
+
+- `TestHashActiveConfig::test_returns_hex_or_unavailable`
+  (lines 126–129): calls `ev._hash_active_config()` and asserts the
+  result is either `"unavailable"` or a 64-char hex SHA. Accepts
+  either branch.
+- The determinism follow-up (lines 132–134): calls
+  `_hash_active_config` twice and asserts the results match.
+
+In the post-§6 tree (no `uas_config.py`), the L65–66 guard fires
+and `_hash_active_config` returns `"unavailable"`. The first
+assertion passes via the `"unavailable"` arm; determinism still
+holds (`"unavailable" == "unavailable"`). **No test edits
+required**, satisfying PLAN §2 acceptance criterion 2.
+
+**Verdict (confirms §1 recording)**
+
+| Trio member | Pre-§6 importers | Post-§6 keep-list consumers | Verdict |
+|---|---|---|---|
+| `uas_config.py` | 7 hard + 1 soft | 1 soft (gracefully degrades to `"unavailable"`) | CUT under §6 |
+| `uas_hooks.py` | 3 (all in §3 / §6 cut buckets) | 0 | CUT under §6 |
+| `uas.example.toml` | 0 runtime, doc-only | 0 | CUT under §6 |
+
+All three move from DEFER to CUT under §6 ownership, matching the
+recording `docs/cut_list.md` already carries.
+`integration/provenance.py` is NOT modified — its existing three-
+guard fallback in `_hash_active_config` covers the post-cut state,
+and `tests/test_eval_metadata.py::TestHashActiveConfig` covers the
+fallback path as written.
+
+**Acceptance check.**
+
+- ✅ All three trio members listed in `docs/cut_list.md` under §6.
+- ✅ `provenance.py`'s fallback path verified — no test edits.
+  Coverage attribution corrected from `tests/test_provenance.py`
+  to `tests/test_eval_metadata.py::TestHashActiveConfig` per the
+  §1 deviation note.
+- ✅ Verdict + reasoning recorded above; preserved across §6's
+  deletion of `uas_config.py` / `uas_hooks.py` / `uas.example.toml`
+  because PLAN.md is a KEEP file (lives until phase close per
+  project convention).
 
 ## Section 3 — Delete architect/ tree
 

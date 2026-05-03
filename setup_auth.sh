@@ -31,8 +31,9 @@ fi
 
 # --- Ensure image exists ---
 if ! "$ENGINE" image inspect "$IMAGE_TAG" &>/dev/null; then
-    echo "Container image '${IMAGE_TAG}' not found. Run install.sh first:" >&2
-    echo "  bash ${SCRIPT_DIR}/install.sh" >&2
+    echo "Container image '${IMAGE_TAG}' not found. Build it first:" >&2
+    echo "  ${SCRIPT_DIR}/uas-eval        # lazy build via the eval harness" >&2
+    echo "  ${ENGINE} build -t ${IMAGE_TAG} -f ${SCRIPT_DIR}/Containerfile ${SCRIPT_DIR}    # manual build" >&2
     exit 1
 fi
 

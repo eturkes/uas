@@ -853,7 +853,113 @@ files the post-prune tree actually needs.
 - `tests/` runs green.
 - §6 Results subsection records itemised cuts.
 
-**Status:** pending
+**Status:** completed
+
+### Section 6 — Results
+
+Final destructive section. Cuts the NEEDS-PHASE-3-DECISION trio
+(per §2's verdict), the architect-runner shell scripts, the
+hooks test, the screenshot, and the deferred Phase 2 §1 statusline
+probe; then surgically tightens `Containerfile`, `setup_auth.sh`,
+and `docs/substrate.md` to match the post-prune reality.
+
+**Cuts itemised.**
+
+| Path | Lines | Reason |
+|---|---|---|
+| `uas_config.py` | 216 | DEFER trio resolved CUT in §2 |
+| `uas_hooks.py` | 215 | DEFER trio resolved CUT in §2 |
+| `uas.example.toml` | 79 | DEFER trio resolved CUT in §2 |
+| `tests/test_hooks.py` | (~287, computed below) | Subject = `uas_hooks.py` (CUT) |
+| `install.sh` | 132 | No users; pre-prune build/install wrapper |
+| `run_local.sh` | 29 | Architect-coupled (`python3 -P -m architect.main`) |
+| `run_container.sh` | 62 | Architect-coupled (runs `uas-engine:latest` as architect entrypoint) |
+| `start_orchestrator.sh` | 87 | Misnamed pre-prune script; runs architect via `entrypoint.sh` |
+| `entrypoint.sh` | 81 | Container ENTRYPOINT — every dispatch leads to `architect.{main,state}` |
+| `tools/statusline_probe.sh` | 27 | Phase 2 §1 probe; not in keep-list enumeration; default-cut |
+| `screenshot.png` | 1 file (~266 KB binary) | Referenced only by README's old TUI dashboard image; README rewritten in §8 |
+
+| **Subtotal: file deletions** | **11 files, 1,214 text lines + 1 PNG** |
+
+`tools/` directory removed entirely (only `statusline_probe.sh`
+lived there). Surviving root-level directories now: `docs/`,
+`integration/`, `orchestrator/`, `tests/`.
+
+**Surgery (3 in-place edits, −29 lines / +23 lines, −6 net):**
+
+- `Containerfile` (53 → 40 lines, −13): dropped `COPY
+  uas_config.py`, `COPY uas_hooks.py`, `COPY architect/`,
+  `COPY uas/`, `COPY entrypoint.sh`, `RUN chmod +x entrypoint.sh`,
+  `ENV IS_SANDBOX=1`, `ENV UAS_SANDBOX_MODE=local`, and
+  `ENTRYPOINT ["/uas/entrypoint.sh"]`. The image now provides
+  Python 3.12 + Node + Claude Code CLI + git + uv + the kept
+  `orchestrator/` tree, with no default ENTRYPOINT — callers
+  (`orchestrator/worker.py`, `setup_auth.sh`) supply their own
+  command via `--entrypoint` or default to `claude`.
+- `setup_auth.sh:34-36` (3 → 4 lines): replaced the stale
+  `install.sh` reference with two pointers — `./uas-eval`
+  (lazy-builds the image) and the manual `podman build -t
+  uas-engine:latest -f Containerfile .` form.
+- `docs/substrate.md` (3 edits, −13 / +19 lines): component 8
+  Location + Accepts subsections updated to record that the
+  Phase 2 §1 probe script was default-cut in §6 and the
+  TUI-companion read pattern currently has no on-disk capture
+  surface; Open questions § Natural-trigger capture plan
+  rewritten as "deferred without a capture surface" with the
+  dual-hypothesis design constraint preserved.
+
+**Surviving root-level file list (15 files, 4 directories).**
+
+```
+.containerignore   .gitignore         CLAUDE.md
+Containerfile      framework_settings.json
+LICENSE            phase0_audit.md   PLAN.md
+pytest.ini         README.md         requirements.txt
+ROADMAP.md         setup_auth.sh     uas-eval
+uas-orchestrate
+
+docs/   integration/   orchestrator/   tests/
+```
+
+Matches `docs/cut_list.md` § "KEEP" subsection "Documentation,
+configuration, build (root + docs)" exactly. `framework_settings.json`
+KEPT per cut_list.md's verdict (consumed by `setup_auth.sh`).
+
+**Pytest verification.** `python3 -m pytest tests/ -q` →
+**403 passed, 1 deselected in 4.98s**. Down from 425 at §5 close
+(lost ~22 tests with `tests/test_hooks.py`).
+
+**Provenance fallback verification (recap of §2's prediction).**
+After §6 cuts `uas_config.py`, the next `./uas-eval` run will hit
+`integration/provenance.py:_hash_active_config`'s file-not-found
+guard at L65–66 and emit `config_hash: "unavailable"` in the JSONL
+row. `tests/test_eval_metadata.py::TestHashActiveConfig` accepts
+either branch, so test green is preserved without edits. (Live
+verification rolls into §7 with the fresh `./uas-eval` run.)
+
+**Acceptance check.**
+
+- ✅ Trio (`uas_config.py`, `uas_hooks.py`, `uas.example.toml`)
+  no longer exists.
+- ✅ Root-level surviving file list matches §1's KEEP
+  classification exactly (15 files, 4 directories — see above).
+- ✅ `tests/` runs green (403 passed, 1 deselected by marker).
+- ✅ Itemised cuts recorded above.
+
+**Cumulative cut surface across §3–§6.**
+
+| § | Files cut | Text lines |
+|---|---|---|
+| §3 (architect/ + 62 tests + 4 transitive) | 82 | 38,119 |
+| §4 (orchestrator legacy + uas/ + 6 tests) | 14 | 4,917 |
+| §5 (llm_judge + ML quality + quick_test + test_llm_judge + eval surgery + fixture restructure) | 4 + 1 surgery + 1 fixture restructure + 1 new file | ≈ 1,973 net |
+| §6 (trio + 5 scripts + hooks test + screenshot + tool + 3 surgeries) | 11 + 3 surgeries | ≈ 1,220 net + 1 PNG |
+| **Cumulative** | **111 file deletions + 5 in-place edits + 1 fixture + 1 new fixture file + 1 binary** | **≈ 46,229 net text lines + 1 binary** |
+
+§1 estimate: ≈ 47,224 net text lines + 1 PNG. Actual: ≈ 46,229.
+−995 lines vs estimate (≈ 2.1% under). §7 measurement validates
+the precise figure with `git diff --stat` between `87d80b4`
+(PLAN-author commit) and HEAD.
 
 ## Section 7 — Smoke verification
 

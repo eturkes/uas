@@ -33,21 +33,8 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && ln -sf /root/.local/bin/uv /usr/local/bin/uv
 
-COPY uas_config.py .
-COPY uas_hooks.py .
 COPY orchestrator/ ./orchestrator/
-COPY architect/ ./architect/
-COPY uas/ ./uas/
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
 
 # /workspace is the user project mount point
 VOLUME /workspace
 WORKDIR /workspace
-
-# The engine container itself is the sandbox — no nested containers.
-# Steps run as subprocesses inside this container.
-ENV IS_SANDBOX=1
-ENV UAS_SANDBOX_MODE=local
-
-ENTRYPOINT ["/uas/entrypoint.sh"]

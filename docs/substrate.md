@@ -631,11 +631,11 @@ invoke the architect. It uses the eval substrate two ways:
   `--include-hook-events` is **not** required.
 - **TUI companion — statusline JSON `rate_limits` field.**
   Delivered to a configured `statusLine` script via stdin during
-  interactive `claude` sessions. Probe lives at
-  `tools/statusline_probe.sh`; wired via the
-  `.claude/settings.local.json` `statusLine` block (see PLAN.md
-  §Section 1 — Results §Probe artefacts for the exact JSON
-  block to re-add when needed).
+  interactive `claude` sessions. The Phase 2 §1 probe lived at
+  `tools/statusline_probe.sh` and is gone (Phase 4 §6 default-cut);
+  re-introducing the companion read pattern requires re-authoring
+  the probe script and re-wiring it via the
+  `.claude/settings.local.json` `statusLine` block.
 
 **Accepts.**
 
@@ -644,8 +644,10 @@ invoke the architect. It uses the eval substrate two ways:
 - Companion surface: a working `statusLine` configuration in
   `.claude/settings.local.json` plus an interactive `claude`
   session running in some terminal (any process; not the worker
-  itself). The probe script reads the JSON from stdin and writes
-  it to `/tmp/uas_statusline_probes/`.
+  itself). The Phase 2 §1 probe script wrote to
+  `/tmp/uas_statusline_probes/`; that script was cut in Phase 4
+  §6, so the companion surface currently has no on-disk capture
+  path.
 
 **Emits.**
 
@@ -770,10 +772,14 @@ treat any reading at or above 100 as "buffer engaged" without
 attempting to read overflow magnitude from the percentage value
 unless the climb-past-100 hypothesis is confirmed.
 
-**Natural-trigger capture plan.** When the project owner
-organically crosses the 5-hour cap during real-task use (Phase 5+),
-capture one TUI statusline payload at that moment via
-`tools/statusline_probe.sh` (the §1 probe; re-wire via the
-`statusLine` block in `.claude/settings.local.json` per the JSON
-snippet in PLAN.md §Section 1 — Results §Probe artefacts) and
-append the finding here. No Phase 2 re-open required.
+**Natural-trigger capture plan.** Deferred without an on-disk
+capture surface. The Phase 2 §1 probe script
+`tools/statusline_probe.sh` was default-cut in Phase 4 §6;
+recovering a TUI statusline payload at the next natural
+5-hour-cap crossing requires re-authoring the probe and re-wiring
+it via the `statusLine` block in `.claude/settings.local.json`,
+or alternatively logging the payload from another running
+process / IDE inspector at the moment of the event. Until that
+capture happens, Phase 3+ designs that consume `used_percentage`
+must support both the caps-at-100 and the climbs-past-100
+hypotheses indefinitely.

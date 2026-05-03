@@ -185,15 +185,17 @@ scheduling-and-budgeting role.
 
 ## Current phase
 
-**Phase 4 — Prune** (active)
+**Phase 5 — Policy & long-horizon UX** (active)
 
-Phase 3 closed at the same commit that added its "Completed phases"
-entry below. Phase 4 deletes most of the existing scaffold — see
-`docs/cut_surface.md` for the Phase 2 §4 sized estimate the prune
-verdicts start from, and the Phase 4 entry under "Phase details"
-below for the keep list, cut surface, and deliverables. The
-Phase 4 PLAN is pending — draft it before executing any Phase 4
-work, and pause for user review before starting Section 1 (per the
+Phase 4 closed at the same commit that added its "Completed
+phases" entry below. The codebase shrank from 164 tracked files
+to 55 (−66.5%) and from ≈ 62,064 text lines to 16,256 (−73.8%);
+the orchestrator + slim substrate is the entire working UAS;
+README rewritten from scratch in §8; `docs/cut_bucket.md`
+records the Phase 4 cut buckets and rationale for future
+readers. Phase 5 deliverables are listed under "Phase details"
+below; Phase 5 PLAN is pending — draft it before executing
+Section 1, and pause for user review before starting (per the
 decision protocol in `CLAUDE.md`).
 
 ## Phase plan
@@ -204,8 +206,8 @@ decision protocol in `CLAUDE.md`).
 | 1 | Eval harness hardening | completed | Turn eval.py into canonical measurement tool. Curated benchmark. Deterministic + LLM-judge grading. Persistent results with noise bounds. |
 | 2 | Substrate verification | completed | Verify empirical TBDs (statusline-during-print, percentage-cap behavior). Document substrate boundaries from Phase 1. Estimate cut surface. |
 | 3 | Orchestrator core | completed | Build the daemon: usage-limit ledger from statusline JSON, paid-buffer ledger from per-call usage, headless-worker primitive, three-state policy machine, task-state surviving invocation boundaries. |
-| 4 | Prune | **active** | Delete most of the scaffold. Default verdict on any mechanism is **cut**; keep list is short and explicit (Docker sandbox, OAuth refresh, JSONL log, provenance, workspace isolation, resume-from-JSONL, eval harness substrate). README rewritten from scratch. |
-| 5 | Policy & long-horizon UX | pending | Policy configuration interface, task definition spec, resume-summary format, human-checkpoint design. End-to-end real long-horizon task with project owner observing. |
+| 4 | Prune | completed | Delete most of the scaffold. Default verdict on any mechanism is **cut**; keep list is short and explicit (Docker sandbox, OAuth refresh, JSONL log, provenance, workspace isolation, resume-from-JSONL, eval harness substrate). README rewritten from scratch. |
+| 5 | Policy & long-horizon UX | **active** | Policy configuration interface, task definition spec, resume-summary format, human-checkpoint design. End-to-end real long-horizon task with project owner observing. |
 | 6+ | Informed iteration | pending | Add new orchestrator capabilities responsibly, each justified by real-task evidence not speculation. Slim discipline (no re-implementing what Claude Code does natively) holds indefinitely. |
 
 ## Phase details
@@ -616,6 +618,21 @@ or any new flag they're meant to control will have no effect.
 | Strongly-coupled clusters (essential + incidental) | 10 (7 + 3) |
 | Phase 4 group ablations required | 11 |
 
+**Post-Phase-4 mechanism count (added at Phase 4 close).** All
+68 catalogued mechanisms were CUT during Phase 4 §3–§6; zero
+remain. The post-prune system has no equivalent of the cluster
+A–J machinery — the orchestrator delegates subtask execution to
+headless `claude --print` workers and Claude Code 2026's native
+features (sub-agents, hooks, MCP, skills, 1M context, native
+session compaction) fill the roles the deleted clusters once
+served. The "mechanism" count for the post-prune system is
+better expressed as a substrate-component count (8 components
+per `docs/substrate.md`) plus an orchestrator-module count (11
+modules under `orchestrator/`) — a fundamentally different unit
+than the Phase 0 catalog. The Phase 0 paragraph above is kept
+verbatim as historical record; this sub-paragraph records the
+Phase 4 close.
+
 ## Baseline metrics
 
 *(Note added under May 2026 pivot: this section's metrics framework
@@ -782,6 +799,71 @@ fired a `[oauth] Self-refresh HTTP 400: invalid_grant` then
 recovered via fallback on first worker spawn — the
 keep-listed substrate works as documented, surfacing because the
 trace would otherwise look alarming.
+
+### Phase 4 — Prune
+
+Closed in the same commit that populated this entry. Phase 4
+deleted most of the existing scaffold; default verdict on any
+mechanism was CUT, with a short explicitly-justified keep list.
+
+Deliverables completed: §1 closed cut list (`docs/cut_list.md`,
+~615 lines, finalising `docs/cut_surface.md`'s Phase 2 §4 sized
+estimate into a closed file-granularity classification); §2 trio
+resolution (audit confirmed `uas_config.py` / `uas_hooks.py` /
+`uas.example.toml` had zero hard importers in keep-list code,
+verdict = CUT under §6); §3 architect/ tree cut (16 source +
+62 architect-importing tests + 4 §4-bucket tests pulled forward
+via the `orchestrator/main.py:25 → architect.git_state`
+transitive edge — 82 files, 38,119 deletions); §4 cut
+orchestrator legacy + `uas/` tree (8 source + 6 tests, 14 files,
+4,917 deletions); §5 LLM-judge module + ML-class quality gate +
+`integration/quick_test.sh` cut + `integration/eval.py` surgery
+(file dropped from 1,342 to 1,090 lines, hello-file case
+restructured to `setup_files`-driven substrate self-test, new
+`integration/data/hello.txt` fixture); §6 root-level cleanup
+(trio + 5 architect-runner shell scripts + `tests/test_hooks.py` +
+`screenshot.png` + `tools/statusline_probe.sh`, plus
+`Containerfile` / `setup_auth.sh` / `docs/substrate.md` surgery —
+11 files + 1 binary + 3 surgeries); §7 smoke verification (full
+pytest 403 passed/1 deselected; `./uas-eval` exit 0 on hello-file
+with `config_hash="unavailable"` confirming §2's predicted
+`integration/provenance.py:_hash_active_config` fallback;
+`./uas-orchestrate start synthetic-multistep` 3/3 subtasks done
+$0.1110 spend with all four state artefacts; pause+resume cycle
+also verified, $0.1223 spend); §8 README rewrite from scratch +
+`docs/cut_bucket.md` rationale doc + this ROADMAP delta.
+
+§7 also surfaced and repaired one regression: §6's removal of
+`ENV IS_SANDBOX=1` from the `Containerfile` (per cut_list.md's
+"orchestrator workers set these themselves" note) was completed
+on the Containerfile side but not on the worker side; first
+post-§6 orchestrator run failed every spawn with Claude Code's
+`--dangerously-skip-permissions cannot be used with root/sudo`
+safety check. §7 added `-e IS_SANDBOX=1` to
+`orchestrator/worker.py`'s spawn cmd; the regression note plus
+the §6 substrate.md edits document the move.
+
+Final shrinkage at §7 close: tracked file count 164 → 55
+(−109, −66.5%); text lines 62,064 → 16,256 (−45,808, −73.8%);
+git diff --stat 87d80b4..HEAD reports 121 files changed,
++1,317 / −46,306 = −44,989 net text lines (within ≈ 5% of the
+§1 estimate of ≈ 47,224). Per-directory survivor breakdown:
+15 root + 15 tests + 14 orchestrator + 7 integration + 4 docs.
+
+Substrate findings carried forward to Phase 5+: (a) post-§6
+the `config_hash` JSONL field is permanently `"unavailable"`
+because `uas_config.py` is gone — the soft-load in
+`integration/provenance.py:_hash_active_config` falls through
+the file-not-found guard at L65–66 every time; (b) the
+`tools/statusline_probe.sh` natural-trigger capture surface for
+the percentage-cap question was retired in §6 — the question
+remains open without a capture surface, requiring re-authoring
+the probe before any future capture; (c) the orchestrator's
+workers must continue passing `IS_SANDBOX=1` per spawn;
+substrate.md component 1 already describes the post-prune image
+and worker-side env injection accurately. The phase's working
+file `PLAN.md` was removed on phase close per project
+convention.
 
 ## Amending this roadmap
 

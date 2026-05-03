@@ -3,11 +3,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
-# Mirror the convention used by install.sh, quick_test.sh,
-# start_orchestrator.sh, and run_container.sh: forward host UID/GID
-# into the container so entrypoint.sh's exit trap can chown the
-# workspace back to the launching user. eval.py's invoke_architect
-# forwards every parent UAS_* env var into the container env.
+# Forward host UID/GID into the container so the worker exit-trap
+# can chown each per-task workspace back to the launching user.
+# Phase 4 §6 retired the entrypoint.sh trap; the chown now lives
+# inline in orchestrator/worker.py's bash command. The post-prune
+# eval harness does not invoke a producer, so this is a no-op for
+# eval but kept for symmetry with uas-orchestrate.
 export UAS_HOST_UID="${UAS_HOST_UID:-$(id -u)}"
 export UAS_HOST_GID="${UAS_HOST_GID:-$(id -g)}"
 exec python3 -P -m integration.eval "$@"

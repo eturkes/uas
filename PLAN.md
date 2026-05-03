@@ -1174,4 +1174,143 @@ statistics differ materially from the Phase 0 figures.
   post-prune statistics (additive update, not a rewrite).
 - Phase 4 exit criteria documented in §8 Results below.
 
-**Status:** pending
+**Status:** completed
+
+### Section 8 — Results
+
+Documentation pass that closes Phase 4. README rewritten from
+scratch to match the slim post-prune system; `docs/cut_bucket.md`
+authored to record the §3–§6 cut buckets and rationale so future
+readers do not silently re-introduce removed mechanisms; ROADMAP
+updated with a post-Phase-4 mechanism-count sub-paragraph
+(additive, not a rewrite of the historical Phase 0 paragraph)
+plus a "Phase 4 — Prune" entry under "Completed phases" plus a
+phase-pointer flip from active=Phase 4 to active=Phase 5; two
+wrapper-script comments refreshed to drop stale references to
+the §6-cut entrypoint scripts.
+
+**Counts.**
+
+| Artefact | Lines | Words | Notes |
+|---|---|---|---|
+| `README.md` (rewritten from scratch) | 205 | 897 | Was 725 lines pre-rewrite; net −520 |
+| `docs/cut_bucket.md` (new file) | 283 | 1,843 | §3 / §4 / §5 / §6 rationale + keep summary + future-reader guidance |
+| `ROADMAP.md` (additive delta) | +73 / −9 net | — | Phase pointer flip + post-Phase-4 sub-paragraph + completed Phase 4 entry; Phase 0 paragraph kept verbatim per project convention |
+| `uas-eval` (comment refresh) | +5 / −5 | — | Stale entrypoint.sh / install.sh / quick_test.sh / start_orchestrator.sh / run_container.sh / invoke_architect references replaced with post-prune accuracy |
+| `uas-orchestrate` (comment refresh) | +4 / −3 | — | Same as uas-eval |
+| **§8 totals** | **~570 lines added across 5 files** | — | All in service of doc accuracy |
+
+**README structure.**
+
+The new README's seven sections:
+
+1. **One-paragraph summary** — what UAS is now (personal research
+   harness; usage-limit-aware long-horizon orchestrator for
+   headless Claude Code workers); pointers to ROADMAP + CLAUDE.
+2. **Quickstart** — prerequisites (container engine, Python 3.12,
+   Claude Max OAuth), one-time setup via `setup_auth.sh`, image
+   build paths (lazy via `./uas-eval` or manual `podman build`),
+   the five `uas-orchestrate` subcommands, the `--simulate-rate-
+   status` testing flag, and the `./uas-eval` smoke gate.
+3. **Layout** — directory tree annotated with each module's role.
+4. **Configuration** — per-task TOML schema for
+   `orchestrator/cases/<task>.toml`, optional per-task policy
+   overrides at `<task>-policy.toml`, the two surviving
+   `UAS_HOST_UID` / `UAS_HOST_GID` env vars and what they do.
+5. **Pointers** — links to ROADMAP, CLAUDE, `docs/orchestrator.md`,
+   `docs/substrate.md`, `docs/cut_bucket.md`, `docs/cut_list.md`,
+   `docs/cut_surface.md`, `phase0_audit.md`.
+6. **License** — Apache 2.0 pointer.
+
+The pre-prune README's pre-pivot framing ("two-layer autonomous
+system that takes abstract human goals and drives them to
+completion") is gone — that was the architect+orchestrator
+description and survives only in `phase0_audit.md` as historical
+record.
+
+**`docs/cut_bucket.md` structure.**
+
+- **Header** — purpose statement, cross-links to `cut_list.md` /
+  `cut_surface.md` / `phase0_audit.md`, final shrinkage figure.
+- **Per-§ rationale** — §3 architect tree, §4 cut orchestrator +
+  uas/, §5 llm_judge + integration cleanup + eval surgery, §6
+  root-level cleanup. Each section: what was cut (with line
+  counts), rationale (citing the May 2026 pivot framing), what
+  replaces it (often "nothing" — Claude Code 2026 native
+  features fill the role), and mechanism mapping back to the
+  Phase 0 catalog clusters where applicable.
+- **What was kept and why** — cross-summary of the substrate
+  keep-list + Phase 3 deliverables + documentation + build
+  infrastructure.
+- **How to read this in the future** — the three-step gate any
+  re-introduction proposal must pass: check `cut_list.md`, check
+  the §-bucket rationale, re-read ROADMAP §Phase 6+ standing
+  rules.
+
+**ROADMAP delta (additive).**
+
+- "Current phase" header flipped from
+  "**Phase 4 — Prune** (active)" to
+  "**Phase 5 — Policy & long-horizon UX** (active)" with a
+  one-paragraph summary of what Phase 4 closed (file count,
+  line count, README rewrite, cut_bucket.md) and a forward
+  pointer that Phase 5 PLAN is pending.
+- "Phase plan" table: Phase 4 status flipped completed; Phase 5
+  status flipped active.
+- "Phase 0 summary stats" section: appended a "Post-Phase-4
+  mechanism count" sub-paragraph noting all 68 were CUT, and
+  that the post-prune system's natural unit is the substrate-
+  component count (8 per `docs/substrate.md`) plus the
+  orchestrator-module count (11 under `orchestrator/`). Phase 0
+  paragraph kept verbatim as historical record per project
+  convention ("do not retroactively rewrite completed-phase
+  entries — append a note").
+- "Completed phases": new `### Phase 4 — Prune` entry recording
+  §1–§8 deliverables, the §7 IS_SANDBOX regression + repair,
+  final shrinkage statistics, and three substrate findings to
+  carry into Phase 5+ (config_hash now permanently
+  `"unavailable"`; statusline-probe natural-trigger surface
+  retired; orchestrator workers must continue passing
+  `IS_SANDBOX=1`).
+
+**Wrapper-script comment refreshes.**
+
+- `uas-eval`: dropped references to the pre-prune
+  `install.sh` / `quick_test.sh` / `start_orchestrator.sh` /
+  `run_container.sh` / `entrypoint.sh` / `eval.py:invoke_architect`
+  conventions. New comment: "the worker exit-trap (now in
+  orchestrator/worker.py) chowns each per-task workspace back
+  to the launching user; eval is no-op on this surface but
+  kept for symmetry with uas-orchestrate."
+- `uas-orchestrate`: dropped reference to `entrypoint.sh`'s
+  exit trap. New comment: "the inline bash exit-trap in
+  orchestrator/worker.py handles the chown; Phase 4 §6 retired
+  the image-baked entrypoint.sh trap."
+
+**Acceptance check.**
+
+- ✅ `README.md` exists, is internally consistent, points only
+  to surviving files, matches the slim post-prune reality
+  (verified by inspecting every link target — ROADMAP, CLAUDE,
+  docs/{orchestrator,substrate,cut_bucket,cut_list,cut_surface}.md,
+  phase0_audit.md, LICENSE — all present and tracked).
+- ✅ `docs/cut_bucket.md` exists with §-by-§ rationale and
+  counts (283 lines, ~1,843 words, 4 cut-bucket sections + keep
+  summary + future-reader guidance).
+- ✅ ROADMAP §"Current state of the codebase" reflects post-
+  prune statistics (additive sub-paragraph; Phase 0 paragraph
+  kept verbatim).
+- ✅ Phase 4 exit criteria documented above.
+
+**Phase 4 exit criteria confirmation (per ROADMAP §Phase 4).**
+
+| Criterion | Verified |
+|---|---|
+| Codebase materially smaller; lines / files / modules removed and recorded | ✅ §7.4 measurement: −44,989 net text lines, −109 files, 2 packages collapsed (`architect/`, `uas/`); recorded in §7 Results, this §8 Results, ROADMAP completed-phase entry, and `docs/cut_bucket.md` headline |
+| Orchestrator + slim substrate is the entire working UAS | ✅ §7.3 verification: `./uas-orchestrate start synthetic-multistep` runs end-to-end with 3/3 subtasks done and all four state artefacts populated; pause+resume cycle also intact |
+| README rewritten from scratch; matches slim reality | ✅ This §8: 205-line rewrite from scratch, every link verified against tracked files |
+| Keep list is closed set with no "shouldn't this stay?" items outstanding | ✅ §1's `docs/cut_list.md` enumerated KEEP / CUT / DEFER for every tracked file (164 entries, no leftovers); §2 resolved the DEFER trio to CUT; §3–§6 executed the deletions as planned with one §6 → §7 IS_SANDBOX regression repaired in flight; no items outstanding at HEAD |
+
+Phase 4 closed. The active pointer in ROADMAP now points at
+Phase 5; per the decision protocol a Phase 5 PLAN.md must be
+drafted and submitted for user review before Phase 5 work begins.

@@ -3,9 +3,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
-# Mirror uas-eval's convention: forward host UID/GID into the
-# orchestrator's worker containers so entrypoint.sh's exit trap can
-# chown each per-task workspace back to the launching user.
+# Forward host UID/GID into the worker containers so the inline
+# bash exit-trap in orchestrator/worker.py can chown each per-task
+# workspace back to the launching user. (Phase 4 §6 retired the
+# image-baked entrypoint.sh trap; the chown moved into the worker
+# spawn cmd.)
 export UAS_HOST_UID="${UAS_HOST_UID:-$(id -u)}"
 export UAS_HOST_GID="${UAS_HOST_GID:-$(id -g)}"
 exec python3 -P -m orchestrator.cli "$@"

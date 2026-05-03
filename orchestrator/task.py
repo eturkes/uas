@@ -1,7 +1,7 @@
-"""Long-horizon task state model for Phase 3 §6 + §7.
+"""Long-horizon task state model for Phase 3 §6 + §7 (extended in Phase 5 §2).
 
-Defines the ``Task`` / ``Subtask`` / ``Decision`` dataclasses, the
-per-task append-only event log at
+Defines the ``Task`` / ``Subtask`` / ``Stage`` / ``Decision``
+dataclasses, the per-task append-only event log at
 ``<state_root>/<task_id>/task_events.jsonl``, the operations that
 mutate ``Task`` in-memory state while writing one event row per
 call, and the §7 ``load_task`` replay that reconstructs a ``Task``
@@ -23,10 +23,11 @@ Event types written by this module:
 
 - ``task_create``       — from ``Task.from_toml``; carries the
   full bootstrap metadata (``goal``, ``workspace_path``,
-  ``created_at``) and doubles as the ``task_create`` Decision
-  record.
+  ``created_at``, plus the Phase 5 §2 ``stages`` list) and
+  doubles as the ``task_create`` Decision record.
 - ``enqueue_subtask``   — from ``Task.enqueue_subtask``;
-  ``{subtask_id, prompt}``.
+  ``{subtask_id, prompt, stage_id}`` (``stage_id`` added in
+  Phase 5 §2; ``None`` for tasks without ``[[stages]]``).
 - ``start_subtask``     — from ``Task.start_subtask``;
   ``{subtask_id, started_at}``.
 - ``complete_subtask``  — from ``Task.complete_subtask``;
@@ -37,6 +38,18 @@ Event types written by this module:
   ``{kind, note, decision_timestamp}``. ``kind`` enumerates the
   canonical Decision kinds (policy_pause / wrap_up / halt,
   worker_spawn / complete / fail, task_create / task_resume).
+
+Phase 5 §2 schema additions (additive; backward-compatible). The
+TOML loader accepts an optional ``[[stages]]`` array of tables and
+an optional ``stage_id`` field on each ``[[subtasks]]`` entry.
+Tasks without ``[[stages]]`` parse exactly as before with
+``Task.stages = []`` and every ``Subtask.stage_id = None``. The
+``stages`` list is persisted in the ``task_create`` event so
+``load_task`` reconstructs it across resume boundaries; per-subtask
+``stage_id`` is persisted in the ``enqueue_subtask`` event for the
+same reason. The §2 schema commits the declarative shape only —
+runtime eligibility / dependency-aware ordering is left to later
+phases.
 
 Per-event resume gate (§7). Every persisted row carries a
 ``survives_git_sha_flip: bool`` field (default ``True``). On
@@ -105,6 +118,174 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
+def _validate_stages(raw_stages, path: str) -> list[dict]:
+    """Validate the optional ``[[stages]]`` array (Phase 5 §2).
+
+    Each entry must be a table with a non-empty ``stage_id``;
+    ``stage_id`` is unique across the task. Optional ``name`` is a
+    string (default ``""``); optional ``depends_on`` is a list of
+    non-empty strings each referencing another stage's ``stage_id``;
+    optional ``expected_duration_seconds`` and
+    ``expected_spend_usd`` are non-negative numbers (or absent).
+    Self-references are rejected; the dependency graph is checked
+    for cycles via three-color DFS.
+
+    Returns a list of dicts mirroring the Stage dataclass field
+    set; ``Task.from_toml`` constructs ``Stage(**rec)`` from each
+    record and persists the same dicts in the ``task_create`` event
+    payload so ``load_task`` can reconstruct in-memory ``Stage``
+    instances on resume.
+    """
+    if not isinstance(raw_stages, list):
+        raise TaskError(
+            f"task TOML at {path}: [[stages]] must be an array of "
+            f"tables; got {raw_stages!r}"
+        )
+
+    records: list[dict] = []
+    seen_ids: set[str] = set()
+    for raw in raw_stages:
+        if not isinstance(raw, dict):
+            raise TaskError(
+                f"task TOML at {path}: each [[stages]] entry must be "
+                f"a table; got {raw!r}"
+            )
+        sid = raw.get("stage_id")
+        if not isinstance(sid, str) or not sid:
+            raise TaskError(
+                f"task TOML at {path}: each [[stages]].stage_id must "
+                f"be a non-empty string; got {sid!r}"
+            )
+        if sid in seen_ids:
+            raise TaskError(
+                f"task TOML at {path}: duplicate stage_id {sid!r}"
+            )
+        seen_ids.add(sid)
+
+        name = raw.get("name", "")
+        if not isinstance(name, str):
+            raise TaskError(
+                f"task TOML at {path}: stage {sid!r} name must be a "
+                f"string; got {name!r}"
+            )
+
+        depends_on = raw.get("depends_on", [])
+        if not isinstance(depends_on, list):
+            raise TaskError(
+                f"task TOML at {path}: stage {sid!r} depends_on must "
+                f"be a list; got {depends_on!r}"
+            )
+        for dep in depends_on:
+            if not isinstance(dep, str) or not dep:
+                raise TaskError(
+                    f"task TOML at {path}: stage {sid!r} depends_on "
+                    f"entries must be non-empty strings; got {dep!r}"
+                )
+
+        expected_dur = raw.get("expected_duration_seconds")
+        if expected_dur is not None and (
+            isinstance(expected_dur, bool)
+            or not isinstance(expected_dur, (int, float))
+            or expected_dur < 0
+        ):
+            raise TaskError(
+                f"task TOML at {path}: stage {sid!r} "
+                f"expected_duration_seconds must be a non-negative "
+                f"number or absent; got {expected_dur!r}"
+            )
+
+        expected_spend = raw.get("expected_spend_usd")
+        if expected_spend is not None and (
+            isinstance(expected_spend, bool)
+            or not isinstance(expected_spend, (int, float))
+            or expected_spend < 0
+        ):
+            raise TaskError(
+                f"task TOML at {path}: stage {sid!r} "
+                f"expected_spend_usd must be a non-negative number or "
+                f"absent; got {expected_spend!r}"
+            )
+
+        records.append({
+            "stage_id": sid,
+            "name": name,
+            "depends_on": list(depends_on),
+            "expected_duration_seconds": (
+                float(expected_dur) if expected_dur is not None else None
+            ),
+            "expected_spend_usd": (
+                float(expected_spend) if expected_spend is not None else None
+            ),
+        })
+
+    # depends_on reference + self-reference checks.
+    for rec in records:
+        for dep in rec["depends_on"]:
+            if dep == rec["stage_id"]:
+                raise TaskError(
+                    f"task TOML at {path}: stage {rec['stage_id']!r} "
+                    f"depends on itself"
+                )
+            if dep not in seen_ids:
+                raise TaskError(
+                    f"task TOML at {path}: stage {rec['stage_id']!r} "
+                    f"depends on unknown stage_id {dep!r}"
+                )
+
+    # Cycle detection via three-color DFS.
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {rec["stage_id"]: WHITE for rec in records}
+    graph = {rec["stage_id"]: list(rec["depends_on"]) for rec in records}
+
+    def visit(sid: str) -> None:
+        if color[sid] == BLACK:
+            return
+        if color[sid] == GRAY:
+            raise TaskError(
+                f"task TOML at {path}: stage dependency cycle "
+                f"detected at stage_id {sid!r}"
+            )
+        color[sid] = GRAY
+        for dep in graph[sid]:
+            visit(dep)
+        color[sid] = BLACK
+
+    for sid in graph:
+        visit(sid)
+
+    return records
+
+
+@dataclass
+class Stage:
+    """One stage in a multi-stage long-horizon task (Phase 5 §2).
+
+    Stages group ``Subtask``s and express dependency edges between
+    groups so a task spec can declare e.g. "synthesis depends on the
+    prior research stages" without duplicating the dependency on
+    every subtask. The schema is additive — tasks that omit
+    ``[[stages]]`` continue to parse with ``Task.stages = []`` and
+    every ``Subtask.stage_id = None``.
+
+    ``depends_on`` lists the ``stage_id`` of stages that must
+    complete before this stage's subtasks become eligible. The
+    ``Task.from_toml`` validator enforces uniqueness, reference
+    integrity, and acyclicity at load time; the dataclass itself
+    holds whatever the parser produced.
+
+    ``expected_duration_seconds`` and ``expected_spend_usd`` are
+    optional planning hints feeding §6's real-time divergence
+    detection during the §1 long-horizon run; both default ``None``
+    when absent.
+    """
+
+    stage_id: str
+    name: str = ""
+    depends_on: list[str] = field(default_factory=list)
+    expected_duration_seconds: float | None = None
+    expected_spend_usd: float | None = None
+
+
 @dataclass
 class Subtask:
     """One unit of work in a long-horizon task's queue.
@@ -113,10 +294,15 @@ class Subtask:
     transition operations on ``Task`` enforce this; direct
     construction is exposed for replay (§7) which sets fields
     explicitly from event payloads.
+
+    ``stage_id`` (Phase 5 §2) optionally references a ``Stage`` in
+    the parent ``Task.stages`` list; ``None`` means the subtask is
+    not grouped (the pre-§2 default).
     """
 
     subtask_id: str
     prompt: str
+    stage_id: str | None = None
     status: SubtaskStatus = "pending"
     started_at: str | None = None
     finished_at: str | None = None
@@ -163,6 +349,7 @@ class Task:
     created_at: str
     subtasks: list[Subtask] = field(default_factory=list)
     decisions: list[Decision] = field(default_factory=list)
+    stages: list[Stage] = field(default_factory=list)
     state_root: str = field(default=DEFAULT_STATE_ROOT)
 
     # ------------------------------------------------------------------
@@ -179,18 +366,31 @@ class Task:
     ) -> "Task":
         """Load task definition from TOML; create fresh task on disk.
 
-        Validates the TOML schema (``task_id`` and ``goal`` required,
-        each non-empty string; ``[[subtasks]]`` optional, each entry
-        a ``{subtask_id, prompt}`` table). Computes
-        ``workspace_path`` as ``<workspaces_dir>/<task_id>``;
+        Validates the TOML schema:
+
+        - ``task_id`` and ``goal``: required non-empty strings.
+        - ``[[stages]]``: optional array of tables (Phase 5 §2). Each
+          entry needs a non-empty ``stage_id`` (unique across stages);
+          optional ``name`` (string, defaults to ``""``);
+          optional ``depends_on`` (list of strings each referencing
+          another stage's ``stage_id``, no self-reference, no cycles);
+          optional ``expected_duration_seconds`` /
+          ``expected_spend_usd`` (non-negative numbers or absent).
+        - ``[[subtasks]]``: optional array of tables. Each entry needs
+          non-empty ``subtask_id`` (unique within the task) and
+          ``prompt``; optional ``stage_id`` referencing a declared
+          ``[[stages]].stage_id``.
+
+        Computes ``workspace_path`` as ``<workspaces_dir>/<task_id>``;
         ``created_at`` is captured at call time.
 
         Persists exactly one ``task_create`` event (carrying
-        ``goal`` / ``workspace_path`` / ``created_at`` plus the
-        decision note) and one ``enqueue_subtask`` event per
-        ``[[subtasks]]`` row. Also appends a ``task_create``
-        ``Decision`` to the in-memory ``decisions`` list so the
-        replay-equivalent timeline is unified.
+        ``goal`` / ``workspace_path`` / ``created_at`` / ``stages``
+        plus the decision note) and one ``enqueue_subtask`` event per
+        ``[[subtasks]]`` row (each carrying the optional
+        ``stage_id``). Also appends a ``task_create`` ``Decision`` to
+        the in-memory ``decisions`` list so the replay-equivalent
+        timeline is unified.
 
         Tests pass ``state_root`` (where ``task_events.jsonl`` is
         written) and ``workspaces_dir`` (where ``workspace_path`` is
@@ -220,6 +420,12 @@ class Task:
                 f"string; got {goal!r}"
             )
 
+        # Phase 5 §2: validate optional [[stages]] before constructing
+        # the Task so the task_create event can persist them in the
+        # bootstrap row that load_task replays.
+        stage_records = _validate_stages(config.get("stages", []), path)
+        seen_stage_ids = {rec["stage_id"] for rec in stage_records}
+
         sr = state_root if state_root is not None else DEFAULT_STATE_ROOT
         wd = workspaces_dir if workspaces_dir is not None else DEFAULT_WORKSPACES_DIR
         workspace_path = os.path.join(wd, task_id)
@@ -230,6 +436,7 @@ class Task:
             goal=goal,
             workspace_path=workspace_path,
             created_at=created_at,
+            stages=[Stage(**rec) for rec in stage_records],
             state_root=sr,
         )
 
@@ -237,7 +444,10 @@ class Task:
         # and acts as the task_create Decision row. The
         # ``decision_note`` field carries the human-readable note so
         # §7's replay can append to ``decisions`` without
-        # reconstructing it from the goal field.
+        # reconstructing it from the goal field. ``stages`` is
+        # serialised as a list of dicts mirroring the Stage dataclass
+        # so load_task can reconstruct the in-memory Stage objects
+        # without having to re-parse the original TOML.
         decision_note = f"goal: {goal}"
         task._append_event(
             "task_create",
@@ -246,6 +456,7 @@ class Task:
                 "workspace_path": workspace_path,
                 "created_at": created_at,
                 "decision_note": decision_note,
+                "stages": stage_records,
             },
         )
         task.decisions.append(
@@ -278,7 +489,20 @@ class Task:
                     f"task TOML at {path}: each [[subtasks]].prompt must "
                     f"be a non-empty string; got {prompt!r}"
                 )
-            task.enqueue_subtask(sid, prompt)
+            stage_id = raw.get("stage_id")
+            if stage_id is not None:
+                if not isinstance(stage_id, str) or not stage_id:
+                    raise TaskError(
+                        f"task TOML at {path}: subtask {sid!r} stage_id "
+                        f"must be a non-empty string or absent; got "
+                        f"{stage_id!r}"
+                    )
+                if stage_id not in seen_stage_ids:
+                    raise TaskError(
+                        f"task TOML at {path}: subtask {sid!r} references "
+                        f"unknown stage_id {stage_id!r}"
+                    )
+            task.enqueue_subtask(sid, prompt, stage_id=stage_id)
 
         return task
 
@@ -339,8 +563,21 @@ class Task:
             f"subtask_id={subtask_id!r}"
         )
 
-    def enqueue_subtask(self, subtask_id: str, prompt: str) -> Subtask:
-        """Append a new ``pending`` subtask; persist one event."""
+    def enqueue_subtask(
+        self,
+        subtask_id: str,
+        prompt: str,
+        *,
+        stage_id: str | None = None,
+    ) -> Subtask:
+        """Append a new ``pending`` subtask; persist one event.
+
+        ``stage_id`` (Phase 5 §2) is the optional reference into
+        ``self.stages``. Cross-stage validation lives in
+        ``Task.from_toml`` — this operation accepts any ``None`` /
+        non-empty-string value so direct callers (and replay) don't
+        have to maintain the stages set separately.
+        """
         if not isinstance(subtask_id, str) or not subtask_id:
             raise TaskError(
                 f"subtask_id must be a non-empty string; got {subtask_id!r}"
@@ -349,17 +586,32 @@ class Task:
             raise TaskError(
                 f"prompt must be a non-empty string; got {prompt!r}"
             )
+        if stage_id is not None and (
+            not isinstance(stage_id, str) or not stage_id
+        ):
+            raise TaskError(
+                f"stage_id must be a non-empty string or None; got {stage_id!r}"
+            )
         for existing in self.subtasks:
             if existing.subtask_id == subtask_id:
                 raise TaskError(
                     f"duplicate subtask_id {subtask_id!r} on task "
                     f"{self.task_id!r}"
                 )
-        st = Subtask(subtask_id=subtask_id, prompt=prompt, status="pending")
+        st = Subtask(
+            subtask_id=subtask_id,
+            prompt=prompt,
+            stage_id=stage_id,
+            status="pending",
+        )
         self.subtasks.append(st)
         self._append_event(
             "enqueue_subtask",
-            {"subtask_id": subtask_id, "prompt": prompt},
+            {
+                "subtask_id": subtask_id,
+                "prompt": prompt,
+                "stage_id": stage_id,
+            },
         )
         return st
 
@@ -583,6 +835,47 @@ def load_task(
                     created_at=row.get("created_at", ""),
                     state_root=sr,
                 )
+                # Phase 5 §2: reconstruct stages from the persisted
+                # task_create row. Pre-§2 logs lack the field; the
+                # forgiving reader leaves task.stages empty.
+                raw_stages = row.get("stages", [])
+                if isinstance(raw_stages, list):
+                    for raw_stage in raw_stages:
+                        if not isinstance(raw_stage, dict):
+                            continue
+                        sid = raw_stage.get("stage_id")
+                        if not isinstance(sid, str) or not sid:
+                            continue
+                        name = raw_stage.get("name", "")
+                        if not isinstance(name, str):
+                            name = ""
+                        deps_raw = raw_stage.get("depends_on", [])
+                        deps = (
+                            [d for d in deps_raw if isinstance(d, str) and d]
+                            if isinstance(deps_raw, list)
+                            else []
+                        )
+                        exp_dur = raw_stage.get("expected_duration_seconds")
+                        if not isinstance(exp_dur, (int, float)) or isinstance(
+                            exp_dur, bool
+                        ):
+                            exp_dur = None
+                        exp_spend = raw_stage.get("expected_spend_usd")
+                        if not isinstance(exp_spend, (int, float)) or isinstance(
+                            exp_spend, bool
+                        ):
+                            exp_spend = None
+                        task.stages.append(Stage(
+                            stage_id=sid,
+                            name=name,
+                            depends_on=deps,
+                            expected_duration_seconds=(
+                                float(exp_dur) if exp_dur is not None else None
+                            ),
+                            expected_spend_usd=(
+                                float(exp_spend) if exp_spend is not None else None
+                            ),
+                        ))
                 task.decisions.append(
                     Decision(
                         timestamp=row.get("created_at", ""),
@@ -602,8 +895,17 @@ def load_task(
                 prompt = row.get("prompt")
                 if not isinstance(sid, str) or not isinstance(prompt, str):
                     continue
+                # Phase 5 §2: optional stage_id; pre-§2 rows lack it.
+                stage_id = row.get("stage_id")
+                if not (isinstance(stage_id, str) and stage_id):
+                    stage_id = None
                 task.subtasks.append(
-                    Subtask(subtask_id=sid, prompt=prompt, status="pending"),
+                    Subtask(
+                        subtask_id=sid,
+                        prompt=prompt,
+                        stage_id=stage_id,
+                        status="pending",
+                    ),
                 )
             elif event_type == "start_subtask":
                 st = _replay_lookup(task, row, lineno)

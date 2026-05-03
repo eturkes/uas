@@ -22,6 +22,7 @@ from orchestrator import cli as cli_mod
 from orchestrator import task as task_mod
 from orchestrator.task import (
     Decision,
+    Stage,
     Subtask,
     Task,
     TaskError,
@@ -819,6 +820,166 @@ class TestRoundTripWithRealTask:
         s1 = next(s for s in reloaded.subtasks if s.subtask_id == "s1")
         assert s1.status == "done"
         assert s1.cost_usd == 0.2
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 §2 — stages and per-subtask stage_id replay
+# ---------------------------------------------------------------------------
+
+
+class TestStagesReplay:
+    """``load_task`` reconstructs Phase 5 §2 stages and per-subtask
+    stage_id from the persisted JSONL log."""
+
+    def test_stages_replayed_from_task_create_event(self, state_root):
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(
+                stages=[
+                    {
+                        "stage_id": "stage_a",
+                        "name": "First",
+                        "depends_on": [],
+                        "expected_duration_seconds": 600.0,
+                        "expected_spend_usd": 5.0,
+                    },
+                    {
+                        "stage_id": "stage_b",
+                        "name": "Second",
+                        "depends_on": ["stage_a"],
+                        "expected_duration_seconds": 900.0,
+                        "expected_spend_usd": 7.5,
+                    },
+                ],
+            ),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert len(t.stages) == 2
+        assert t.stages[0].stage_id == "stage_a"
+        assert t.stages[0].expected_duration_seconds == 600.0
+        assert t.stages[1].depends_on == ["stage_a"]
+        assert t.stages[1].expected_spend_usd == 7.5
+
+    def test_subtask_stage_id_replayed(self, state_root):
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(stages=[
+                {"stage_id": "stage_a", "name": "", "depends_on": []},
+            ]),
+            _baseline_meta(
+                event="enqueue_subtask",
+                subtask_id="s1", prompt="p", stage_id="stage_a",
+            ),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.subtasks[0].stage_id == "stage_a"
+
+    def test_pre_stage_log_replays_with_empty_stages(self, state_root):
+        # Pre-§2 logs lack the ``stages`` field on task_create and
+        # ``stage_id`` on enqueue_subtask. Replay must produce
+        # ``Task.stages == []`` and ``Subtask.stage_id is None``.
+        # ``_bootstrap_row()`` already omits both fields so it stands
+        # in for a pre-§2 log row.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(),
+            _baseline_meta(
+                event="enqueue_subtask", subtask_id="s1", prompt="p",
+            ),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.stages == []
+        assert t.subtasks[0].stage_id is None
+
+    def test_corrupted_stages_payload_dropped(self, state_root):
+        # Forgiving reader: a non-list ``stages`` field on the
+        # task_create row leaves task.stages empty rather than crashing.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(stages="not a list"),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.stages == []
+
+    def test_corrupted_stage_entry_skipped(self, state_root):
+        # One valid stage + several malformed entries. Replay keeps the
+        # valid one, drops the rest.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(stages=[
+                "not a dict",
+                {"stage_id": ""},  # empty id
+                {"stage_id": 42},  # wrong type
+                {
+                    "stage_id": "good",
+                    "name": "valid",
+                    "depends_on": ["a", "", 99, "b"],  # filtered
+                },
+            ]),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert len(t.stages) == 1
+        assert t.stages[0].stage_id == "good"
+        # Non-string / empty-string deps are filtered out by the
+        # forgiving reader.
+        assert t.stages[0].depends_on == ["a", "b"]
+
+    def test_corrupted_stage_metadata_normalised_to_none(self, state_root):
+        # Non-numeric expected_* fields (or bool, since bool ⊂ int in
+        # Python) get reset to None on replay.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(stages=[
+                {
+                    "stage_id": "s",
+                    "expected_duration_seconds": "not a number",
+                    "expected_spend_usd": True,
+                },
+            ]),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.stages[0].expected_duration_seconds is None
+        assert t.stages[0].expected_spend_usd is None
+
+    def test_corrupted_subtask_stage_id_replays_as_none(self, state_root):
+        # Forgiving reader: bad stage_id on enqueue_subtask becomes None.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(),
+            _baseline_meta(
+                event="enqueue_subtask", subtask_id="s1", prompt="p",
+                stage_id=42,
+            ),
+            _baseline_meta(
+                event="enqueue_subtask", subtask_id="s2", prompt="p",
+                stage_id="",
+            ),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.subtasks[0].stage_id is None
+        assert t.subtasks[1].stage_id is None
+
+    def test_from_toml_then_load_round_trip_preserves_stages(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        with open(toml_path, "w", encoding="utf-8") as fh:
+            fh.write("""\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "stage_a"
+name = "First"
+expected_duration_seconds = 600
+expected_spend_usd = 5.0
+[[subtasks]]
+subtask_id = "s1"
+stage_id = "stage_a"
+prompt = "p"
+""")
+        t_orig = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        loaded = load_task("t1", state_root=state_root, mark_resume=False)
+        assert len(loaded.stages) == 1
+        assert loaded.stages[0].stage_id == t_orig.stages[0].stage_id
+        assert loaded.stages[0].name == "First"
+        assert loaded.stages[0].expected_duration_seconds == 600.0
+        assert loaded.stages[0].expected_spend_usd == 5.0
+        assert loaded.subtasks[0].stage_id == "stage_a"
 
 
 # ---------------------------------------------------------------------------

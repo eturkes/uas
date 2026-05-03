@@ -1,0 +1,368 @@
+# Phase 5 §1 — long-horizon real-task TOML for the §6 validation run.
+#
+# Comprehensive survey of LLM-based autonomous coding agents
+# (2023-2026): architecture patterns, reliability mechanisms,
+# evaluation methodologies, and open problems. ~22 subtasks across
+# 5 stages with one dependency edge (stage 5 ⇐ stages 1-4) — chosen
+# under §1's "decide on a task yourself, preferably something token
+# heavy" delegation. Adapted from `docs/phase5_scope.md` candidate G
+# (literature review / synthesis), with topic = the design space
+# UAS itself sits in so the output has post-task value as Phase 6+
+# context.
+#
+# Per-stage `expected_duration_seconds` / `expected_spend_usd`
+# entries are §1 Results estimates (order-of-magnitude). They feed
+# §6's real-time divergence detection at the §1-Results-named hard
+# abort threshold of 2× expected. They are NOT enforcement levers
+# — the policy machine ignores them at runtime.
+#
+# Workspace layout post-run:
+#   <workspace>/stage{1..4}/<topic>.md   (21 deep-dive files)
+#   <workspace>/synthesis/survey.md      (final consolidated output)
+
+task_id = "agent-survey-2026"
+goal = "Produce a comprehensive Markdown survey of LLM-based autonomous coding agents (2023-2026)."
+
+# ---------------------------------------------------------------------------
+# Stage definitions
+# ---------------------------------------------------------------------------
+
+[[stages]]
+stage_id = "stage1-architectures"
+name = "Architecture patterns"
+depends_on = []
+expected_duration_seconds = 3600
+expected_spend_usd = 16.0
+
+[[stages]]
+stage_id = "stage2-reliability"
+name = "Reliability mechanisms"
+depends_on = []
+expected_duration_seconds = 2700
+expected_spend_usd = 12.0
+
+[[stages]]
+stage_id = "stage3-evaluation"
+name = "Evaluation methodologies"
+depends_on = []
+expected_duration_seconds = 1800
+expected_spend_usd = 8.0
+
+[[stages]]
+stage_id = "stage4-open-problems"
+name = "Open problems"
+depends_on = []
+expected_duration_seconds = 1350
+expected_spend_usd = 6.0
+
+[[stages]]
+stage_id = "stage5-synthesis"
+name = "Final synthesis"
+depends_on = [
+    "stage1-architectures",
+    "stage2-reliability",
+    "stage3-evaluation",
+    "stage4-open-problems",
+]
+expected_duration_seconds = 600
+expected_spend_usd = 8.0
+
+# ---------------------------------------------------------------------------
+# Stage 1 — Architecture patterns (8 subtasks)
+# ---------------------------------------------------------------------------
+
+[[subtasks]]
+subtask_id = "s1-1-react"
+stage_id = "stage1-architectures"
+prompt = """
+Topic: ReAct as a design pattern for LLM-based autonomous coding agents.
+
+Produce a detailed Markdown technical analysis at ./stage1/react.md (create the stage1/ directory if absent; do not modify any other files). Required headings:
+
+1. Overview — definition and origin (1 paragraph).
+2. Architecture and mechanism — the reasoning-action interleave, scratchpad / trajectory shape, action grammar, observation handling.
+3. Notable instantiations — published systems including Yao et al. 2023 (original) plus coding-agent applications and SWE-bench entries that use ReAct loops.
+4. Strengths — when this pattern outperforms alternatives.
+5. Failure modes — typical breakdowns observed in evaluations.
+6. Open problems — what remains unresolved as of 2026.
+
+Length: 4000-6000 words, dense and specific. Cover the period 2023-2026. Cite authors and paper titles from training-data memory, marking uncertain attributions with "(possibly)" rather than fabricating exact references.
+
+After writing the file, reply with only the literal word: done
+"""
+
+[[subtasks]]
+subtask_id = "s1-2-reflexion"
+stage_id = "stage1-architectures"
+prompt = """
+Topic: Reflexion as a design pattern for LLM-based autonomous coding agents.
+
+Produce a detailed Markdown technical analysis at ./stage1/reflexion.md (create stage1/ if absent; do not modify other files). Required headings:
+
+1. Overview — definition and origin.
+2. Architecture and mechanism — verbal self-reflection, episodic vs experiential memory, the actor/evaluator/self-reflection roles.
+3. Notable instantiations — Shinn et al. 2023 plus follow-ups in code generation and software engineering.
+4. Strengths and the empirical evidence for them.
+5. Failure modes — over-correction, reflection collapse, error-attribution mistakes.
+6. Open problems.
+
+Length: 4000-6000 words. Mark uncertain bibliography with "(possibly)".
+
+After writing the file, reply with only the literal word: done
+"""
+
+[[subtasks]]
+subtask_id = "s1-3-tot"
+stage_id = "stage1-architectures"
+prompt = """
+Topic: Tree-of-Thought (and related search-based) reasoning as a design pattern for LLM coding agents.
+
+Produce ./stage1/tree-of-thought.md (4000-6000 words). Required headings: Overview, Architecture and mechanism (state representation, expansion / scoring / pruning, the BFS vs DFS variants), Notable instantiations (Yao et al. 2023b "Tree of Thoughts"; Long et al.; AlphaCode-style search; ToT applied to code), Strengths, Failure modes (search explosion, scoring miscalibration), Open problems.
+
+Mark uncertain bibliography with "(possibly)". Do not modify other files. Reply with only "done" when complete.
+"""
+
+[[subtasks]]
+subtask_id = "s1-4-multi-agent"
+stage_id = "stage1-architectures"
+prompt = """
+Topic: Multi-agent systems as a design pattern for LLM coding agents.
+
+Produce ./stage1/multi-agent.md (4000-6000 words). Required headings: Overview, Architecture and mechanism (role specialization, message passing, coordination protocols, shared memory), Notable instantiations (AutoGen, MetaGPT, ChatDev, AgentVerse, CAMEL, plus newer 2024-2026 systems), Strengths, Failure modes (agent disagreement, role confusion, coordination overhead), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s1-5-plan-execute"
+stage_id = "stage1-architectures"
+prompt = """
+Topic: Plan-and-execute as a design pattern for LLM coding agents.
+
+Produce ./stage1/plan-and-execute.md (4000-6000 words). Required headings: Overview, Architecture and mechanism (decomposition step, plan persistence, execute step, replanning triggers), Notable instantiations (LangChain plan-execute, BabyAGI-style decomposition, hierarchical task networks, PaLM-SayCan-derived patterns, plan-then-write coding agents), Strengths, Failure modes (plan rigidity, replan instability, decomposition errors), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s1-6-rag-coding"
+stage_id = "stage1-architectures"
+prompt = """
+Topic: Retrieval-augmented generation (RAG) as a design pattern for code-aware LLM agents.
+
+Produce ./stage1/rag-coding.md (4000-6000 words). Required headings: Overview, Architecture and mechanism (corpus indexing, chunking strategies, retrieval at decode vs at plan, context-window budgeting), Notable instantiations (RepoCoder, CodeAgent, repo-aware retrieval in SWE-bench entrants, code-aware embedding models, agentic search like grep/AST queries), Strengths, Failure modes (irrelevant retrieval, context overload, hallucinated symbols), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s1-7-swe-agent"
+stage_id = "stage1-architectures"
+prompt = """
+Topic: Code-specific agents — SWE-agent and the SWE-bench-driven research line.
+
+Produce ./stage1/swe-agent.md (4000-6000 words). Required headings: Overview, Architecture and mechanism (agent-computer interface design, the `edit` / `find` / `submit` action set, observation summarization, scaffolded workflows), Notable instantiations (SWE-agent / Yang et al. 2024, OpenHands / OpenDevin, AutoCodeRover, Agentless, Aider's agent mode, top SWE-bench entries 2024-2026), Strengths, Failure modes (action-grammar limitations, repository navigation errors, edit conflicts), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s1-8-autonomous-workers"
+stage_id = "stage1-architectures"
+prompt = """
+Topic: Autonomous coding workers — fully autonomous, hours-to-days-horizon agents (Devin-style).
+
+Produce ./stage1/autonomous-workers.md (4000-6000 words). Required headings: Overview, Architecture and mechanism (long-horizon planning, browser/IDE/terminal integration, persistent memory, human handoff points), Notable instantiations (Devin / Cognition, Magic Dev, autonomous coding products that emerged 2024-2026, self-hosted analogues like OpenHands), Strengths, Failure modes (drift over hours, context loss across sessions, opaque debugging when failures occur), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+# ---------------------------------------------------------------------------
+# Stage 2 — Reliability mechanisms (6 subtasks)
+# ---------------------------------------------------------------------------
+
+[[subtasks]]
+subtask_id = "s2-1-verification"
+stage_id = "stage2-reliability"
+prompt = """
+Topic: Verification approaches for LLM coding agents.
+
+Produce ./stage2/verification.md (4000-6000 words; create stage2/ if absent). Required headings: Overview, Spectrum (unit-test verification, property-based testing, formal verification, learned verifiers, runtime invariant checks), Notable instantiations across 2023-2026, Strengths, Failure modes (test-set leakage, partial-correctness illusions, verifier hacking), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s2-2-retry-backoff"
+stage_id = "stage2-reliability"
+prompt = """
+Topic: Retry and backoff policies in LLM coding agents.
+
+Produce ./stage2/retry-backoff.md (4000-6000 words). Required headings: Overview, Mechanism taxonomy (error-driven retry, retry-with-modification, retry-clean / state reset, exponential backoff for rate limits, semantic backoff for LLM disagreements), Notable instantiations, Strengths, Failure modes (retry storms, masking real bugs, error-amplification loops), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s2-3-checkpointing"
+stage_id = "stage2-reliability"
+prompt = """
+Topic: Checkpointing and rollback in LLM coding agents.
+
+Produce ./stage2/checkpointing.md (4000-6000 words). Required headings: Overview, Granularity choices (action-level, subtask-level, session-level), Storage substrate (git, filesystem snapshots, action logs, structured event journals), Notable instantiations, Strengths, Failure modes (snapshot bloat, partial-state restoration bugs, divergence between code and side-effects), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s2-4-validation-cascades"
+stage_id = "stage2-reliability"
+prompt = """
+Topic: Validation cascades in LLM coding agents.
+
+Produce ./stage2/validation-cascades.md (4000-6000 words). Required headings: Overview, Cascade design (linter → type-check → unit test → integration → property test → human review; ordering rationale), Notable instantiations across 2023-2026, Strengths, Failure modes (cascade rigidity, false-positive thrash, late failures), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s2-5-multi-plan-voting"
+stage_id = "stage2-reliability"
+prompt = """
+Topic: Multi-plan voting and best-of-N for LLM coding agents.
+
+Produce ./stage2/multi-plan-voting.md (4000-6000 words). Required headings: Overview, Mechanism taxonomy (best-of-N sampling, self-consistency, plan ensembling, multi-judge voting, AlphaCode-style), Notable instantiations 2023-2026, Strengths (and the cost / quality tradeoff), Failure modes (correlated samples, voting calibration, cost blow-up), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s2-6-budget-aware"
+stage_id = "stage2-reliability"
+prompt = """
+Topic: Budget-aware scheduling in LLM coding agents.
+
+Produce ./stage2/budget-aware.md (4000-6000 words). Required headings: Overview, Budget dimensions (token budget, dollar budget, wallclock budget, rate-limit budget), Mechanism taxonomy (cost-aware planning, anytime algorithms, early stopping, multi-tier model routing, budget-driven backoff), Notable instantiations including 2025-2026 cost-aware orchestrators, Strengths, Failure modes (budget exhaustion mid-task, miscalibrated cost estimates, premature stopping), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+# ---------------------------------------------------------------------------
+# Stage 3 — Evaluation methodologies (4 subtasks)
+# ---------------------------------------------------------------------------
+
+[[subtasks]]
+subtask_id = "s3-1-benchmarks"
+stage_id = "stage3-evaluation"
+prompt = """
+Topic: Benchmark design for LLM coding agents.
+
+Produce ./stage3/benchmarks.md (4000-6000 words; create stage3/ if absent). Required headings: Overview, Benchmark landscape (HumanEval, MBPP, MultiPL-E, SWE-bench / SWE-bench-verified / SWE-bench-multimodal, RepoBench, Aider polyglot, LiveCodeBench, BigCodeBench, plus 2025-2026 entries), Design dimensions (task realism, contamination resistance, scoring tractability, scale), Strengths and weaknesses of each, Open problems (benchmark saturation, contamination, agent-vs-completion confusion, real-world drift).
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s3-2-llm-judge"
+stage_id = "stage3-evaluation"
+prompt = """
+Topic: LLM-as-judge evaluation for coding agents.
+
+Produce ./stage3/llm-judge.md (4000-6000 words). Required headings: Overview, Mechanism (judge-prompt design, single vs panel, calibration), Notable instantiations (G-Eval, AlpacaEval, MT-Bench, code-specific judges 2024-2026), Known biases (positional, verbosity, self-preference, length, formatting), Calibration approaches, Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s3-3-deterministic-grading"
+stage_id = "stage3-evaluation"
+prompt = """
+Topic: Deterministic / automated grading for LLM coding agents.
+
+Produce ./stage3/deterministic-grading.md (4000-6000 words). Required headings: Overview, Check taxonomy (exit codes, pytest pass, file existence, content regex, file shape, command success, structural diffs), Composition into validation cascades (cross-reference stage2/validation-cascades.md), Notable instantiations, Strengths (low-noise, fast feedback), Failure modes (overfitting to test surface, brittle reference comparisons, format dependencies), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s3-4-human-in-the-loop"
+stage_id = "stage3-evaluation"
+prompt = """
+Topic: Human-in-the-loop evaluation for LLM coding agents.
+
+Produce ./stage3/human-in-the-loop.md (4000-6000 words). Required headings: Overview, Methodology variants (pairwise ranking, expert review, structured rubrics, post-hoc auditing, SWE-bench manual analysis), Cost / scale tradeoffs, Notable instantiations and findings 2023-2026, Strengths, Failure modes (rater fatigue, criterion drift, reproducibility), Open problems.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+# ---------------------------------------------------------------------------
+# Stage 4 — Open problems (3 subtasks)
+# ---------------------------------------------------------------------------
+
+[[subtasks]]
+subtask_id = "s4-1-coordination"
+stage_id = "stage4-open-problems"
+prompt = """
+Topic: Long-horizon coordination as an open problem in LLM coding agents.
+
+Produce ./stage4/coordination.md (4000-6000 words; create stage4/ if absent). Required headings: Overview (the multi-hour to multi-day horizon, why short-horizon scaffolding fails when scaled), Symptoms observed in practice (drift, plan stale-ness, context loss, repeated work), Mechanisms attempted (memory systems, plan persistence, episodic recall, structured event journals), What still does not work, Open research directions for 2026+.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s4-2-scaffold-vs-model"
+stage_id = "stage4-open-problems"
+prompt = """
+Topic: The scaffold-vs-model trade-off as an open problem in LLM coding agents.
+
+Produce ./stage4/scaffold-vs-model.md (4000-6000 words). Required headings: Overview (the empirical observation that more scaffolding does not always help, especially as base-model capability grows), Concrete cases where added mechanisms reduced reliability, Cases where scaffolding remained essential, The 2024-2026 trend toward thinner scaffolds + stronger models, Diagnostic frameworks for "when does this mechanism earn its keep?", Open research directions.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+[[subtasks]]
+subtask_id = "s4-3-budget-management"
+stage_id = "stage4-open-problems"
+prompt = """
+Topic: Cost / budget management at scale as an open problem in LLM coding agents.
+
+Produce ./stage4/cost-budget-mgmt.md (4000-6000 words). Required headings: Overview (the gap between per-call cost and per-task / per-week / per-project cost), Mechanism taxonomy (cross-references stage2/budget-aware.md), Multi-task budget allocation, Rate-limit handling under usage-tier subscriptions (e.g., Claude Max), Practical orchestrator patterns from 2024-2026, Open research directions including the role of usage-limit-aware orchestration.
+
+Mark uncertain bibliography. Don't modify other files. Reply with "done".
+"""
+
+# ---------------------------------------------------------------------------
+# Stage 5 — Final synthesis (1 subtask)
+# ---------------------------------------------------------------------------
+
+[[subtasks]]
+subtask_id = "s5-1-synthesis"
+stage_id = "stage5-synthesis"
+prompt = """
+You are producing the final synthesis for a survey of LLM-based autonomous coding agents (2023-2026). All input files live in the current working directory.
+
+Inputs (read each before writing):
+- stage1/react.md, reflexion.md, tree-of-thought.md, multi-agent.md, plan-and-execute.md, rag-coding.md, swe-agent.md, autonomous-workers.md
+- stage2/verification.md, retry-backoff.md, checkpointing.md, validation-cascades.md, multi-plan-voting.md, budget-aware.md
+- stage3/benchmarks.md, llm-judge.md, deterministic-grading.md, human-in-the-loop.md
+- stage4/coordination.md, scaffold-vs-model.md, cost-budget-mgmt.md
+
+If any file is missing (i.e., the corresponding subtask failed), note its absence in the synthesis but proceed with what is available.
+
+Output: ./synthesis/survey.md (create the synthesis/ directory if absent; do not modify any input files). Required structure:
+
+1. Title and abstract (1-2 paragraphs).
+2. Introduction (3-5 sections): scope, methodology, taxonomy preview, summary of findings.
+3. Architecture patterns (8+ sections): one per stage1 file, condensing each into 800-1500 words with cross-references back to ./stage1/<file>.md.
+4. Reliability mechanisms (6+ sections): one per stage2 file.
+5. Evaluation methodologies (4+ sections): one per stage3 file.
+6. Open problems (3+ sections): one per stage4 file, plus a "what's missing" subsection.
+7. Synthesis and discussion (3-5 sections): patterns across the corpus, the scaffold-vs-model debate, where the field is heading.
+8. Conclusion (1 section).
+9. References (consolidated list of cited works, marking uncertain attributions).
+
+Total target: at least 10,000 words and at least 30 sections (counting subsections). Aim for cohesion across sections, not concatenation of inputs.
+
+After writing the file, reply with only the literal word: done
+"""

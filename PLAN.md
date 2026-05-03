@@ -382,7 +382,116 @@ additions (concrete list authored after §1 closes):
 - §2 Results subsection records: schema additions, lines
   changed in `task.py`, regression run for `synthetic-multistep`.
 
-**Status:** pending
+**Status:** completed
+
+### Results
+
+**Schema additions (TOML-level, all backward-compatible).**
+
+1. Optional top-level `[[stages]]` array. Each entry:
+   - `stage_id` (required, non-empty string, unique within task).
+   - `name` (optional string, default `""`).
+   - `depends_on` (optional list of `stage_id` strings;
+     references must exist; self-reference rejected; dependency
+     graph must be acyclic — three-color DFS at load time).
+   - `expected_duration_seconds` (optional non-negative number;
+     planning hint feeding §6 divergence detection).
+   - `expected_spend_usd` (optional non-negative number; same).
+2. Optional `stage_id` field on each `[[subtasks]]` entry. Must
+   reference a declared `[[stages]].stage_id` when present;
+   `None` (the default) means the subtask is not grouped — the
+   pre-§2 shape that `synthetic-multistep` continues to use.
+
+**Schema additions (dataclass / persistence layer).**
+
+- `Stage` dataclass added (`task.py` L116–141): mirrors the
+  TOML field set above with the same defaults.
+- `Subtask.stage_id: str | None = None` added between `prompt`
+  and `status`. Pre-§2 callers / replay paths produce `None`.
+- `Task.stages: list[Stage] = field(default_factory=list)`
+  added between `decisions` and `state_root`.
+- `task_create` JSONL event now carries a `stages` payload (the
+  stage records as plain dicts, parsed at replay back into
+  `Stage` instances). Pre-§2 logs lacking the field replay with
+  `Task.stages = []`.
+- `enqueue_subtask` JSONL event now carries `stage_id` (or
+  `null`). Pre-§2 logs lacking the field replay with
+  `Subtask.stage_id = None`.
+- `Task.enqueue_subtask` gains a kwarg-only `stage_id: str |
+  None = None` parameter. Cross-stage validation lives in
+  `Task.from_toml`; the operation accepts any `None` /
+  non-empty-string value so direct callers (and replay) need
+  not maintain the stages set separately.
+- `load_task` reconstructs both new fields with a forgiving
+  reader: malformed entries / non-list / wrong-type values
+  default back to the pre-§2 shape rather than crashing the
+  reconstruction.
+
+**Implementation lines changed.**
+
+- `orchestrator/task.py`: +346 / −23 (per `git diff --stat`),
+  net ~+323 lines. Largest contributors are the new
+  `_validate_stages` helper (~125 lines) and the `from_toml`
+  extension that calls it. No behavioural changes to existing
+  events / dataclass fields beyond the additive ones above.
+- `tests/test_orchestrator_task.py`: +511 net — 25 new tests
+  in two new classes (`TestStagesFromToml`,
+  `TestEnqueueSubtaskStageId`) plus three new
+  `TestModuleConstants` cases (`test_stage_default_fields`,
+  `test_stage_full_construction`, `test_task_default_stages_empty`)
+  plus an extension to the existing
+  `test_subtask_default_status_is_pending`.
+- `tests/test_orchestrator_resume.py`: +161 net — 8 new
+  `TestStagesReplay` tests (round-trip, pre-§2 backward
+  compat, malformed-payload tolerance for stages and
+  per-subtask stage_id).
+- New file `orchestrator/cases/agent-survey-2026.toml`: 22
+  subtasks across 5 stages encoding the §1-picked real task;
+  parses cleanly (5 stages with the
+  stage5-synthesis ⇐ stages 1-4 dependency edge intact, 22
+  subtasks each referencing a declared stage).
+
+**Regression run for `synthetic-multistep`.**
+
+The actual real-Claude spawn was deferred to §6 pre-flight
+(consistent with PLAN's "real Claude Max budget will be
+spent" gating; Phase 4 §7 already validated the spawn path on
+this case). What §2 verified instead:
+
+- Full `pytest` suite passes 443 / 1 deselected (Phase 4 §7
+  baseline was 403 / 1 deselected; net +40 new tests, all
+  green). The 13 surviving test modules — including
+  `tests/test_orchestrator_loop.py`, which stubs
+  `worker.spawn_worker` and exercises the real loop body —
+  cover the load → policy → loop → record path.
+- Static `Task.from_toml` of `synthetic-multistep.toml`
+  produces the unchanged in-memory shape: 3 subtasks, no
+  stages, every `Subtask.stage_id = None`. The persisted
+  `task_create` event carries `stages: []`; each
+  `enqueue_subtask` carries `stage_id: null`. Functionally
+  equivalent to the pre-§2 schema.
+- `./uas-orchestrate status synthetic-multistep` against the
+  Phase 4 §7-vintage state log (commit `4754488`-era,
+  pre-§2 schema with no `stages` / `stage_id` keys) replays
+  cleanly through `load_task` and prints the recorded 3 done
+  / 0 pending / `$0.1531` total spend / `task_resume` last
+  decision. Backward-compat verified live on a real
+  pre-§2 log.
+- A fresh `./uas-orchestrate start agent-survey-2026
+  --simulate-rate-status five_hour_pause` against a tmp
+  state-root writes a 24-event log: 1 `task_create` (carrying
+  the 5-stage list), 22 `enqueue_subtask` (each carrying its
+  `stage_id`), 1 `policy_pause` decision; the simulated
+  rate-status preempts the spawn step so no real worker
+  fires. A subsequent `./uas-orchestrate status` against the
+  same tmp state replays cleanly: 22 pending, 0 done, last
+  decision `policy_pause`. End-to-end exercise of both the
+  new write path and the new replay path.
+
+**Substrate findings.** None new. The §1 Results' four
+substrate-transition flags (IS_SANDBOX, `_parse_iso8601`
+numeric resetsAt, OAuth invalid_grant noise, config_hash
+"unavailable") are §3 / §6 territory — all out of §2 scope.
 
 ## Section 3 — Policy configuration refinements
 

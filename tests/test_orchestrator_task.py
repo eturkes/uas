@@ -18,7 +18,7 @@ import pytest
 
 from orchestrator import task as task_mod
 from orchestrator import workspace as workspace_mod
-from orchestrator.task import Decision, Subtask, Task, TaskError
+from orchestrator.task import Decision, Stage, Subtask, Task, TaskError
 
 
 # ---------------------------------------------------------------------------
@@ -798,6 +798,485 @@ class TestPersistence:
 
 
 # ---------------------------------------------------------------------------
+# Phase 5 §2 — stages and per-subtask stage_id
+# ---------------------------------------------------------------------------
+
+
+_STAGES_TOML = """\
+task_id = "t1"
+goal = "staged"
+
+[[stages]]
+stage_id = "stage_a"
+name = "First stage"
+depends_on = []
+expected_duration_seconds = 600
+expected_spend_usd = 5.0
+
+[[stages]]
+stage_id = "stage_b"
+name = "Second stage"
+depends_on = ["stage_a"]
+expected_duration_seconds = 900
+expected_spend_usd = 7.5
+
+[[subtasks]]
+subtask_id = "s1"
+stage_id = "stage_a"
+prompt = "first"
+
+[[subtasks]]
+subtask_id = "s2"
+stage_id = "stage_b"
+prompt = "second"
+"""
+
+
+class TestStagesFromToml:
+    """Phase 5 §2 — [[stages]] schema parsing and validation."""
+
+    def test_stages_default_empty_when_absent(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, _MINIMAL_TOML)
+        t = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        assert t.stages == []
+
+    def test_full_stages_loaded(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, _STAGES_TOML)
+        t = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        assert len(t.stages) == 2
+        a, b = t.stages
+        assert a.stage_id == "stage_a"
+        assert a.name == "First stage"
+        assert a.depends_on == []
+        assert a.expected_duration_seconds == 600.0
+        assert a.expected_spend_usd == 5.0
+        assert b.stage_id == "stage_b"
+        assert b.depends_on == ["stage_a"]
+
+    def test_stages_persisted_in_task_create_event(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, _STAGES_TOML)
+        Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        rows = _read_rows(state_root, "t1")
+        bootstrap = rows[0]
+        assert bootstrap["event"] == "task_create"
+        stages_payload = bootstrap["stages"]
+        assert isinstance(stages_payload, list)
+        assert len(stages_payload) == 2
+        assert stages_payload[0]["stage_id"] == "stage_a"
+        assert stages_payload[1]["depends_on"] == ["stage_a"]
+        assert stages_payload[1]["expected_spend_usd"] == 7.5
+
+    def test_subtask_stage_id_loaded(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, _STAGES_TOML)
+        t = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        assert t.subtasks[0].stage_id == "stage_a"
+        assert t.subtasks[1].stage_id == "stage_b"
+
+    def test_subtask_stage_id_persisted_in_enqueue_event(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, _STAGES_TOML)
+        Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        rows = _read_rows(state_root, "t1")
+        # rows[0] = task_create, rows[1] = enqueue s1, rows[2] = enqueue s2
+        assert rows[1]["event"] == "enqueue_subtask"
+        assert rows[1]["stage_id"] == "stage_a"
+        assert rows[2]["stage_id"] == "stage_b"
+
+    def test_subtask_without_stage_id_defaults_to_none(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, _FULL_TOML)  # no stage_id on subtasks
+        t = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        for st in t.subtasks:
+            assert st.stage_id is None
+        # Persisted as null in the enqueue event.
+        rows = _read_rows(state_root, "t1")
+        for r in rows:
+            if r["event"] == "enqueue_subtask":
+                assert r["stage_id"] is None
+
+    def test_duplicate_stage_id_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "dup"
+[[stages]]
+stage_id = "dup"
+""")
+        with pytest.raises(TaskError, match="duplicate stage_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_stage_missing_id_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+name = "no id"
+""")
+        with pytest.raises(TaskError, match="stage_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_stage_empty_id_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = ""
+""")
+        with pytest.raises(TaskError, match="stage_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_stage_invalid_name_type_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "s1"
+name = 42
+""")
+        with pytest.raises(TaskError, match="name"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_stage_depends_on_must_be_list(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "s1"
+depends_on = "not a list"
+""")
+        with pytest.raises(TaskError, match="depends_on"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_stage_depends_on_unknown_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "s1"
+depends_on = ["does-not-exist"]
+""")
+        with pytest.raises(TaskError, match="unknown stage_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_stage_depends_on_self_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "s1"
+depends_on = ["s1"]
+""")
+        with pytest.raises(TaskError, match="depends on itself"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_two_stage_cycle_detected(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "a"
+depends_on = ["b"]
+[[stages]]
+stage_id = "b"
+depends_on = ["a"]
+""")
+        with pytest.raises(TaskError, match="cycle"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_three_stage_cycle_detected(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "a"
+depends_on = ["c"]
+[[stages]]
+stage_id = "b"
+depends_on = ["a"]
+[[stages]]
+stage_id = "c"
+depends_on = ["b"]
+""")
+        with pytest.raises(TaskError, match="cycle"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_diamond_dependency_accepted(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        # a → b, a → c, b → d, c → d (DAG, no cycle).
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "a"
+depends_on = []
+[[stages]]
+stage_id = "b"
+depends_on = ["a"]
+[[stages]]
+stage_id = "c"
+depends_on = ["a"]
+[[stages]]
+stage_id = "d"
+depends_on = ["b", "c"]
+""")
+        t = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        assert [s.stage_id for s in t.stages] == ["a", "b", "c", "d"]
+
+    def test_invalid_expected_duration_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "s1"
+expected_duration_seconds = "not a number"
+""")
+        with pytest.raises(TaskError, match="expected_duration_seconds"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_negative_expected_duration_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "s1"
+expected_duration_seconds = -10
+""")
+        with pytest.raises(TaskError, match="expected_duration_seconds"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_invalid_expected_spend_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "s1"
+expected_spend_usd = -1.0
+""")
+        with pytest.raises(TaskError, match="expected_spend_usd"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_stages_must_be_list(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+stages = "not an array"
+""")
+        with pytest.raises(TaskError, match="\\[\\[stages\\]\\]"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_subtask_unknown_stage_id_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "real"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+stage_id = "fake"
+""")
+        with pytest.raises(TaskError, match="unknown stage_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_subtask_invalid_stage_id_type_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "real"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+stage_id = 42
+""")
+        with pytest.raises(TaskError, match="stage_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_subtask_empty_stage_id_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[stages]]
+stage_id = "real"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+stage_id = ""
+""")
+        with pytest.raises(TaskError, match="stage_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_real_task_toml_loads(self, state_root, workspaces_dir):
+        """The Phase 5 §1 real-task TOML must load and validate."""
+        repo_root = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))
+        )
+        case_path = os.path.join(
+            repo_root, "orchestrator", "cases", "agent-survey-2026.toml",
+        )
+        t = Task.from_toml(
+            case_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        assert t.task_id == "agent-survey-2026"
+        assert len(t.stages) == 5
+        assert len(t.subtasks) == 22
+        # Stage 5 depends on the four prior stages.
+        synthesis = next(s for s in t.stages if s.stage_id == "stage5-synthesis")
+        assert set(synthesis.depends_on) == {
+            "stage1-architectures",
+            "stage2-reliability",
+            "stage3-evaluation",
+            "stage4-open-problems",
+        }
+        # Every subtask references a declared stage.
+        declared = {s.stage_id for s in t.stages}
+        for st in t.subtasks:
+            assert st.stage_id in declared
+
+
+class TestEnqueueSubtaskStageId:
+    """Phase 5 §2 — direct enqueue_subtask call exercises stage_id kwarg."""
+
+    def test_stage_id_kwarg_propagates_to_subtask(self, fresh_task):
+        st = fresh_task.enqueue_subtask("s1", "p", stage_id="stage_a")
+        assert st.stage_id == "stage_a"
+
+    def test_stage_id_persisted_in_event(self, fresh_task, state_root):
+        fresh_task.enqueue_subtask("s1", "p", stage_id="stage_a")
+        row = _read_rows(state_root, "t1")[-1]
+        assert row["event"] == "enqueue_subtask"
+        assert row["stage_id"] == "stage_a"
+
+    def test_omitted_stage_id_persists_as_null(self, fresh_task, state_root):
+        fresh_task.enqueue_subtask("s1", "p")
+        row = _read_rows(state_root, "t1")[-1]
+        assert row["stage_id"] is None
+
+    def test_invalid_stage_id_type_raises(self, fresh_task):
+        with pytest.raises(TaskError, match="stage_id"):
+            fresh_task.enqueue_subtask(
+                "s1", "p", stage_id=42,  # type: ignore[arg-type]
+            )
+
+    def test_empty_stage_id_raises(self, fresh_task):
+        with pytest.raises(TaskError, match="stage_id"):
+            fresh_task.enqueue_subtask("s1", "p", stage_id="")
+
+
+# ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
 
@@ -836,3 +1315,34 @@ class TestModuleConstants:
         assert st.finished_at is None
         assert st.result_summary is None
         assert st.cost_usd is None
+        # Phase 5 §2: stage_id defaults to None for un-staged subtasks.
+        assert st.stage_id is None
+
+    def test_stage_default_fields(self):
+        s = Stage(stage_id="stage1")
+        assert s.stage_id == "stage1"
+        assert s.name == ""
+        assert s.depends_on == []
+        assert s.expected_duration_seconds is None
+        assert s.expected_spend_usd is None
+
+    def test_stage_full_construction(self):
+        s = Stage(
+            stage_id="s2",
+            name="Reliability mechanisms",
+            depends_on=["s1"],
+            expected_duration_seconds=2700.0,
+            expected_spend_usd=12.0,
+        )
+        assert s.depends_on == ["s1"]
+        assert s.expected_duration_seconds == 2700.0
+        assert s.expected_spend_usd == 12.0
+
+    def test_task_default_stages_empty(self):
+        t = Task(
+            task_id="t",
+            goal="g",
+            workspace_path="/tmp",
+            created_at="ts",
+        )
+        assert t.stages == []

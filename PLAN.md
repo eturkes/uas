@@ -124,7 +124,88 @@ KEEP / CUT, and every Phase 0 catalog mechanism has a verdict.
   CUT count, expected shrinkage in lines (sum of `wc -l` over
   CUT files; precise figure for the §7 measurement).
 
-**Status:** pending
+**Status:** completed
+
+### Section 1 — Results
+
+`docs/cut_list.md` (~615 lines) authored as the Phase 4 §1
+deliverable, finalising `docs/cut_surface.md`'s sized estimate
+into a closed file-granularity classification with §3 / §4 / §5 /
+§6 owner assignments and a leaves-before-roots deletion order.
+Read-only — no source deletions in this section.
+
+**Counts.**
+
+| Metric | Value |
+|---|---|
+| Total tracked files (`git ls-files`) | 164 |
+| KEEP | 53 |
+| DEFER (resolves CUT under §6) | 3 |
+| CUT | 108 |
+| Expected shrinkage, sum of `wc -l` over CUT + DEFER files (text only) | ≈ 46,764 lines |
+| §5 in-place surgery on `integration/eval.py` (estimate per `cut_surface.md`) | ≈ 460 lines |
+| Binary asset (`screenshot.png`) | 1 file, ~266 KB |
+| Total expected text-line shrinkage to validate at §7 | ≈ 47,224 lines |
+
+**Bucket sizes.**
+
+| § | Files | Approximate lines (text deletions) |
+|---|---|---|
+| §3 (architect tree + tests) | 78 (16 source + 62 tests) | ≈ 38,200 |
+| §4 (cut orchestrator legacy + uas/ tree + tests) | 18 unique (8 source + 10 tests) | ≈ 5,200 |
+| §5 (`llm_judge` + ML quality gate + quick_test + eval surgery) | 4 deletions + 1 in-place surgery | ≈ 1,650 + 460 |
+| §6 (trio + root scripts + tools + screenshot + hooks test) | 11 (3 trio + 5 scripts + 1 PNG + 1 tool + 1 test) | ≈ 1,254 |
+
+§3 + §4 + §5 + §6 = 111 file deletions + 1 in-place surgery.
+`tests/test_fuzzy.py` is one crossover entry (architect-import
+filter pulls it into §3; PLAN §4 step 3's enumeration of it
+becomes a no-op).
+
+**Mechanism reconciliation.** All 68 catalog rows from
+`phase0_audit.md` § 1 map to CUT files. Zero map to KEEP files
+(matches `docs/cut_surface.md` headline). Cluster mapping in
+`docs/cut_list.md` § "Mechanism reconciliation".
+
+**Deviations from PLAN flagged for §2 / §6 review.**
+
+1. `tests/test_provenance.py` — PLAN §1 step 2 listed as KEEP,
+   but the file imports from `architect.provenance` (a CUT module,
+   not the `integration.provenance` keep-list flavour).
+   Reclassified CUT under §3 owner. PLAN §2 step 4–5's
+   "existing-fixture coverage in `tests/test_provenance.py`"
+   reference should point at
+   `tests/test_eval_metadata.py::TestHashActiveConfig` (lines
+   126–134), which is the test that actually exercises
+   `_hash_active_config`'s `"unavailable"` fallback via the
+   `integration.eval`-from-`integration.provenance` re-export.
+2. `tools/statusline_probe.sh` — not in any keep-list enumeration.
+   Default-cut rule applies; classified CUT under §6 owner.
+   Consequence: `docs/substrate.md` § Open questions loses its
+   natural-trigger capture surface for the percentage-cap
+   question; component 8's TUI companion read pattern retires.
+   §6 step 9 amends `docs/substrate.md` accordingly.
+3. `setup_auth.sh:34` — references the `install.sh` script that
+   §6 cuts. §6 surgery updates the error message to point users
+   at the still-supported image build path (`./uas-eval` lazy
+   build, or manual `podman build`).
+4. `Containerfile` — KEEP per PLAN §6.3 with §6 surgery (drop
+   `COPY uas_config.py / uas_hooks.py / architect/ / uas/ /
+   entrypoint.sh`, drop `ENTRYPOINT ["/uas/entrypoint.sh"]`,
+   drop `ENV IS_SANDBOX=1` / `ENV UAS_SANDBOX_MODE=local`).
+5. `tests/conftest.py` — KEEP with two dead-but-harmless residues
+   after §3 (the `tmp_workspace` fixture lazily imports
+   `architect.main` / `architect.state` inside its function body;
+   `_latest_source_mtime` globs `architect/*.py`). PLAN's "no
+   test mutation to make it pass after the cut" rule keeps both
+   as-is until a future cleanup.
+
+`docs/cut_list.md` § "§1 Results" records the same data verbatim
+plus the per-cluster mechanism table. Deletion order within each
+§ is leaves-before-roots; §3 cuts as one atomic `git rm -r
+architect/` plus the test batch, §4 cuts orchestrator legacy +
+`uas/` together, §5 runs eval surgery before deleting
+`llm_judge.py`, §6 cleans up after the dependency closure has
+already eliminated all importers.
 
 ## Section 2 — NEEDS-PHASE-3-DECISION trio resolution
 

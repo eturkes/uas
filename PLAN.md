@@ -1448,13 +1448,175 @@ budget is consumed under Phase 5.
 - Hard abort condition: cumulative spend > 2× the §1
   expectation, OR project owner judges the task off-rails.
 
-**Steps.** Authored after §2–§5 close.
+**Steps.**
+
+§2–§5 are closed; the steps below concretise the pre-flight
+checklist + the kickoff + the during-run loop + the results-
+recording into a single executable list. Steps 1–6 are
+read-only / no-spend pre-flight; steps 7–8 are the
+project-owner review gate; steps 9–12 spend real Claude Max
+budget; steps 13–14 record the §6 outcome.
+
+1. **Task + policy load smoke (pure-Python, no spend).**
+   `python3 -c "from orchestrator.task import Task; ..."`
+   loads `orchestrator/cases/agent-survey-2026.toml` and the
+   per-task override seeded from
+   `orchestrator/cases/agent-survey-2026-policy.toml`.
+   Verify: 5 stages with stage5 ⇐ stages 1-4, 22 subtasks,
+   0 checkpoints, `auto_resume_enabled=True`,
+   `hard_stop_usd=200.0`, `fallback_seconds=1800`,
+   `max_wait_seconds=21600`.
+2. **Full pytest baseline check.** `python3 -m pytest -q`
+   green at the §5 baseline of 588 passed / 1 deselected. Any
+   regression here blocks §6 — fix or roll back before
+   proceeding.
+3. **Container engine + image check.** `find_engine` resolves
+   to a podman or docker binary on PATH;
+   `<engine> image inspect uas-engine:latest` exits 0
+   (image present and recent). If absent, `ensure_engine_image`
+   will rebuild on first spawn — note rebuild duration
+   so the §6 wallclock attribution is clean.
+4. **Auth check.** `.uas_auth/claude.json` present with a
+   non-empty content body. If a fresh login is needed, run
+   `./setup_auth.sh` (interactive; user input required —
+   surface to project owner at step 7).
+5. **State-root selection.** Default: `orchestrator/state/`
+   (the production state-root). Confirm
+   `orchestrator/state/agent-survey-2026/` does not exist —
+   §6 is the first run for this task, so a fresh task-state
+   directory is correct. If it exists, decide explicitly:
+   reuse (carry forward) or wipe (start fresh) — record the
+   decision in §6 Results.
+6. **Foot-gun audit.** Confirmed at pre-flight: do NOT smoke
+   the agent-survey-2026 policy with `--simulate-rate-status
+   five_hour_pause`; with `auto_resume_enabled=true` and a
+   simulated `resetsAt` in the past, `_compute_pause_sleep_seconds`
+   returns ~0 and the loop hammers itself at full CPU writing
+   tens of thousands of `policy_pause` / `policy_auto_resume`
+   pairs per minute. Real headless `claude --print`
+   `rate_limit_event` rows carry future epoch timestamps, so
+   production runs are unaffected. Step 6 is documentation
+   only — no command runs here.
+7. **Project-owner review gate.** Stop and ask the project
+   owner before kicking off real spend. Required acks:
+   - The pre-flight steps 1–5 results (§6 Results
+     "Pre-flight" subsection).
+   - The §1 ↔ §3 done-enough criterion-4 reconciliation:
+     §1 names `task_resume` (operator re-invocation) as the
+     resume marker, but §3's `auto_resume_enabled=true` makes
+     window-boundary traversal produce `policy_auto_resume`
+     instead. Two acceptable resolutions; project owner
+     picks one:
+     - (a) **Amend §1 done-enough criterion 4** to accept
+       `policy_auto_resume` as the resume marker. The
+       agent-survey-2026 run keeps auto-resume on (the §1
+       "owner unavailable" rationale stands); the criterion
+       evolves to match the §3 mechanism. This is the
+       expected pick — `auto_resume_enabled=true` is
+       already committed in
+       `agent-survey-2026-policy.toml`.
+     - (b) **Disable auto-resume for §6** (flip the policy
+       override to `enabled=false`). Restores the §1
+       criterion exactly. Cost: the run will pause at the
+       first window boundary and require manual
+       `./uas-orchestrate resume agent-survey-2026` before
+       continuing — incompatible with the §1 "owner
+       unavailable" assumption.
+   - Explicit go to invoke step 9 (`./uas-orchestrate
+     start agent-survey-2026`). The task burns real Claude
+     Max budget ($1–$3 per stage-1–4 subtask, $5–$10 for
+     stage 5; total expected $20–$80 over multiple
+     window-boundary cycles).
+8. **Apply project-owner decision (if any).** If the owner
+   picks resolution (b), edit
+   `orchestrator/cases/agent-survey-2026-policy.toml` to
+   `enabled = false` in the `[auto_resume]` table and
+   record the change as a separate commit before step 9.
+   If resolution (a), record an amendment to §1 Results
+   under a new "§6 amendment" subsection and commit
+   separately. ROADMAP §"Phase 5" entry stays untouched
+   until §8.
+9. **Kick off the task.** `./uas-orchestrate start
+   agent-survey-2026`. Capture the start timestamp + the
+   first ~10 lines of stdout into §6 Results. Stream the
+   tail of `orchestrator/state/agent-survey-2026/task_events.jsonl`
+   in a separate terminal so spawn / completion / pause
+   events surface in real time.
+10. **Real-time budget monitor.** Every ~5 spawned subtasks,
+    or on every `policy_pause` / `policy_auto_resume` /
+    `policy_wrap_up` event, check cumulative spend:
+    `tail -1 orchestrator/state/agent-survey-2026/buffer.jsonl
+    | python3 -c "import sys, json; row = json.loads(sys.stdin.read()); print(row.get('cumulative_claude_reported_cost_usd'))"`
+    (or read via `./uas-orchestrate status`). Surface the
+    running total to the project owner.
+11. **Hard-abort condition.** If cumulative spend exceeds 2× the
+    §1 expectation (i.e., > $160), OR the project owner
+    judges the task off-rails (subtasks producing wrong-shape
+    output, runaway loop, etc.), invoke
+    `./uas-orchestrate halt agent-survey-2026` to record a
+    `policy_halt` decision and exit. The halt is reversible
+    via a future explicit `resume`; abort context goes into
+    §6 Results.
+12. **Stop condition for §6 (not §7).** §6 closes after the
+    first one of:
+    - First `policy_pause` event (auto_resume_enabled=false
+      branch — manual operator re-invocation expected).
+    - First `policy_auto_resume` event after a real
+      `policy_pause` (auto_resume_enabled=true branch —
+      one full window-boundary auto-traversal demonstrated).
+    - First `checkpoint_pause` event (won't happen on
+      agent-survey-2026 — 0 checkpoints declared — but the
+      stop condition is named so §6 transfers cleanly to a
+      future task that does declare checkpoints).
+    - All 22 subtasks reach a terminal status without ever
+      hitting a window boundary (both stage-1–4 and the
+      stage-5 synthesis drain inside one 5h window — possible
+      if the run starts immediately after the project owner's
+      window resets and the workers run fast). In this
+      shape, §6 acceptance criterion "≥1 window boundary
+      / checkpoint / natural pause" falls back to the
+      "natural pause" interpretation: task complete is itself
+      a natural pause point. Record explicitly in §6 Results
+      so §7 knows whether it has anything to continue.
+13. **Verify all four state artefacts populated.**
+    - `orchestrator/state/agent-survey-2026/task_events.jsonl`
+      — non-empty, last decision matches the §12 stop signal.
+    - `orchestrator/state/agent-survey-2026/rate_limits.jsonl`
+      — at least one `rate_limit_event` row (every spawn
+      writes one, so any successful spawn populates it).
+    - `orchestrator/state/agent-survey-2026/buffer.jsonl`
+      — at least one row with positive
+      `cumulative_claude_reported_cost_usd`.
+    - `orchestrator/state/agent-survey-2026/policy.toml` —
+      the per-task override copied at fresh-task bootstrap.
+    Empty `rate_limits.jsonl` / `buffer.jsonl` indicate zero
+    spawns reached terminal status — surface as a §6 blocker.
+14. **Read the resume_summary.md.** Project owner reviews
+    `orchestrator/state/agent-survey-2026/resume_summary.md`
+    against the digest sections enumerated in §4 Results.
+    Owner judgement on readability + utility goes into §6
+    Results. Any wishlist items (sections missing,
+    suggested-next-action wording confusing, etc.) get
+    captured for §7 / Phase 6+ rather than §6 in-place
+    edits — the §4 writer is not on this PLAN's revision
+    surface unless §6 surfaces a hard bug.
+15. **Record §6 Results.** Append to PLAN.md a §6 Results
+    subsection with: pre-flight findings (steps 1–6),
+    project-owner reconciliation pick (step 7),
+    kickoff timestamp + first stdout (step 9), spawn
+    counts + cumulative spend at the §12 stop point,
+    what triggered the §12 stop, four-state-artefact
+    verification (step 13), project-owner observations on
+    `resume_summary.md` (step 14), and any substrate findings
+    surfaced during the run that §7 / Phase 6+ should know
+    about. The Results subsection feeds §7 directly —
+    §7's first task is to read what §6 left behind.
 
 **Acceptance.**
 
 - Task started via `./uas-orchestrate start`.
 - At least one window boundary, checkpoint, or natural pause
-  encountered.
+  encountered (per step 12).
 - All four state artefacts (`task_events.jsonl`,
   `rate_limits.jsonl`, `buffer.jsonl`, `policy.toml`)
   populated.
@@ -1465,6 +1627,92 @@ budget is consumed under Phase 5.
   observations.
 
 **Status:** pending
+
+### Results
+
+#### Pre-flight (steps 1–6, no spend)
+
+Run on commit `1fd2e07` (clean). Findings:
+
+1. **Task + policy load.** `agent-survey-2026.toml` loads
+   via `Task.from_toml(str(path), state_root=str(tmp))`
+   producing 5 stages
+   (`stage1-architectures` / `stage2-reliability` /
+   `stage3-evaluation` / `stage4-open-problems` /
+   `stage5-synthesis`), with stage5 declaring
+   `depends_on=["stage1-architectures", "stage2-reliability",
+   "stage3-evaluation", "stage4-open-problems"]`. 22 subtasks,
+   0 checkpoints. The per-task policy override (seeded from
+   `agent-survey-2026-policy.toml`) deep-merges over
+   `policy.default.toml`: `enabled=True`,
+   `auto_resume_enabled=True`,
+   `auto_resume_fallback_seconds=1800` (30 min),
+   `auto_resume_max_wait_seconds=21600` (6 h),
+   `hard_stop_usd=200.0`. All values match the §1 / §3
+   design.
+2. **Pytest baseline.** First run surfaced 2 transient
+   failures in `tests/test_orchestrator_loop.py::TestRunLoopAutoResume`
+   (`test_auto_resume_sleeps_then_drains_queue` +
+   `test_auto_resume_with_unparseable_resets_at_uses_fallback`)
+   with `sleep_calls` containing thousands of extra
+   sub-millisecond entries — looked like sleep-mock leakage
+   from a prior in-process test. Re-ran 3× consecutive and
+   got 588 passed / 1 deselected / ~7.4–8.0 s each time;
+   matches §5 baseline exactly. The flake reproduces only
+   under specific test interleavings; running
+   `tests/test_orchestrator_loop.py` alone is also clean
+   (63 passed). Filed as a §6 finding (not a blocker for
+   the real-task run, but worth Phase 6+ investigation if
+   it recurs).
+3. **Container engine + image.** `find_engine` order is
+   podman → docker; podman is missing on this host, so
+   the resolved engine is `/usr/bin/docker` (28.5.1-ce).
+   Worker's `_engine_prefix` switches off `os.path.basename`
+   so the docker path is supported.
+   `docker image inspect uas-engine:latest` returns the
+   image built ~21 h before the §6 pre-flight; no rebuild
+   needed at kickoff.
+4. **Auth.** `.uas_auth/` populated with `claude.json`,
+   `sessions/`, `projects/`, `history.jsonl`,
+   `settings.json`, `mcp-needs-auth-cache.json`,
+   `shell-snapshots/`, `plugins/`, `backups/`, `cache/`,
+   `session-env/`. The Phase 4 §7 verification cycle ran
+   on this auth surface, so it is recent. No fresh
+   `./setup_auth.sh` invocation expected at step 7
+   unless the §6 kickoff itself surfaces an auth error.
+5. **State-root.** `orchestrator/state/` contains only
+   `synthetic-multistep` from the Phase 4 §7 baseline. No
+   stale `agent-survey-2026/` directory; the kickoff at
+   step 9 will start from a clean fresh-task bootstrap.
+6. **Foot-gun confirmed.** `./uas-orchestrate start
+   agent-survey-2026 --simulate-rate-status five_hour_pause
+   --state-root /tmp/uas-preflight-state` was launched as a
+   §2-style smoke and hit a tight infinite loop:
+   `_simulated_rate_status("five_hour_pause")` returns
+   `resetsAt = "2026-05-02T20:00:00Z"`, which is in the past
+   relative to today (`2026-05-03`).
+   `_compute_pause_sleep_seconds` therefore returns ~0; with
+   `auto_resume_enabled=true` the loop hammers
+   `policy_pause` / `time.sleep(~0)` / `policy_auto_resume`
+   pairs at full CPU. Killed after ~30 s; the
+   `task_events.jsonl` had grown to 29687 lines. The tmp
+   state-root was deleted after kill — `orchestrator/state/`
+   was not touched. **§6 step 9 does NOT pass
+   `--simulate-rate-status` to the production kickoff** —
+   real `claude --print` `rate_limit_event` rows carry
+   future epoch timestamps so production runs are
+   unaffected. Documented; the foot-gun belongs to §3 +
+   §2's simulate fixture (the simulated `resetsAt` strings
+   should probably be regenerated relative to "now" per
+   call rather than baked as fixed dates) and surfaces as a
+   Phase 6+ candidate but is not a §6 blocker.
+
+#### Project-owner review gate
+
+Pending. Step 7 is the next action; the §1 ↔ §3 done-enough-
+criterion-4 reconciliation pick goes here, plus the explicit
+go for step 9. §6 Results will append the pick + kickoff
+timestamps after the gate clears.
 
 ## Section 7 — Real-task continuation + post-run write-up
 

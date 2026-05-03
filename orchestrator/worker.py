@@ -92,6 +92,13 @@ def _build_command(
     cmd += [
         "-e", f"UAS_WORKER_PROMPT={prompt}",
         "-e", "CLAUDE_CONFIG_DIR=/root/.claude",
+        # Phase 4 §6 dropped IS_SANDBOX=1 from the Containerfile (the
+        # ENV layer was image-baked under the pre-prune entrypoint
+        # convention). Claude Code's --dangerously-skip-permissions
+        # safety check rejects root invocations unless this env var
+        # signals the caller knows the container is the sandbox
+        # boundary; the orchestrator now supplies it per spawn.
+        "-e", "IS_SANDBOX=1",
     ]
     if host_uid:
         cmd += ["-e", f"UAS_HOST_UID={host_uid}"]

@@ -993,7 +993,136 @@ delta is measured against the pre-§3 baseline.
   state artefacts populated.
 - Shrinkage delta recorded in §7 Results.
 
-**Status:** pending
+**Status:** completed
+
+### Section 7 — Results
+
+End-to-end verification of the post-prune tree, with one
+regression surfaced and repaired during execution.
+
+**Pytest verification (§7.1).** `python3 -m pytest tests/ -q` →
+**403 passed, 1 deselected in 4.95s**. Same count as §6 close;
+no test regressed across the entire phase.
+
+**Eval verification (§7.2).** `./uas-eval --no-resume` →
+
+```
+[1/1] hello-file: -> PASS (0.0s)
+  [ok] file_exists: found
+  [ok] file_contains: matched
+  Overall pass rate: 1.000 across 1 cases
+EXIT: 0
+```
+
+JSONL row well-formed; `config_hash: "unavailable"` confirms the
+§2-predicted soft-load fallback fired post-§6 (uas_config.py is
+gone; `_hash_active_config`'s file-not-found guard at L65–66
+returns `"unavailable"`). The provenance test
+`tests/test_eval_metadata.py::TestHashActiveConfig` accepts both
+hex and `"unavailable"` branches; no test edits required.
+
+**Orchestrator verification (§7.3) — regression surfaced and
+repaired.**
+
+- First run on the post-§6 tree (against `/tmp/uas-orch-§7-BOEK`)
+  failed every subtask spawn with `exit_code=1`; only `policy.toml`
+  + `task_events.jsonl` artefacts created, no `buffer.jsonl` or
+  `rate_limits.jsonl`. Manual reproduction surfaced the actual
+  worker-process error: **`--dangerously-skip-permissions cannot
+  be used with root/sudo privileges for security reasons`**.
+- Root cause: §6 dropped `ENV IS_SANDBOX=1` from the `Containerfile`
+  per cut_list.md's note "(orchestrator workers set these
+  themselves)", but `orchestrator/worker.py` was not updated to
+  pass it. Claude Code's safety check rejects root invocations of
+  `--dangerously-skip-permissions` unless `IS_SANDBOX=1` signals
+  the caller knows the container is the sandbox boundary.
+- Fix: added `-e IS_SANDBOX=1` to the worker spawn cmd in
+  `orchestrator/worker.py` (8 inserted lines including comment
+  trail explaining the move).
+- Re-verification on fresh `/tmp/uas-orch-§7-RETRY`: **3 subtasks
+  done**, 0 pending / in_flight / failed, **$0.1110 spend**, all
+  four state artefacts populated (buffer.jsonl 3,217 B,
+  rate_limits.jsonl 2,094 B, task_events.jsonl 8,692 B,
+  policy.toml 917 B). Last decision: `worker_complete` on
+  `s3-read`.
+
+**Optional pause + resume cycle (§7.3 step 4).** Fresh
+`/tmp/uas-orch-§7-PR2-uHrD`. Started with
+`--simulate-rate-status five_hour_pause`: policy decided
+`policy_pause` (`five_hour.status='approaching_limit'` and
+`five_hour.soft_cap_action='pause'`); 3 subtasks pending, 0 done,
+$0.0000 spend. Resumed with `--simulate-rate-status allowed`: 3
+subtasks done, 0 pending, **$0.1223 spend**, all four state
+artefacts populated. Boundary cycle is intact.
+
+**Shrinkage measurement (§7.4).** `git diff --stat 87d80b4..HEAD`
+(PLAN-author commit `Add PLAN for Phase 4` to current HEAD before
+the §7 commit, plus unstaged worker.py + JSONL):
+
+| Metric | Pre-prune (87d80b4) | Post-prune (HEAD) | Delta |
+|---|---|---|---|
+| Tracked files | 164 | 55 | **−109 (−66.5%)** |
+| Text lines (sum of `wc -l` over text-extension files) | ≈ 62,064 (cut_list.md headline) | 16,256 | **≈ −45,808 (−73.8%)** |
+| Binary files | 1 PNG | 0 | −1 |
+| `git diff --stat` line count | — | — | **+1,317 / −46,306 = −44,989 net text lines** |
+
+Per-directory survivor breakdown:
+
+| Directory | Files |
+|---|---|
+| (root) | 15 |
+| `tests/` | 15 |
+| `orchestrator/` | 14 |
+| `integration/` | 7 |
+| `docs/` | 4 |
+| **Total** | **55** |
+
+Comparison with §1 estimates:
+
+- §1 estimated: 56 surviving files (53 KEEP + 3 DEFER → CUT) +
+  whatever new files §3–§6 added. Actual: 55 surviving (53 KEEP −
+  1 reclassified `test_provenance.py` per §1 deviation #1) + 2
+  new (`docs/cut_list.md`, `integration/data/hello.txt`) = 55 ✓.
+- §1 estimated total text-line shrinkage: ≈ 47,224 lines (sum of
+  `wc -l` over CUT + DEFER files at PLAN-author commit, including
+  ≈ 460 lines for the §5 `eval.py` surgery). Actual deletion-only:
+  46,306 lines (≈ 1.9% under estimate). Net (deletions −
+  insertions): 44,989 lines (≈ 4.7% under, after subtracting the
+  insertions from `docs/cut_list.md` ~615 lines + PLAN.md Results
+  ~700 lines + minor surgery insertions).
+- Both views consistent with §1's expectation that estimate would
+  be approximate; final figure within 5% across 47k lines.
+
+**Modules collapsed.** Pre-prune top-level Python packages:
+`architect/`, `orchestrator/`, `uas/`, `integration/`. Post-prune:
+`orchestrator/`, `integration/` only. The `architect/` and `uas/`
+packages cease to exist; `orchestrator/` shed 4 legacy modules
+(main, llm_client, parser, claude_config) and gained 0 (Phase 3
+deliverables stayed unchanged through §3–§6); `integration/` shed
+3 (llm_judge, test_project_quality, quick_test.sh) and gained 1
+(`data/hello.txt` fixture).
+
+**Acceptance check.**
+
+- ✅ Full pytest suite green (403 passed, 1 deselected by marker).
+- ✅ `./uas-eval` exits cleanly on hello-file (exit 0, both
+  deterministic checks PASS, well-formed JSONL row with
+  `config_hash: "unavailable"` confirming the §2-predicted
+  fallback).
+- ✅ `./uas-orchestrate start synthetic-multistep
+  --simulate-rate-status allowed` exits cleanly with all four
+  state artefacts populated (3/3 subtasks done, $0.1110 spend).
+  Bonus: pause + resume cycle also intact ($0.1223 spend on
+  the resume-driven completion).
+- ✅ Shrinkage delta recorded above with multiple views.
+
+**Regression note.** The IS_SANDBOX=1 worker fix is the only
+non-PLAN-anticipated edit in §7. cut_list.md's §6 step 7
+explicitly anticipated this transfer ("orchestrator workers set
+these themselves") but the §6 commit completed only the
+Containerfile half of the move; the worker.py half landed here.
+Logged as a deviation; substrate.md component 1 still describes
+the post-prune image accurately.
 
 ## Section 8 — README rewrite + cut-bucket notes
 

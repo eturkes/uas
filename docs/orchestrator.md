@@ -94,7 +94,8 @@ Phase 3 must avoid depending on).
     ├── task_events.jsonl    # append-only timeline of decisions (§6, §7)
     ├── rate_limits.jsonl    # one row per worker rate_limit_event (§3)
     ├── buffer.jsonl         # one row per worker terminal result (§4)
-    └── policy.toml          # optional per-task policy override (§5)
+    ├── policy.toml          # optional per-task policy override (§5)
+    └── resume_summary.md    # human-readable digest, rewritten per CLI invocation (Phase 5 §4)
 
 The per-task workspace itself lives at
 `<repo>/integration/workspace/<task_id>/` per substrate doc §5,

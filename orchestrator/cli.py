@@ -29,6 +29,7 @@ import time
 from orchestrator import buffer_ledger as buffer_ledger_mod
 from orchestrator import policy as policy_mod
 from orchestrator import rate_ledger as rate_ledger_mod
+from orchestrator import resume_summary as resume_summary_mod
 from orchestrator import task as task_mod
 from orchestrator import worker as worker_mod
 from orchestrator import workspace as workspace_mod
@@ -367,6 +368,20 @@ def _run_loop(
         return
 
 
+def _emit_resume_summary(task: Task, state_root: str) -> None:
+    """Write ``resume_summary.md`` for ``task`` under ``state_root``.
+
+    Phase 5 §4 attach point: every CLI subcommand calls this once
+    after the loop returns / the decision is recorded so the
+    on-disk digest always reflects the most recent invocation's
+    wrap-up. The writer is a thin shim around
+    ``resume_summary.write_resume_summary``; production callers
+    pass no buffer-ledger override (the writer instantiates one
+    bound to the same ``state_root``).
+    """
+    resume_summary_mod.write_resume_summary(task, state_root=state_root)
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Start a fresh task or route to ``cmd_resume`` if a log exists.
 
@@ -374,10 +389,11 @@ def cmd_start(args: argparse.Namespace) -> int:
     fresh task loads the case TOML at
     ``<cases_dir>/<task_id>.toml``, seeds the optional policy
     override from ``<cases_dir>/<task_id>-policy.toml``, sets up the
-    per-task workspace, runs the §8 main loop, and prints a final
-    summary. ``--simulate-rate-status`` is forwarded into the loop
-    so the §8 integration test can drive the policy machine's
-    transitions deterministically.
+    per-task workspace, runs the §8 main loop, prints a final
+    summary, and writes the §4 ``resume_summary.md`` digest.
+    ``--simulate-rate-status`` is forwarded into the loop so the §8
+    integration test can drive the policy machine's transitions
+    deterministically.
     """
     state_root, cases_dir, workspaces_dir = _resolve_paths(args)
     events_path = os.path.join(state_root, args.task, "task_events.jsonl")
@@ -399,6 +415,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         simulate=getattr(args, "simulate_rate_status", None),
     )
     _print_summary(task)
+    _emit_resume_summary(task, state_root)
     return 0
 
 
@@ -408,9 +425,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
     Replays ``task_events.jsonl`` (resetting any ``in_flight``
     subtask back to ``pending`` and writing a ``task_resume``
     decision per §7), ensures the workspace exists (resume-safe per
-    substrate doc §5), then runs the §8 main loop against the
-    recovered state. ``--simulate-rate-status`` is forwarded into
-    the loop the same way ``cmd_start`` does.
+    substrate doc §5), runs the §8 main loop against the recovered
+    state, and writes the §4 ``resume_summary.md`` digest.
+    ``--simulate-rate-status`` is forwarded into the loop the same
+    way ``cmd_start`` does.
     """
     state_root, _cases_dir, workspaces_dir = _resolve_paths(args)
     task = task_mod.load_task(args.task, state_root=state_root)
@@ -424,6 +442,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         simulate=getattr(args, "simulate_rate_status", None),
     )
     _print_summary(task)
+    _emit_resume_summary(task, state_root)
     return 0
 
 
@@ -434,12 +453,15 @@ def cmd_status(args: argparse.Namespace) -> int:
     ``mark_resume=False`` so the in-flight reset and the
     ``task_resume`` decision-write are both skipped. Lets the
     operator inspect a paused task's state without nudging the log.
+    The §4 ``resume_summary.md`` digest is still rewritten so a
+    status check refreshes the on-disk file's ``Generated`` line.
     """
     state_root, _cases_dir, _workspaces_dir = _resolve_paths(args)
     task = task_mod.load_task(
         args.task, state_root=state_root, mark_resume=False,
     )
     _print_summary(task)
+    _emit_resume_summary(task, state_root)
     return 0
 
 
@@ -453,7 +475,8 @@ def cmd_pause(args: argparse.Namespace) -> int:
     when present, is recorded in the decision note for traceability
     only (the simulated state never leaks into the rate ledger).
     Loads the task with ``mark_resume=False`` so the pause itself
-    does not also write a ``task_resume`` row.
+    does not also write a ``task_resume`` row, then writes the §4
+    ``resume_summary.md`` digest reflecting the just-recorded pause.
     """
     state_root, _cases_dir, workspaces_dir = _resolve_paths(args)
     task = task_mod.load_task(
@@ -469,6 +492,7 @@ def cmd_pause(args: argparse.Namespace) -> int:
         note = "manual pause; current window drains naturally"
     task.record_decision("policy_pause", note)
     _print_summary(task)
+    _emit_resume_summary(task, state_root)
     return 0
 
 
@@ -480,7 +504,8 @@ def cmd_halt(args: argparse.Namespace) -> int:
     requires explicit operator intervention — the orchestrator
     will run the loop again on resume because halt is not a
     persistent gate, but the recorded decision flags the run for
-    review.
+    review. The §4 ``resume_summary.md`` digest is rewritten so
+    the on-disk file reflects the halt verdict and its rationale.
     """
     state_root, _cases_dir, workspaces_dir = _resolve_paths(args)
     task = task_mod.load_task(
@@ -496,6 +521,7 @@ def cmd_halt(args: argparse.Namespace) -> int:
         note = "manual halt; resume requires explicit operator intervention"
     task.record_decision("policy_halt", note)
     _print_summary(task)
+    _emit_resume_summary(task, state_root)
     return 0
 
 

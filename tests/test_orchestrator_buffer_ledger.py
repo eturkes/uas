@@ -677,6 +677,95 @@ class TestTotalSpentSince:
 
 
 # ---------------------------------------------------------------------------
+# total_spent_reported_since() (Phase 5 §4)
+# ---------------------------------------------------------------------------
+
+class TestTotalSpentReportedSince:
+    """Mirror of TestTotalSpentSince keyed on claude_reported_cost_usd."""
+
+    def _seed(self, ledger, task_id, rows):
+        """Append rows with explicit timestamps + claude-reported costs."""
+        for ts, cost in rows:
+            ledger.record(
+                make_result(input_tokens=0, output_tokens=0,
+                            total_cost_usd=cost),
+                run_metadata=make_metadata(timestamp_utc=ts),
+                task_id=task_id, subtask_id=ts,
+            )
+
+    def test_missing_file_returns_zero(self, ledger):
+        assert ledger.total_spent_reported_since(
+            "nope", since_iso="2026-01-01T00:00:00+00:00",
+        ) == 0.0
+
+    def test_includes_only_rows_at_or_after_since(self, ledger):
+        self._seed(ledger, "t1", [
+            ("2026-04-01T00:00:00+00:00", 1.00),
+            ("2026-04-15T00:00:00+00:00", 2.00),
+            ("2026-05-01T00:00:00+00:00", 4.00),
+            ("2026-05-15T00:00:00+00:00", 8.00),
+        ])
+        assert ledger.total_spent_reported_since(
+            "t1", since_iso="2026-05-01T00:00:00+00:00",
+        ) == pytest.approx(4.00 + 8.00)
+
+    def test_equality_at_boundary_is_included(self, ledger):
+        self._seed(ledger, "t1", [
+            ("2026-05-01T00:00:00+00:00", 3.00),
+        ])
+        assert ledger.total_spent_reported_since(
+            "t1", since_iso="2026-05-01T00:00:00+00:00",
+        ) == pytest.approx(3.00)
+
+    def test_all_rows_before_since_returns_zero(self, ledger):
+        self._seed(ledger, "t1", [
+            ("2026-04-01T00:00:00+00:00", 1.00),
+        ])
+        assert ledger.total_spent_reported_since(
+            "t1", since_iso="2026-05-01T00:00:00+00:00",
+        ) == 0.0
+
+    def test_skips_rows_without_reported_cost(self, ledger, tmp_path):
+        path = os.path.join(str(tmp_path), "t1", "buffer.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "event": "buffer",
+                "claude_reported_cost_usd": 5.00,
+                "timestamp_utc": "2026-05-01T00:00:00+00:00",
+            }) + "\n")
+            fh.write(json.dumps({
+                "event": "buffer",
+                "timestamp_utc": "2026-05-01T01:00:00+00:00",
+            }) + "\n")
+            fh.write(json.dumps({
+                "event": "buffer",
+                "claude_reported_cost_usd": None,
+                "timestamp_utc": "2026-05-01T02:00:00+00:00",
+            }) + "\n")
+        assert ledger.total_spent_reported_since(
+            "t1", since_iso="2026-05-01T00:00:00+00:00",
+        ) == pytest.approx(5.00)
+
+    def test_skips_rows_without_timestamp(self, ledger, tmp_path):
+        path = os.path.join(str(tmp_path), "t1", "buffer.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "event": "buffer",
+                "claude_reported_cost_usd": 5.00,
+                "timestamp_utc": "2026-05-01T00:00:00+00:00",
+            }) + "\n")
+            fh.write(json.dumps({
+                "event": "buffer",
+                "claude_reported_cost_usd": 10.00,
+            }) + "\n")
+        assert ledger.total_spent_reported_since(
+            "t1", since_iso="2026-04-01T00:00:00+00:00",
+        ) == pytest.approx(5.00)
+
+
+# ---------------------------------------------------------------------------
 # Default state root
 # ---------------------------------------------------------------------------
 

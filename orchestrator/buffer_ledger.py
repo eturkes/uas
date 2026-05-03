@@ -201,3 +201,28 @@ class BufferLedger:
             if isinstance(cost, (int, float)):
                 total += cost
         return total
+
+    def total_spent_reported_since(
+        self, task_id: str, *, since_iso: str,
+    ) -> float:
+        """Sum of ``claude_reported_cost_usd`` for rows ``timestamp_utc >= since_iso``.
+
+        Mirror of ``total_spent_since`` keyed on Claude's reported
+        figure rather than the locally-priced one. Phase 5 §4 uses
+        this to compute the "spend this invocation" line of the
+        resume summary, anchored to the timestamp of the most-recent
+        ``task_resume`` / ``task_create`` decision so the digest
+        scopes spend to the current invocation rather than the
+        cumulative total. Rows missing or with non-numeric
+        ``claude_reported_cost_usd`` contribute zero, matching
+        ``total_spent_reported``'s posture.
+        """
+        total = 0.0
+        for row in self._iter_rows(task_id):
+            ts = row.get("timestamp_utc")
+            if not isinstance(ts, str) or ts < since_iso:
+                continue
+            cost = row.get("claude_reported_cost_usd")
+            if isinstance(cost, (int, float)):
+                total += cost
+        return total

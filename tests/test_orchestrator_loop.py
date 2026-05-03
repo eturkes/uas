@@ -1020,3 +1020,146 @@ class TestRoundTrip:
         )
         statuses = {s.subtask_id: s.status for s in loaded.subtasks}
         assert statuses == {"s1": "done", "s2": "done"}
+
+        # Phase 5 §4 acceptance: resume_summary.md written during the
+        # cycle. The most recent CLI subcommand was cmd_resume; its
+        # post-loop call to write_resume_summary leaves a digest on
+        # disk reflecting the final state.
+        summary_path = os.path.join(
+            state_root, "t1", "resume_summary.md",
+        )
+        assert os.path.isfile(summary_path)
+        with open(summary_path, "r", encoding="utf-8") as fh:
+            digest = fh.read()
+        assert "# Resume summary — `t1`" in digest
+        assert "Total: 2 (0 pending, 0 in-flight, 2 done, 0 failed)" in digest
+
+
+# ---------------------------------------------------------------------------
+# Resume summary integration (Phase 5 §4)
+# ---------------------------------------------------------------------------
+
+
+class TestResumeSummaryWiring:
+    """Each cmd_* subcommand must rewrite ``resume_summary.md`` after
+    its decision/loop work completes. These tests verify the attach
+    points without re-asserting the digest's content (covered in
+    ``tests/test_orchestrator_resume_summary.py``).
+    """
+
+    def _summary_path(self, state_root: str) -> str:
+        return os.path.join(state_root, "t1", "resume_summary.md")
+
+    def _seed_case(self, cases_dir):
+        path = os.path.join(cases_dir, "t1.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_FULL_TOML)
+
+    def test_cmd_start_writes_summary(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        self._seed_case(cases_dir)
+        args = _make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        )
+        cli_mod.cmd_start(args)
+        assert os.path.isfile(self._summary_path(state_root))
+
+    def test_cmd_resume_writes_summary(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        self._seed_case(cases_dir)
+        # Bootstrap the log via cmd_start first (cmd_resume requires it).
+        cli_mod.cmd_start(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+        # Remove the start-time summary so we can prove cmd_resume rewrites it.
+        os.remove(self._summary_path(state_root))
+        cli_mod.cmd_resume(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+        ))
+        assert os.path.isfile(self._summary_path(state_root))
+
+    def test_cmd_status_writes_summary(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        self._seed_case(cases_dir)
+        cli_mod.cmd_start(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+        os.remove(self._summary_path(state_root))
+        cli_mod.cmd_status(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+        ))
+        assert os.path.isfile(self._summary_path(state_root))
+
+    def test_cmd_pause_writes_summary(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        self._seed_case(cases_dir)
+        cli_mod.cmd_start(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+        os.remove(self._summary_path(state_root))
+        cli_mod.cmd_pause(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+        ))
+        path = self._summary_path(state_root)
+        assert os.path.isfile(path)
+        with open(path, "r", encoding="utf-8") as fh:
+            body = fh.read()
+        # The just-recorded pause should drive the suggestion.
+        assert "Wait for the 5-hour window" in body
+
+    def test_cmd_halt_writes_summary(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        self._seed_case(cases_dir)
+        cli_mod.cmd_start(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+        os.remove(self._summary_path(state_root))
+        cli_mod.cmd_halt(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+        ))
+        path = self._summary_path(state_root)
+        assert os.path.isfile(path)
+        with open(path, "r", encoding="utf-8") as fh:
+            body = fh.read()
+        assert "Hard-stop reached" in body
+
+    def test_summary_rewritten_on_each_invocation(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        """Same path; second invocation overwrites the first."""
+        self._seed_case(cases_dir)
+        cli_mod.cmd_start(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+        path = self._summary_path(state_root)
+        first_mtime = os.path.getmtime(path)
+        # Force a new mtime by sleeping briefly.
+        import time
+        time.sleep(0.01)
+        cli_mod.cmd_status(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+        ))
+        second_mtime = os.path.getmtime(path)
+        assert second_mtime > first_mtime

@@ -156,7 +156,194 @@ project owner has named a concrete task.
   user's task decision verbatim (so §2–§7 can refer back to
   the explicit pick).
 
-**Status:** pending
+**Status:** completed
+
+### Results
+
+**Steps 1–4 (audit + write-up).** Done. `docs/phase5_scope.md`
+written; covers the four-deliverable gap analysis (steps 1),
+the substrate-transition catalog (step 2), the cut_bucket
+re-introduction gate audit (step 3), and the candidate
+enumeration with rough scope / timeline / budget per
+candidate (step 4 — 8 candidates A–H sketched). Audit-only;
+no code changes.
+
+**Headline findings to carry into §2–§7.**
+
+1. All four user-facing deliverables are net-new code or
+   clean extensions of Phase 3 §5/§6 infrastructure. None
+   require re-introducing pre-prune mechanisms; the
+   `docs/cut_bucket.md` gate clears trivially. The audit
+   doc enumerates the tempting re-introductions §3–§5 step
+   authoring must NOT drift toward.
+2. Regression baseline for §3–§5 is `pytest 403 passed / 1
+   deselected` (Phase 4 §7 close) plus the
+   `synthetic-multistep` start + pause+resume cycle being
+   green. §6 / §7 don't run pytest; the real-task gate is
+   project-owner judgement on the multi-day run.
+3. Substrate transitions worth flagging at §6 pre-flight:
+   `IS_SANDBOX=1` worker-side injection (resolved Phase 4
+   §7); `_parse_iso8601` returns `None` for numeric
+   `resetsAt` (matters only if §1 task expects unattended
+   auto-resume); `[oauth] invalid_grant` warning expected on
+   first spawn (recovers transparently);
+   `config_hash="unavailable"` cosmetic only;
+   percentage-cap question still open but doesn't touch the
+   `claude --print` headless path the orchestrator uses.
+4. Newly surfaced (out of §1 scope to act on): `Containerfile:36`
+   has a residual `COPY orchestrator/ ./orchestrator/` with no
+   in-container consumer (architect-era); pre-prune scratch at
+   repo root (`check_environment.py`, `run_test_verification.py`,
+   `test_goal_*.py`, `verify_test_goal.py`,
+   `test_verification_result.txt`, `test_goal_output.txt`,
+   ~520 lines + 2 fixture txts) escaped Phase 4 §6 cleanup;
+   empty `architect/` + `uas/` package dirs hold only stale
+   `__pycache__`. All flagged in `docs/phase5_scope.md` §
+   "Audit findings outside the four-deliverable scope" for
+   project-owner decision (clean up at §1.5 mini-step / §6
+   pre-flight / future housekeeping phase).
+
+**Step 5 (user-input gate).** Closed. Project owner deferred
+the pick to the assistant ("decide on a task yourself,
+preferably something token heavy") in the same session as the
+§1 audit. Pick + ask answers recorded verbatim below.
+
+#### Real-task pick (verbatim assistant decision)
+
+**Task description.** Comprehensive survey of LLM-based
+autonomous coding agents (2023–2026): architecture patterns,
+reliability mechanisms, evaluation methodologies, and open
+problems. The orchestrator dispatches one subtask per topic
+to a `claude --print` worker; each worker produces a
+detailed Markdown section drawing on the model's training-data
+knowledge of published work. A final synthesis subtask
+consumes all prior section outputs and produces a single
+consolidated `survey.md` long-form report. The task is
+deliberately token-heavy: each subtask is a 5–10k-word
+deep-dive, the synthesis subtask consumes the full prior
+output corpus, and there are ~22 subtasks so total token
+volume is in the hundreds of thousands.
+
+This is candidate G in `docs/phase5_scope.md` step 4
+(literature review / synthesis), adapted to a topic with
+direct relevance to the project: surveying the design space
+UAS itself sits in. The output has post-task value as
+project context for Phase 6+ direction-setting; the
+research-survey shape is also the cleanest token-heavy
+candidate that needs no external data, no internet access,
+no destructive code mutations, and no per-subtask domain
+setup.
+
+**Decomposition (~22 subtasks across 5 stages with one
+dependency edge between stage 4 and stage 5).**
+
+- *Stage 1 — Architecture patterns (8 subtasks):* one
+  per pattern. ReAct, Reflexion, Tree-of-Thought, multi-
+  agent systems, plan-and-execute, RAG-augmented coding
+  agents, code-specific agents (e.g., SWE-agent), and
+  autonomous coding workers (e.g., Devin-style).
+- *Stage 2 — Reliability mechanisms (6 subtasks):*
+  verification approaches, retry/backoff policies,
+  checkpointing + rollback, validation cascades,
+  multi-plan voting, and budget-aware scheduling.
+- *Stage 3 — Evaluation methodologies (4 subtasks):*
+  benchmark design, LLM-as-judge, deterministic /
+  automated grading, human-in-the-loop evaluation.
+- *Stage 4 — Open problems (3 subtasks):* long-horizon
+  coordination, scaffold-vs-model trade-off, cost /
+  budget management at scale.
+- *Stage 5 — Final synthesis (1 subtask, depends on
+  stages 1–4):* consume all prior outputs, produce
+  `survey.md` (≥10k words, ≥30 sections, with
+  cross-references back to each stage 1–4 contribution).
+
+**Expected timeline.** 1–3 days wallclock. Most of the
+time is window-boundary waiting; pure compute is on the
+order of 60–120 minutes total.
+
+**Expected number of 5h window boundaries.** 1–3.
+22 subtasks at average ~3–5 minutes each = ~66–110
+minutes of compute, well above one 5h window's
+sustained-spend ceiling under typical Claude Max usage
+patterns; expect at least one soft-cap pause; the
+synthesis subtask alone is large enough to fall on the
+other side of a window in some session shapes.
+
+**Rough budget expectation.** $20–$80 paid-buffer (well
+under the $200 default `hard_stop_usd`). Each subtask
+is order-of-magnitude $1–$3 on Haiku 4.5 (the
+`claude --print` default model); synthesis subtask is
+$5–$10 because it consumes all prior outputs as input.
+
+**Checkpoint set.** Zero in the real-task run. The
+project owner is unavailable for mid-task input; gating
+the run on user acks would block progress. The §5
+checkpoint primitive is still implemented and validated
+via the synthetic-checkpoint fixture per PLAN §5
+acceptance criteria (which calls for a fixture cycle
+specifically, not a real-task one). Phase 6+ may
+re-evaluate adding checkpoints to the real-task shape
+after §7's findings.
+
+**Done-enough criterion.** All of:
+
+- `survey.md` produced in `<workspace>/synthesis/`,
+  ≥10k words, with sections corresponding to each of
+  stages 1–4 plus an introduction + conclusion.
+- ≥18 of 22 subtasks completed (≥80%); fewer than 5
+  failed via `worker_fail`.
+- Total spend stayed below $200 hard-stop (no
+  `policy_halt` decision in the timeline).
+- At least one window-boundary transition successfully
+  traversed (`policy_pause` decision present + a later
+  `task_resume` decision after operator re-invocation).
+
+If the run satisfies all four, §6 is "passed" and §7
+captures findings on the experience. Partial-pass
+outcomes (e.g., synthesis produced but several stage
+subtasks failed) get written up as "partially worked"
+in `docs/phase5_findings.md` per §7 acceptance.
+
+#### Audit-driven ask answers (assistant decisions)
+
+a. **Out-of-scope cleanup (pre-prune scratch, empty
+   package dirs, Containerfile residual `COPY`).**
+   **Defer to §6 pre-flight checklist.** The residuals
+   are functionally inert — they don't affect the
+   orchestrator's behaviour or the real-task run — so
+   spending §1.5 cycles on them adds no Phase 5 value.
+   At §6 pre-flight a single batch cleanup commit can
+   run before `start` if the project owner wants a
+   clean image build for the real-task run; otherwise
+   they wait until a future housekeeping phase. Logged
+   in `phase5_scope.md` § "Audit findings outside the
+   four-deliverable scope" so they don't get lost.
+
+b. **Unattended auto-resume across window boundaries.**
+   **Yes, the §1 task expects unattended auto-resume.**
+   The project owner explicitly stated they're
+   unavailable for input; running 22 token-heavy
+   subtasks with manual re-invocation after every 5h
+   pause defeats the validation. This makes
+   `_parse_iso8601` numeric-handling a real gap §3 must
+   close. §3 step authoring should include: detect the
+   numeric `resetsAt` shape, parse epoch ints
+   correctly, and add a polling-loop fallback in the
+   orchestrator main so an unparseable timestamp
+   doesn't strand the task indefinitely. The
+   substrate-doc claim about ISO-8601 needs amending
+   in the same change.
+
+c. **Match against candidates A–H.** The pick is an
+   adaptation of candidate G (literature review /
+   synthesis), with topic = "LLM-based autonomous
+   coding agents (2023–2026)" — chosen for direct
+   relevance to UAS's own design space and for the
+   "no external data needed" property that keeps the
+   subtask shape simple. Verifiability is medium per
+   the candidate sketch — spot-check claims against
+   published literature; project owner's domain
+   familiarity helps post-run assessment.
 
 ## Section 2 — Long-horizon task definition spec
 

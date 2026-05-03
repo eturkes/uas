@@ -1,0 +1,49 @@
+# Phase 5 §5 — synthetic three-step task with one declarative
+# human-checkpoint between step-1 and step-2.
+#
+# Mirrors orchestrator/cases/synthetic-multistep.toml in shape so
+# the §5 loop tests can reuse the same stub-worker fixtures. The
+# checkpoint declared below positions a pause point before step-2
+# spawns; after step-1 completes successfully, the loop's
+# checkpoint gate records a `checkpoint_pause` decision and exits
+# instead of dispatching step-2. Resume requires explicit
+# acknowledgement via:
+#
+#   ./uas-orchestrate resume synthetic-checkpoint \
+#       --ack-checkpoint review-after-step-1
+#
+# Plain `resume` (without --ack-checkpoint) re-enters the loop and
+# pauses at the same checkpoint position by design — checkpoints
+# cannot be silently bypassed. After acknowledgement, step-2 and
+# step-3 spawn in sequence to drain the queue.
+#
+# This fixture validates the §5 primitive but is NOT used in §6's
+# real-task run (agent-survey-2026 declares zero checkpoints per
+# §1's "Zero in the real-task run" project-owner decision).
+
+task_id = "synthetic-checkpoint"
+goal = "Synthetic three-step task with one declarative human-checkpoint."
+
+[[subtasks]]
+subtask_id = "step-1"
+prompt = """
+Write a single line containing exactly the word "step-1" to a file named log.txt in the current working directory. Then reply with only the literal word: done
+"""
+
+[[subtasks]]
+subtask_id = "step-2"
+prompt = """
+Append a new line containing exactly the word "step-2" to log.txt in the current working directory so the file ends with that line. Then reply with only the literal word: done
+"""
+
+[[subtasks]]
+subtask_id = "step-3"
+prompt = """
+Read log.txt in the current working directory and reply with exactly two lines: the first line is the file's first line, the second line is the file's last line. Reply with nothing else.
+"""
+
+[[checkpoints]]
+checkpoint_id = "review-after-step-1"
+before_subtask = "step-2"
+description = "Review step-1's log entry before step-2 appends to it."
+kind = "review-commit"

@@ -945,7 +945,144 @@ behaviour:
   not invent checkpoint criteria; the §2 task spec declares
   them explicitly.
 
-**Steps.** Authored after §1 / §2 close.
+**Steps.** Authored after §1 / §2 close (both have closed; §5
+implementation traces back to the §1 acceptance "fixture cycle
+specifically, not a real-task one" note — the primitive must
+exist and be validated, but is *not* exercised in §6's
+agent-survey-2026 run per §1's "Zero in the real-task run"
+checkpoint set).
+
+1. **Schema additions in `orchestrator/task.py` (additive,
+   backward-compatible).**
+   - New `Checkpoint` dataclass with fields `checkpoint_id` (str,
+     required), `before_subtask` (str, required), `description`
+     (str, default `""`), `kind` (str, default `""`). Position
+     selector is `before_subtask` only — stage-level positioning
+     is out of scope until §6+ surfaces a real need.
+   - New `_validate_checkpoints` helper mirroring
+     `_validate_stages`: rejects non-list / non-table entries,
+     enforces unique `checkpoint_id`, enforces non-empty
+     `before_subtask`, cross-references each `before_subtask`
+     against a `seen_subtask_ids` set passed in by `from_toml`.
+   - `Task.checkpoints: list[Checkpoint] = field(default_factory=list)`
+     and `Task.acked_checkpoint_ids: set[str] = field(default_factory=set)`
+     fields added before `state_root` so existing kwargs callers
+     remain compatible.
+   - Two new decision kinds (`checkpoint_pause`, `checkpoint_ack`)
+     added to `_VALID_DECISION_KINDS` and the `DecisionKind`
+     Literal. ORCHESTRATOR_VERSION stays at `"phase5"` — both
+     §3 and §5 additions are additive on top of the same
+     schema marker; no per-section bump.
+   - `Task.from_toml` restructured: stage validation → subtask
+     pre-pass collecting `seen_subtask_ids` + structural
+     validation → checkpoint validation against that set →
+     write `task_create` event carrying `stages` + `checkpoints`
+     payload → enqueue each subtask. Order matters because the
+     `task_create` event must capture both stages and checkpoints
+     in one bootstrap row so `load_task` reconstructs both
+     without a second pass.
+   - `Task.record_decision` extended with optional kwarg
+     `checkpoint_id: str | None = None`. Required for
+     `checkpoint_pause` / `checkpoint_ack`; rejected for other
+     kinds. Persisted in event payload when set; updates
+     `acked_checkpoint_ids` set on `checkpoint_ack`.
+   - `Task.pending_checkpoint(subtask_id) -> Checkpoint | None`
+     returns the first declared checkpoint with
+     `before_subtask == subtask_id` not in `acked_checkpoint_ids`.
+   - `load_task` extended: forgiving reader for the `checkpoints`
+     list in the `task_create` row (mirroring the `stages`
+     reader); on each replayed `decision` row with
+     `kind == "checkpoint_ack"` and a string `checkpoint_id`
+     payload, add the id to `task.acked_checkpoint_ids`. Pre-§5
+     logs lack the field; replay leaves the set empty.
+
+2. **Loop wiring in `orchestrator/cli.py:_run_loop`.**
+   Insert one new gate between `_find_next_pending` and the
+   spawn block: if `task.pending_checkpoint(next_st.subtask_id)`
+   returns a `Checkpoint`, call
+   `task.record_decision("checkpoint_pause", note,
+   checkpoint_id=ckpt.checkpoint_id)` with a note carrying the
+   id + before_subtask + (optional) description, then `return`.
+   The existing `pause_until` / `wrap_up` / `halt` /
+   auto-resume gates are unchanged.
+
+3. **CLI: `--ack-checkpoint <id>` flag on `resume`.**
+   - New `_add_ack_checkpoint_flag(parser)` helper attached to
+     the `resume` subparser only. Other subcommands (`start`,
+     `status`, `pause`, `halt`) do not take the flag.
+   - `cmd_resume`: after `load_task`, if `args.ack_checkpoint`
+     is set, validate it (must reference a declared checkpoint;
+     must not already be acked); on validation failure print to
+     stderr and return non-zero exit. On success, record
+     `checkpoint_ack` decision with `checkpoint_id` payload
+     before entering `_run_loop` so the loop's checkpoint gate
+     no longer pauses at that position.
+   - Plain `resume` without the flag: unchanged. Any pending
+     checkpoint will re-pause the loop at its position; the
+     digest's "Suggested next action" line tells the operator
+     how to clear it.
+
+4. **Surface the pending checkpoint in user-facing output.**
+   - `_print_summary`: when any checkpoint is pending, append a
+     "Pending checkpoint: <id> (before <subtask>) — <description>"
+     line. The line is omitted entirely on tasks without
+     pending checkpoints so synthetic-multistep output is
+     unchanged.
+   - `orchestrator/resume_summary.py`: insert a "## Pending
+     checkpoints" block after the subtasks block when any are
+     pending; add a `checkpoint_pause` branch in
+     `_suggest_next_action` returning the exact ack command
+     (`./uas-orchestrate resume <task> --ack-checkpoint <id>`).
+
+5. **Fixture: `orchestrator/cases/synthetic-checkpoint.toml`.**
+   Three trivial subtasks (`step-1` / `step-2` / `step-3`) plus
+   one `[[checkpoints]]` entry positioned
+   `before_subtask = "step-2"` with a non-empty description and
+   a `kind = "review-commit"` annotation. Mirrors
+   `synthetic-multistep.toml` in shape so the loop tests can
+   reuse the same stub-worker fixtures.
+
+6. **Tests.** Roughly 35–45 new tests across:
+   - `tests/test_orchestrator_task.py`: `Checkpoint` dataclass
+     defaults, TOML validation (uniqueness, missing /
+     non-string `checkpoint_id`, missing /
+     unknown-subtask `before_subtask`, non-list table, non-table
+     entry, non-string optional fields), `Task.from_toml`
+     happy-path with a checkpoint, `record_decision` kwarg
+     validation (required for checkpoint_*, rejected
+     elsewhere), `pending_checkpoint` (pending → ack → no
+     longer pending; multiple checkpoints at same position fire
+     in declaration order; non-matching subtask_id returns
+     None).
+   - `tests/test_orchestrator_resume.py`: replay round-trip
+     reconstructing `task.checkpoints` from `task_create` row;
+     `checkpoint_ack` decision replay populates
+     `acked_checkpoint_ids`; pre-§5 log (no `checkpoints` field)
+     replays cleanly with empty `checkpoints` / set; malformed
+     `checkpoints` payload tolerated by the forgiving reader.
+   - `tests/test_orchestrator_loop.py`: full `synthetic-checkpoint`
+     cycle (start → first iteration spawns step-1, second
+     iteration pauses at checkpoint → status reports pending
+     checkpoint → resume w/o flag re-pauses → resume
+     `--ack-checkpoint review-after-step-1` drains the queue);
+     `--ack-checkpoint <unknown-id>` errors; `--ack-checkpoint
+     <already-acked>` errors; tasks without `[[checkpoints]]`
+     behave exactly as before (synthetic-multistep regression
+     gate via existing `TestRunLoopPolicy`).
+   - `tests/test_orchestrator_resume_summary.py`: pending-
+     checkpoint section renders with id + subtask + description;
+     omitted on no-pending-checkpoint shapes; suggested-next-
+     action branch returns the ack command.
+
+7. **Regression + Results.** Full pytest must stay green
+   (current baseline 518/1 deselected from §4 close;
+   anticipated 553–563/1 after §5). `synthetic-multistep`
+   start + pause + resume cycle stays green (both via the
+   existing test and via a live smoke). `agent-survey-2026`
+   load via `Task.from_toml` continues to work (no
+   `[[checkpoints]]` declared). §5 Results subsection records
+   schema additions, line counts, fixture details, test
+   delta, and any substrate findings.
 
 **Acceptance.**
 
@@ -957,7 +1094,331 @@ behaviour:
 - §5 Results subsection records: checkpoint types
   implemented, fixture details, test coverage.
 
-**Status:** pending
+**Status:** completed
+
+### Results
+
+**§1-driven scope.** §1 Results' "Checkpoint set" decided
+**zero checkpoints in the agent-survey-2026 real-task run**;
+the §5 primitive is built and validated via a synthetic
+fixture per the section's acceptance criteria, with Phase 6+
+re-evaluating real-task application after §7's findings.
+Every §5 schema field traces back to that fixture-validation
+need; the speculative "review-plan / review-commit /
+review-regression" enumeration in PLAN's §5 sketch was
+deliberately *not* baked into the schema as first-class
+types — `Checkpoint.kind` is a free string field that the
+fixture sets to `"review-commit"` for documentation only,
+and the orchestrator's control flow does not consume it.
+
+**Schema additions (TOML-level, all backward-compatible).**
+
+1. Optional top-level `[[checkpoints]]` array. Each entry:
+   - `checkpoint_id` (required, non-empty string, unique
+     within task).
+   - `before_subtask` (required, non-empty string; must
+     reference a declared `[[subtasks]].subtask_id`).
+   - `description` (optional string, default `""`).
+   - `kind` (optional string, default `""`; free-form
+     annotation carried into the persisted log and the
+     resume_summary digest for operator-readable context).
+
+2. New `orchestrator/cases/synthetic-checkpoint.toml`
+   fixture: 3 trivial subtasks (`step-1` / `step-2` /
+   `step-3`) plus 1 `[[checkpoints]]` entry positioned
+   `before_subtask = "step-2"` with
+   `kind = "review-commit"` and a non-empty description.
+   Mirrors `synthetic-multistep` in shape so the §5 loop
+   tests reuse the existing stub-worker fixtures.
+
+**Schema additions (dataclass / persistence layer).**
+
+- `Checkpoint` dataclass added (`task.py`, ~31-line block):
+  `checkpoint_id` / `before_subtask` (str, required),
+  `description` / `kind` (str, default `""`).
+- `Task.checkpoints: list[Checkpoint] = field(default_factory=list)`
+  added between `stages` and `state_root`.
+- `Task.acked_checkpoint_ids: set[str] = field(default_factory=set)`
+  added immediately after `checkpoints`. Maintained by
+  `record_decision` on `checkpoint_ack` and by `load_task`
+  replay; consumed by `pending_checkpoint` for the
+  fast-path skip-if-acked check.
+- `task_create` JSONL event now carries a `checkpoints`
+  payload (records as plain dicts, parsed at replay back
+  into `Checkpoint` instances). Pre-§5 logs lacking the
+  field replay with `Task.checkpoints = []`.
+- `decision` JSONL event for kind ∈ {`checkpoint_pause`,
+  `checkpoint_ack`} now carries a `checkpoint_id` field;
+  pre-§5 rows lacking the field replay as Decision rows
+  without populating `acked_checkpoint_ids` (the §5 logic
+  silently falls through).
+
+**Schema additions (decision kinds + write API).**
+
+- `checkpoint_pause` and `checkpoint_ack` added to
+  `_VALID_DECISION_KINDS` and the `DecisionKind` Literal.
+  `ORCHESTRATOR_VERSION` stays at `"phase5"` because §3
+  already bumped from `"phase3"` to `"phase5"`; both §3 and
+  §5 additions are additive on the same schema marker so
+  per-section version bumps are unnecessary.
+- New `_CHECKPOINT_DECISION_KINDS` tuple as a single-source
+  predicate so call sites can `in` against it without
+  copying the frozenset.
+- `Task.record_decision` extended with kwarg-only
+  `checkpoint_id: str | None = None`. Required for kinds in
+  `_CHECKPOINT_DECISION_KINDS`; rejected (raises
+  `TaskError`) for every other kind. Persisted in the event
+  payload when set; for `checkpoint_ack` the id is also
+  added to the in-memory `acked_checkpoint_ids` set.
+- New `Task.pending_checkpoint(subtask_id) -> Checkpoint | None`
+  method. Returns the first declared checkpoint with
+  `before_subtask == subtask_id` whose `checkpoint_id` is
+  not in `acked_checkpoint_ids`. Tolerant of empty / non-
+  string `subtask_id` (returns `None`) so call sites can
+  pass through the next-pending-subtask lookup without
+  pre-validating.
+
+**Schema additions (validators).**
+
+- New `_validate_checkpoints(raw_checkpoints, path,
+  seen_subtask_ids)` helper mirroring `_validate_stages`.
+  Rejects non-list / non-table entries; enforces non-empty
+  unique `checkpoint_id`, non-empty `before_subtask`
+  cross-referencing `seen_subtask_ids`; type-checks the
+  optional `description` / `kind` fields.
+- `Task.from_toml` restructured: stage validation →
+  subtasks pre-pass (collecting `seen_subtask_ids` plus
+  per-row structural validation, including duplicate-
+  subtask_id detection now surfaced at TOML load time
+  rather than only inside `enqueue_subtask`) → checkpoint
+  validation → bootstrap event written carrying both
+  stages and checkpoints → enqueue subtasks. The pre-pass
+  is the minimal restructure needed for the cross-
+  reference; existing tests (TOML loader path) all
+  continue to pass.
+
+**Schema additions (replay surface).**
+
+- `load_task`'s `task_create` branch extended with a
+  forgiving reader for the `checkpoints` payload, mirroring
+  the §2 stages reader: malformed entries / missing fields
+  / wrong-type optional fields are silently dropped or
+  normalised back to defaults rather than raising.
+- `load_task`'s `decision` branch extended: when
+  `kind == "checkpoint_ack"` and a string `checkpoint_id`
+  is in the payload, the id is added to
+  `task.acked_checkpoint_ids`. Missing / non-string
+  payload tolerated for log corruption resilience.
+
+**Schema additions (CLI surface).**
+
+- New `_add_ack_checkpoint_flag(parser)` helper attached to
+  the `resume` subparser only; `start` / `status` /
+  `pause` / `halt` do not take the flag (the per-subparser
+  wiring leaves their `args.ack_checkpoint` undefined,
+  which is a feature — `cmd_resume`'s `getattr(args,
+  "ack_checkpoint", None)` lookup returns None for them).
+- `cmd_resume` extended: when `args.ack_checkpoint` is
+  set, validates the id (must reference a declared
+  checkpoint; must not already be acked; both validation
+  failures print to stderr, write the resume_summary
+  digest, and return exit code `2` without entering the
+  loop). On validation success, records a `checkpoint_ack`
+  decision before entering `_run_loop` so the loop's
+  checkpoint gate skips the cleared position on the next
+  iteration. Plain `resume` (no flag) is unchanged; any
+  pending checkpoint will re-pause the loop at its
+  declared position so unacknowledged checkpoints cannot
+  be silently bypassed.
+
+**Schema additions (loop surface).**
+
+- `_run_loop` checkpoint gate inserted between
+  `_find_next_pending` and the spawn block: if
+  `task.pending_checkpoint(next_st.subtask_id)` returns a
+  `Checkpoint`, record `checkpoint_pause` (carrying the
+  id, before-subtask, and optional description in the
+  note) and exit. The existing `pause_until` / `wrap_up`
+  / `halt` / auto-resume gates are unchanged.
+
+**Schema additions (status / digest surface).**
+
+- `_print_summary`: when a checkpoint is pending at the
+  next subtask position, append a "Pending checkpoint:
+  `<id>` (before `<subtask>`) — `<description>`" line.
+  Omitted entirely on tasks without pending checkpoints so
+  `synthetic-multistep` output is byte-for-byte unchanged.
+- `orchestrator/resume_summary.py`: new "## Pending
+  checkpoint" block rendered after the "Subtasks" block
+  when the next pending subtask has a pending checkpoint.
+  The block carries the bold checkpoint id, the
+  `before_subtask` link, the optional kind, and the
+  optional description.
+- `_suggest_next_action` extended with two new branches:
+  `checkpoint_pause` returns the exact ack command
+  (`./uas-orchestrate resume <task> --ack-checkpoint
+  <id>`) plus a halt offer for the operator's decision;
+  `checkpoint_ack` returns the post-ack resume command.
+
+**Implementation lines changed.** `git diff --numstat`:
+
+| File | + / − |
+|---|---|
+| `orchestrator/task.py` | +365 / −60 |
+| `orchestrator/cli.py` | +100 / −1 |
+| `orchestrator/resume_summary.py` | +50 / 0 |
+| `orchestrator/cases/synthetic-checkpoint.toml` | new (+49) |
+| `docs/orchestrator.md` | +4 / 0 |
+| `tests/test_orchestrator_task.py` | +496 / −2 |
+| `tests/test_orchestrator_loop.py` | +392 / 0 |
+| `tests/test_orchestrator_resume.py` | +234 / 0 |
+| `tests/test_orchestrator_resume_summary.py` | +200 / −1 |
+
+Net ≈ +1840 / −64 across 9 files (PLAN.md update on top).
+Largest production contributor is `task.py` (the new
+validators, restructured `from_toml`, `record_decision`
+extension, `pending_checkpoint` helper, and `load_task`
+replay extensions); largest test contributor is
+`test_orchestrator_task.py` (the §5 schema validation
+exhaustively covered: 17 + 7 + 10 = 34 tests across three
+new classes, plus 3 module-constants pins for the new
+dataclass).
+
+**New test count delta.** Full pytest baseline rose 518 →
+588 / 1 deselected (+70 new tests, all green; pre-§5
+baseline was Phase 5 §4's 518). Per file:
+
+- `tests/test_orchestrator_task.py`: 102 → 134 (+32):
+  - `TestCheckpointsFromToml` (new class): 16 tests covering
+    happy-path load, persistence in task_create event,
+    optional-field defaults, duplicate id, missing /
+    empty / non-string `checkpoint_id`, missing /
+    unknown / empty `before_subtask`, non-list root,
+    invalid `description` / `kind` types, the §5 fixture
+    loads cleanly, and the duplicate-subtask_id pre-pass.
+  - `TestPendingCheckpoint` (new class): 7 tests covering
+    no-checkpoints null, unacked match, post-ack null,
+    non-matching subtask null, empty / non-string
+    subtask_id null, and multiple-at-same-position
+    declaration order.
+  - `TestRecordDecisionCheckpoint` (new class): 10 tests
+    covering required kwarg for both checkpoint kinds,
+    rejection for other kinds, in-memory set update on
+    ack only, persisted payload field, omitted from
+    non-checkpoint events.
+  - 3 new `TestModuleConstants` tests for `Checkpoint`
+    defaults / full construction and the `Task.checkpoints`
+    / `acked_checkpoint_ids` defaults.
+- `tests/test_orchestrator_loop.py`: 48 → 63 (+15):
+  - `TestRunLoopCheckpoints` (new class): 5 tests covering
+    pause-before-declared-subtask, ack-then-drain, plain-
+    resume re-pauses, no-checkpoint-declared regression
+    (synthetic-multistep behaviour preserved), and the
+    `checkpoint_id` payload persists in the event row.
+  - `TestCmdResumeAckCheckpoint` (new class): 7 tests
+    covering unknown-id error / exit 2, already-acked
+    error / exit 2, ack writes the decision row, ack
+    drains the queue, plain resume does not bypass,
+    argparse plumbing (flag accepted; default None).
+  - `TestRoundTripCheckpoint` (new class): 1 test for
+    the §5-acceptance full cycle (start → checkpoint pause
+    → status → ack-resume → drain), plus
+    `resume_summary.md` content checks at cycle end.
+  - `TestCheckpointPrintSummary` (new class): 2 tests for
+    the new status line (renders when pending; omitted on
+    no-checkpoint tasks).
+- `tests/test_orchestrator_resume.py`: 67 → 77 (+10):
+  - `TestCheckpointsReplay` (new class): 10 tests covering
+    full happy-path replay, pre-§5 backward compat,
+    corrupted-payload tolerance (4 variants), ack decision
+    repopulates the set, pause does not, ack without
+    `checkpoint_id` payload tolerated, end-to-end
+    pause → ack timeline collapses to a clean
+    `pending_checkpoint` null, and the from_toml→load
+    round-trip preserves all fields.
+- `tests/test_orchestrator_resume_summary.py`: 38 → 47 (+9):
+  - `TestRenderCheckpoints` (new class): 6 tests covering
+    section render with all fields, omission when no
+    checkpoints declared, omission when all acked,
+    omission when position does not match, missing
+    optional fields, no-pending-subtasks defensive case.
+  - `TestSuggestNextAction` extension: 3 tests (+) for the
+    `checkpoint_pause` / `checkpoint_ack` branches and the
+    no-pending-subtask defensive fallback.
+
+**Acceptance verification.**
+
+- *"A `synthetic-checkpoint` test fixture demonstrates the
+  full cycle: spawn → checkpoint → status → ack-resume →
+  next spawn."* Verified via
+  `TestRoundTripCheckpoint::test_full_checkpoint_cycle`
+  in `test_orchestrator_loop.py`: cmd_start drives s1 to
+  done and pauses at the checkpoint; cmd_status confirms
+  the pending state without polluting the timeline (the
+  read-only contract from §7 is preserved); cmd_resume
+  with `--ack-checkpoint review-after-step-1` records the
+  ack and drains s2 + s3 to done. Final state: 3/3 done,
+  exactly one `checkpoint_pause` and one `checkpoint_ack`
+  in the timeline, `resume_summary.md` reflects the
+  cleared state.
+- *"`tests/test_orchestrator_task.py` extended with the
+  checkpoint cycle."* Verified — 32 new tests covering
+  TOML validation, `pending_checkpoint` helper, and
+  `record_decision` kwarg behaviour, plus 3 module-
+  constant pins. The §5 fixture also loads cleanly via
+  `test_synthetic_checkpoint_case_loads`.
+- *"§5 Results subsection records: checkpoint types
+  implemented, fixture details, test coverage."* This
+  subsection.
+
+**Regression check.**
+
+- Full `pytest` green: 588 passed / 1 deselected (~7.5s).
+  All 13 surviving test modules stay green under the
+  schema additions.
+- `./uas-orchestrate status synthetic-multistep` (live, on
+  the committed pre-§5 state log under
+  `<repo>/orchestrator/state/synthetic-multistep/`)
+  replays cleanly: 3 done / 0 pending / `$0.1531` total
+  spend / `task_resume` last decision / no
+  "Pending checkpoint" line in either stdout or the
+  rewritten `resume_summary.md`. Backward-compat with
+  pre-§5 logs verified live.
+- `agent-survey-2026.toml` continues to load via
+  `Task.from_toml` (no `[[checkpoints]]` declared) — the
+  Phase 5 §1 real-task TOML is unaffected by the schema
+  addition. Verified via the existing
+  `test_real_task_toml_loads` in `TestStagesFromToml`,
+  which runs under the new schema validators without
+  modification.
+
+**Substrate findings.**
+
+- The existing `task_resume` decision path collides with
+  `--ack-checkpoint` only at the timeline level: a
+  `task_resume` row is written by `load_task`'s
+  end-of-replay sweep before `cmd_resume` runs the
+  `checkpoint_ack` write. The two decisions are recorded
+  in chronological order — `task_resume` then
+  `checkpoint_ack` — matching the user's mental model of
+  "first the operator resumed, then they acked the
+  checkpoint". No interaction with the in-flight reset
+  semantics: an in-flight subtask that was about to spawn
+  step-2 when paused never got to `start_subtask` because
+  the checkpoint gate fires before the spawn block, so
+  there is nothing to re-enqueue from `in_flight`.
+- The `IS_SANDBOX=1` worker-side injection,
+  `_parse_resets_at` polymorphism, OAuth `invalid_grant`
+  first-spawn warning, and the `config_hash="unavailable"`
+  cosmetic field are all unchanged by §5 (none of the
+  worker-spawn / rate-limit / pricing surfaces were
+  touched).
+- The `_print_summary` checkpoint-line is rendered from
+  `pending_checkpoint(next_pending.subtask_id)`, which
+  returns `None` when there are no pending subtasks. So
+  the "all subtasks done" status output is unchanged from
+  pre-§5 — important for the `synthetic-multistep`
+  read-only baseline.
 
 ## Section 6 — Real-task pre-flight + first window run
 

@@ -83,6 +83,10 @@ Phase 3 must avoid depending on).
   status, total spend, last decision) without spawning workers.
 - `resume`  — replay `task_events.jsonl`, re-enqueue any
   `in_flight` subtasks, then continue the orchestrator loop.
+  Phase 5 §5 added `--ack-checkpoint <id>` for clearing one
+  declared `[[checkpoints]]` entry before re-entering the loop;
+  plain `resume` re-pauses at any pending checkpoint position by
+  design.
 - `pause`   — record a `policy_pause` decision and exit cleanly
   so the active 5h or 7d window can drain.
 - `halt`    — record a `policy_halt` decision and stop the

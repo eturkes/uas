@@ -173,6 +173,7 @@ def _make_args(
     cases_dir: str | None = None,
     workspaces_dir: str | None = None,
     simulate_rate_status: str | None = None,
+    ack_checkpoint: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         task=task,
@@ -180,6 +181,7 @@ def _make_args(
         cases_dir=cases_dir,
         workspaces_dir=workspaces_dir,
         simulate_rate_status=simulate_rate_status,
+        ack_checkpoint=ack_checkpoint,
     )
 
 
@@ -1163,3 +1165,393 @@ class TestResumeSummaryWiring:
         ))
         second_mtime = os.path.getmtime(path)
         assert second_mtime > first_mtime
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 §5 — checkpoint primitive
+# ---------------------------------------------------------------------------
+
+
+_CHECKPOINT_TOML = """\
+task_id = "t1"
+goal = "checkpointed"
+
+[[subtasks]]
+subtask_id = "s1"
+prompt = "first"
+
+[[subtasks]]
+subtask_id = "s2"
+prompt = "second"
+
+[[subtasks]]
+subtask_id = "s3"
+prompt = "third"
+
+[[checkpoints]]
+checkpoint_id = "review-after-s1"
+before_subtask = "s2"
+description = "Review s1 output before s2."
+kind = "review-commit"
+"""
+
+
+class TestRunLoopCheckpoints:
+    """Phase 5 §5 — the loop's checkpoint gate pauses before the
+    declared subtask and stays paused until the operator acks."""
+
+    def _seed_case(self, cases_dir):
+        path = os.path.join(cases_dir, "t1.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_CHECKPOINT_TOML)
+        return path
+
+    def _seed_task(self, state_root, cases_dir, workspaces_dir):
+        self._seed_case(cases_dir)
+        return Task.from_toml(
+            os.path.join(cases_dir, "t1.toml"),
+            state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+
+    def test_loop_pauses_before_declared_subtask(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        task = self._seed_task(state_root, cases_dir, workspaces_dir)
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir, simulate="allowed",
+        )
+        # s1 spawned, s2 paused at checkpoint, s3 still pending.
+        assert task.subtasks[0].status == "done"
+        assert task.subtasks[1].status == "pending"
+        assert task.subtasks[2].status == "pending"
+        # Stub fired exactly once for s1.
+        assert [c["subtask_id"] for c in stub_worker] == ["s1"]
+        # Decisions include exactly one checkpoint_pause carrying
+        # the declared id and before_subtask in the note.
+        kinds = [d.kind for d in task.decisions]
+        assert kinds.count("checkpoint_pause") == 1
+        pause = next(d for d in task.decisions if d.kind == "checkpoint_pause")
+        assert "review-after-s1" in pause.note
+        assert "s2" in pause.note
+
+    def test_loop_resumes_after_ack(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        task = self._seed_task(state_root, cases_dir, workspaces_dir)
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir, simulate="allowed",
+        )
+        # Operator acks the checkpoint.
+        task.record_decision(
+            "checkpoint_ack", "ack", checkpoint_id="review-after-s1",
+        )
+        # Re-enter the loop.
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir, simulate="allowed",
+        )
+        assert all(s.status == "done" for s in task.subtasks)
+        assert [c["subtask_id"] for c in stub_worker] == ["s1", "s2", "s3"]
+
+    def test_plain_resume_re_pauses_at_same_checkpoint(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        task = self._seed_task(state_root, cases_dir, workspaces_dir)
+        # First iteration spawns s1 and pauses at checkpoint.
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir, simulate="allowed",
+        )
+        # Second iteration without ack must re-pause; s2 / s3 stay pending.
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir, simulate="allowed",
+        )
+        assert task.subtasks[1].status == "pending"
+        assert task.subtasks[2].status == "pending"
+        kinds = [d.kind for d in task.decisions]
+        # Two pause decisions; one per loop iteration.
+        assert kinds.count("checkpoint_pause") == 2
+        # Stub still fired exactly once (only s1).
+        assert len(stub_worker) == 1
+
+    def test_no_checkpoint_declared_loop_drains_normally(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        """Synthetic-multistep regression: tasks without
+        ``[[checkpoints]]`` exhibit the pre-§5 drain-the-queue
+        behaviour exactly."""
+        path = os.path.join(cases_dir, "t1.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_FULL_TOML)  # no checkpoints declared
+        task = Task.from_toml(
+            path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir, simulate="allowed",
+        )
+        assert all(s.status == "done" for s in task.subtasks)
+        kinds = [d.kind for d in task.decisions]
+        assert "checkpoint_pause" not in kinds
+
+    def test_checkpoint_pause_persists_id_in_event_payload(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        task = self._seed_task(state_root, cases_dir, workspaces_dir)
+        cli_mod._run_loop(
+            task, state_root=state_root,
+            workspaces_dir=workspaces_dir, simulate="allowed",
+        )
+        rows = _read_rows(state_root, "t1")
+        pause_rows = [
+            r for r in rows
+            if r.get("event") == "decision"
+            and r.get("kind") == "checkpoint_pause"
+        ]
+        assert len(pause_rows) == 1
+        assert pause_rows[0]["checkpoint_id"] == "review-after-s1"
+
+
+class TestCmdResumeAckCheckpoint:
+    """Phase 5 §5 — ``cmd_resume`` validates ``--ack-checkpoint``
+    against declared checkpoints and the in-memory ack set."""
+
+    def _seed_case(self, cases_dir):
+        path = os.path.join(cases_dir, "t1.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_CHECKPOINT_TOML)
+
+    def _bootstrap(self, state_root, cases_dir, workspaces_dir):
+        # Run cmd_start → loop pauses at checkpoint → state log
+        # carries one checkpoint_pause decision.
+        self._seed_case(cases_dir)
+        cli_mod.cmd_start(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+
+    def test_ack_unknown_id_errors_and_returns_two(
+        self, state_root, cases_dir, workspaces_dir, stub_worker, capsys,
+    ):
+        self._bootstrap(state_root, cases_dir, workspaces_dir)
+        rc = cli_mod.cmd_resume(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            ack_checkpoint="not-a-real-id",
+        ))
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "does not reference a declared checkpoint" in err
+        assert "not-a-real-id" in err
+
+    def test_ack_already_acked_id_errors_and_returns_two(
+        self, state_root, cases_dir, workspaces_dir, stub_worker, capsys,
+    ):
+        self._bootstrap(state_root, cases_dir, workspaces_dir)
+        # First successful ack:
+        rc1 = cli_mod.cmd_resume(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            ack_checkpoint="review-after-s1",
+        ))
+        assert rc1 == 0
+        # Second attempt to ack the same id must error cleanly.
+        rc2 = cli_mod.cmd_resume(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            ack_checkpoint="review-after-s1",
+        ))
+        assert rc2 == 2
+        err = capsys.readouterr().err
+        assert "already" in err.lower() or "acknowledged" in err.lower()
+
+    def test_ack_records_checkpoint_ack_decision(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        self._bootstrap(state_root, cases_dir, workspaces_dir)
+        cli_mod.cmd_resume(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            ack_checkpoint="review-after-s1",
+        ))
+        rows = _read_rows(state_root, "t1")
+        ack_rows = [
+            r for r in rows
+            if r.get("event") == "decision"
+            and r.get("kind") == "checkpoint_ack"
+        ]
+        assert len(ack_rows) == 1
+        assert ack_rows[0]["checkpoint_id"] == "review-after-s1"
+
+    def test_ack_lets_loop_drain_queue(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        self._bootstrap(state_root, cases_dir, workspaces_dir)
+        rc = cli_mod.cmd_resume(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+            ack_checkpoint="review-after-s1",
+        ))
+        assert rc == 0
+        loaded = load_task(
+            "t1", state_root=state_root, mark_resume=False,
+        )
+        assert all(s.status == "done" for s in loaded.subtasks)
+
+    def test_plain_resume_does_not_drain_past_checkpoint(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        self._bootstrap(state_root, cases_dir, workspaces_dir)
+        # Resume without --ack-checkpoint must not bypass the
+        # checkpoint; the loop re-pauses at the same position.
+        rc = cli_mod.cmd_resume(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+        assert rc == 0
+        loaded = load_task(
+            "t1", state_root=state_root, mark_resume=False,
+        )
+        statuses = {s.subtask_id: s.status for s in loaded.subtasks}
+        assert statuses["s1"] == "done"
+        assert statuses["s2"] == "pending"
+        assert statuses["s3"] == "pending"
+
+    def test_resume_subparser_accepts_ack_flag(self):
+        # Argparse plumbing — the flag must be on the resume parser.
+        parser = cli_mod.build_parser()
+        args = parser.parse_args([
+            "resume", "t1",
+            "--ack-checkpoint", "review-after-s1",
+        ])
+        assert args.task == "t1"
+        assert args.ack_checkpoint == "review-after-s1"
+
+    def test_resume_default_ack_checkpoint_is_none(self):
+        parser = cli_mod.build_parser()
+        args = parser.parse_args(["resume", "t1"])
+        assert args.ack_checkpoint is None
+
+
+class TestRoundTripCheckpoint:
+    """Phase 5 §5 acceptance — full cycle: start → checkpoint pause →
+    status → ack-resume → next spawn → completion. The cycle is
+    end-to-end through the CLI surface, not just _run_loop."""
+
+    def _seed_case(self, cases_dir):
+        path = os.path.join(cases_dir, "t1.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_CHECKPOINT_TOML)
+
+    def test_full_checkpoint_cycle(
+        self, state_root, cases_dir, workspaces_dir, stub_worker,
+    ):
+        self._seed_case(cases_dir)
+
+        # Step 1: start → s1 spawns → loop pauses at checkpoint.
+        rc = cli_mod.cmd_start(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+        assert rc == 0
+
+        # Step 2: status confirms paused state without polluting log.
+        rc = cli_mod.cmd_status(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+        ))
+        assert rc == 0
+
+        # Step 3: resume with --ack-checkpoint → loop drains.
+        rc = cli_mod.cmd_resume(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+            ack_checkpoint="review-after-s1",
+        ))
+        assert rc == 0
+
+        # All three subtasks done; stub fired in declaration order.
+        loaded = load_task(
+            "t1", state_root=state_root, mark_resume=False,
+        )
+        assert [s.status for s in loaded.subtasks] == [
+            "done", "done", "done",
+        ]
+        assert [c["subtask_id"] for c in stub_worker] == [
+            "s1", "s2", "s3",
+        ]
+
+        # Decision timeline contains exactly one pause and one ack.
+        kinds = [d.kind for d in loaded.decisions]
+        assert kinds.count("checkpoint_pause") == 1
+        assert kinds.count("checkpoint_ack") == 1
+        assert kinds.count("worker_complete") == 3
+
+        # Phase 5 §4 acceptance: resume_summary.md was written and
+        # reflects the cleared checkpoint state.
+        summary_path = os.path.join(
+            state_root, "t1", "resume_summary.md",
+        )
+        assert os.path.isfile(summary_path)
+        with open(summary_path, "r", encoding="utf-8") as fh:
+            digest = fh.read()
+        assert "Total: 3 (0 pending, 0 in-flight, 3 done, 0 failed)" in digest
+        # No checkpoint should still be pending after the ack-resume cycle.
+        assert "## Pending checkpoint" not in digest
+
+
+class TestCheckpointPrintSummary:
+    """Phase 5 §5 — _print_summary surfaces a pending checkpoint."""
+
+    def _seed_case(self, cases_dir):
+        path = os.path.join(cases_dir, "t1.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_CHECKPOINT_TOML)
+
+    def test_status_renders_pending_checkpoint_line(
+        self, state_root, cases_dir, workspaces_dir, stub_worker, capsys,
+    ):
+        self._seed_case(cases_dir)
+        cli_mod.cmd_start(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+        capsys.readouterr()  # drain start's stdout
+        cli_mod.cmd_status(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+        ))
+        out = capsys.readouterr().out
+        assert "Pending checkpoint: review-after-s1" in out
+        assert "before s2" in out
+        assert "Review s1 output before s2." in out
+
+    def test_status_omits_line_when_no_pending_checkpoint(
+        self, state_root, cases_dir, workspaces_dir, stub_worker, capsys,
+    ):
+        # synthetic-multistep doesn't declare checkpoints; status
+        # output must not include the new line.
+        path = os.path.join(cases_dir, "t1.toml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_FULL_TOML)
+        cli_mod.cmd_start(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+            simulate_rate_status="allowed",
+        ))
+        capsys.readouterr()
+        cli_mod.cmd_status(_make_args(
+            "t1", state_root=state_root, cases_dir=cases_dir,
+            workspaces_dir=workspaces_dir,
+        ))
+        out = capsys.readouterr().out
+        assert "Pending checkpoint" not in out

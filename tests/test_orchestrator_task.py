@@ -18,7 +18,9 @@ import pytest
 
 from orchestrator import task as task_mod
 from orchestrator import workspace as workspace_mod
-from orchestrator.task import Decision, Stage, Subtask, Task, TaskError
+from orchestrator.task import (
+    Checkpoint, Decision, Stage, Subtask, Task, TaskError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1298,7 +1300,10 @@ class TestModuleConstants:
         # Closed allow-list — adding new kinds requires bumping
         # ORCHESTRATOR_VERSION per provenance.py's contract. Phase 5
         # §3 added ``policy_auto_resume`` and bumped the version
-        # constant from "phase3" → "phase5" in lockstep.
+        # constant from "phase3" → "phase5" in lockstep. Phase 5 §5
+        # added ``checkpoint_pause`` / ``checkpoint_ack`` on top of
+        # the same ``"phase5"`` marker because both §3 and §5
+        # additions are additive on the same schema variant.
         assert task_mod._VALID_DECISION_KINDS == frozenset({
             "policy_pause",
             "policy_wrap_up",
@@ -1309,6 +1314,8 @@ class TestModuleConstants:
             "worker_fail",
             "task_create",
             "task_resume",
+            "checkpoint_pause",
+            "checkpoint_ack",
         })
 
     def test_subtask_default_status_is_pending(self):
@@ -1349,3 +1356,490 @@ class TestModuleConstants:
             created_at="ts",
         )
         assert t.stages == []
+
+    def test_checkpoint_default_fields(self):
+        c = Checkpoint(checkpoint_id="ckpt-1", before_subtask="s1")
+        assert c.checkpoint_id == "ckpt-1"
+        assert c.before_subtask == "s1"
+        assert c.description == ""
+        assert c.kind == ""
+
+    def test_checkpoint_full_construction(self):
+        c = Checkpoint(
+            checkpoint_id="ckpt-1",
+            before_subtask="s2",
+            description="Review the change before proceeding.",
+            kind="review-commit",
+        )
+        assert c.description == "Review the change before proceeding."
+        assert c.kind == "review-commit"
+
+    def test_task_default_checkpoints_empty(self):
+        t = Task(
+            task_id="t",
+            goal="g",
+            workspace_path="/tmp",
+            created_at="ts",
+        )
+        assert t.checkpoints == []
+        assert t.acked_checkpoint_ids == set()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 §5 — checkpoints schema and pending-checkpoint helper
+# ---------------------------------------------------------------------------
+
+
+_CHECKPOINTS_TOML = """\
+task_id = "t1"
+goal = "checkpointed"
+
+[[subtasks]]
+subtask_id = "s1"
+prompt = "first"
+
+[[subtasks]]
+subtask_id = "s2"
+prompt = "second"
+
+[[subtasks]]
+subtask_id = "s3"
+prompt = "third"
+
+[[checkpoints]]
+checkpoint_id = "review-after-s1"
+before_subtask = "s2"
+description = "Review s1 output before s2."
+kind = "review-commit"
+"""
+
+
+class TestCheckpointsFromToml:
+    """Phase 5 §5 — [[checkpoints]] schema parsing and validation."""
+
+    def test_checkpoints_default_empty_when_absent(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, _MINIMAL_TOML)
+        t = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        assert t.checkpoints == []
+        assert t.acked_checkpoint_ids == set()
+
+    def test_full_checkpoint_loaded(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, _CHECKPOINTS_TOML)
+        t = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        assert len(t.checkpoints) == 1
+        ckpt = t.checkpoints[0]
+        assert ckpt.checkpoint_id == "review-after-s1"
+        assert ckpt.before_subtask == "s2"
+        assert ckpt.description == "Review s1 output before s2."
+        assert ckpt.kind == "review-commit"
+
+    def test_checkpoints_persisted_in_task_create_event(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, _CHECKPOINTS_TOML)
+        Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        rows = _read_rows(state_root, "t1")
+        bootstrap = rows[0]
+        assert bootstrap["event"] == "task_create"
+        ckpts_payload = bootstrap["checkpoints"]
+        assert isinstance(ckpts_payload, list)
+        assert len(ckpts_payload) == 1
+        assert ckpts_payload[0]["checkpoint_id"] == "review-after-s1"
+        assert ckpts_payload[0]["before_subtask"] == "s2"
+        assert ckpts_payload[0]["description"] == "Review s1 output before s2."
+        assert ckpts_payload[0]["kind"] == "review-commit"
+
+    def test_optional_fields_default_to_empty_string(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[checkpoints]]
+checkpoint_id = "c1"
+before_subtask = "s1"
+""")
+        t = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        ckpt = t.checkpoints[0]
+        assert ckpt.description == ""
+        assert ckpt.kind == ""
+
+    def test_duplicate_checkpoint_id_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[subtasks]]
+subtask_id = "s2"
+prompt = "p"
+[[checkpoints]]
+checkpoint_id = "dup"
+before_subtask = "s1"
+[[checkpoints]]
+checkpoint_id = "dup"
+before_subtask = "s2"
+""")
+        with pytest.raises(TaskError, match="duplicate checkpoint_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_checkpoint_missing_id_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[checkpoints]]
+before_subtask = "s1"
+""")
+        with pytest.raises(TaskError, match="checkpoint_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_checkpoint_empty_id_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[checkpoints]]
+checkpoint_id = ""
+before_subtask = "s1"
+""")
+        with pytest.raises(TaskError, match="checkpoint_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_checkpoint_non_string_id_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[checkpoints]]
+checkpoint_id = 42
+before_subtask = "s1"
+""")
+        with pytest.raises(TaskError, match="checkpoint_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_checkpoint_missing_before_subtask_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[checkpoints]]
+checkpoint_id = "c1"
+""")
+        with pytest.raises(TaskError, match="before_subtask"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_checkpoint_unknown_before_subtask_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[checkpoints]]
+checkpoint_id = "c1"
+before_subtask = "does-not-exist"
+""")
+        with pytest.raises(TaskError, match="unknown subtask_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_checkpoint_empty_before_subtask_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[checkpoints]]
+checkpoint_id = "c1"
+before_subtask = ""
+""")
+        with pytest.raises(TaskError, match="before_subtask"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_checkpoints_must_be_list(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+checkpoints = "not an array"
+""")
+        with pytest.raises(TaskError, match=r"\[\[checkpoints\]\]"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_checkpoint_invalid_description_type_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[checkpoints]]
+checkpoint_id = "c1"
+before_subtask = "s1"
+description = 42
+""")
+        with pytest.raises(TaskError, match="description"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_checkpoint_invalid_kind_type_raises(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "p"
+[[checkpoints]]
+checkpoint_id = "c1"
+before_subtask = "s1"
+kind = 42
+""")
+        with pytest.raises(TaskError, match="kind"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+    def test_synthetic_checkpoint_case_loads(self, state_root, workspaces_dir):
+        """The Phase 5 §5 fixture must load and validate."""
+        repo_root = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))
+        )
+        case_path = os.path.join(
+            repo_root, "orchestrator", "cases",
+            "synthetic-checkpoint.toml",
+        )
+        t = Task.from_toml(
+            case_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        assert t.task_id == "synthetic-checkpoint"
+        assert len(t.subtasks) == 3
+        assert len(t.checkpoints) == 1
+        ckpt = t.checkpoints[0]
+        assert ckpt.checkpoint_id == "review-after-step-1"
+        assert ckpt.before_subtask == "step-2"
+        assert ckpt.kind == "review-commit"
+
+    def test_duplicate_subtask_id_raises_pre_pass(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        # The §5 restructure made duplicate-subtask_id detection a
+        # TOML-loader concern (was previously caught only by
+        # enqueue_subtask). Verify the pre-pass surfaces it.
+        toml_path = str(tmp_path / "t1.toml")
+        _write_toml(toml_path, """\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "dup"
+prompt = "first"
+[[subtasks]]
+subtask_id = "dup"
+prompt = "second"
+""")
+        with pytest.raises(TaskError, match="duplicate subtask_id"):
+            Task.from_toml(
+                toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+            )
+
+
+class TestPendingCheckpoint:
+    """Phase 5 §5 — Task.pending_checkpoint helper."""
+
+    def _seed(self, fresh_task):
+        fresh_task.checkpoints = [
+            Checkpoint(
+                checkpoint_id="c1", before_subtask="s2",
+                description="first checkpoint",
+            ),
+            Checkpoint(
+                checkpoint_id="c2", before_subtask="s5",
+            ),
+        ]
+        return fresh_task
+
+    def test_no_checkpoints_returns_none(self, fresh_task):
+        assert fresh_task.pending_checkpoint("s1") is None
+
+    def test_matching_unack_returns_checkpoint(self, fresh_task):
+        self._seed(fresh_task)
+        ckpt = fresh_task.pending_checkpoint("s2")
+        assert ckpt is not None
+        assert ckpt.checkpoint_id == "c1"
+
+    def test_matching_after_ack_returns_none(self, fresh_task):
+        self._seed(fresh_task)
+        fresh_task.acked_checkpoint_ids.add("c1")
+        assert fresh_task.pending_checkpoint("s2") is None
+
+    def test_non_matching_subtask_returns_none(self, fresh_task):
+        self._seed(fresh_task)
+        assert fresh_task.pending_checkpoint("s1") is None
+        assert fresh_task.pending_checkpoint("s9") is None
+
+    def test_empty_subtask_id_returns_none(self, fresh_task):
+        self._seed(fresh_task)
+        assert fresh_task.pending_checkpoint("") is None
+
+    def test_non_string_subtask_id_returns_none(self, fresh_task):
+        self._seed(fresh_task)
+        assert fresh_task.pending_checkpoint(None) is None  # type: ignore[arg-type]
+
+    def test_multiple_at_same_position_first_wins(self, fresh_task):
+        # Two checkpoints share a position; the first declared
+        # fires first. Acking it surfaces the second.
+        fresh_task.checkpoints = [
+            Checkpoint(checkpoint_id="c1", before_subtask="s2"),
+            Checkpoint(checkpoint_id="c2", before_subtask="s2"),
+        ]
+        first = fresh_task.pending_checkpoint("s2")
+        assert first is not None
+        assert first.checkpoint_id == "c1"
+        fresh_task.acked_checkpoint_ids.add("c1")
+        second = fresh_task.pending_checkpoint("s2")
+        assert second is not None
+        assert second.checkpoint_id == "c2"
+        fresh_task.acked_checkpoint_ids.add("c2")
+        assert fresh_task.pending_checkpoint("s2") is None
+
+
+class TestRecordDecisionCheckpoint:
+    """Phase 5 §5 — record_decision checkpoint_id kwarg behaviour."""
+
+    def test_checkpoint_pause_requires_id(self, fresh_task):
+        with pytest.raises(TaskError, match="checkpoint_id required"):
+            fresh_task.record_decision("checkpoint_pause", "n")
+
+    def test_checkpoint_ack_requires_id(self, fresh_task):
+        with pytest.raises(TaskError, match="checkpoint_id required"):
+            fresh_task.record_decision("checkpoint_ack", "n")
+
+    def test_empty_checkpoint_id_rejected(self, fresh_task):
+        with pytest.raises(TaskError, match="checkpoint_id required"):
+            fresh_task.record_decision(
+                "checkpoint_pause", "n", checkpoint_id="",
+            )
+
+    def test_non_string_checkpoint_id_rejected(self, fresh_task):
+        with pytest.raises(TaskError, match="checkpoint_id required"):
+            fresh_task.record_decision(
+                "checkpoint_pause", "n",
+                checkpoint_id=42,  # type: ignore[arg-type]
+            )
+
+    def test_checkpoint_id_rejected_for_other_kinds(self, fresh_task):
+        with pytest.raises(TaskError, match="checkpoint_id only valid"):
+            fresh_task.record_decision(
+                "policy_pause", "n", checkpoint_id="c1",
+            )
+
+    def test_checkpoint_ack_updates_in_memory_set(self, fresh_task):
+        fresh_task.record_decision(
+            "checkpoint_ack", "ack", checkpoint_id="c1",
+        )
+        assert "c1" in fresh_task.acked_checkpoint_ids
+
+    def test_checkpoint_pause_does_not_update_set(self, fresh_task):
+        fresh_task.record_decision(
+            "checkpoint_pause", "pause", checkpoint_id="c1",
+        )
+        assert "c1" not in fresh_task.acked_checkpoint_ids
+
+    def test_checkpoint_id_persisted_in_event(self, fresh_task, state_root):
+        fresh_task.record_decision(
+            "checkpoint_pause", "pause", checkpoint_id="c1",
+        )
+        evt = _read_rows(state_root, "t1")[-1]
+        assert evt["event"] == "decision"
+        assert evt["kind"] == "checkpoint_pause"
+        assert evt["checkpoint_id"] == "c1"
+
+    def test_non_checkpoint_event_omits_id_field(
+        self, fresh_task, state_root,
+    ):
+        fresh_task.record_decision("policy_pause", "p")
+        evt = _read_rows(state_root, "t1")[-1]
+        assert "checkpoint_id" not in evt
+
+    def test_decision_appended_to_in_memory_list(self, fresh_task):
+        d = fresh_task.record_decision(
+            "checkpoint_pause", "pause note", checkpoint_id="c1",
+        )
+        assert isinstance(d, Decision)
+        assert d.kind == "checkpoint_pause"
+        assert d.note == "pause note"
+        assert fresh_task.decisions[-1] is d

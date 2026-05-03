@@ -16,7 +16,7 @@ import pytest
 
 from orchestrator import buffer_ledger as buffer_ledger_mod
 from orchestrator import resume_summary as resume_summary_mod
-from orchestrator.task import Decision, Stage, Subtask, Task
+from orchestrator.task import Checkpoint, Decision, Stage, Subtask, Task
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -32,6 +32,8 @@ def _make_task(
     subtasks: list[Subtask] | None = None,
     decisions: list[Decision] | None = None,
     stages: list[Stage] | None = None,
+    checkpoints: list[Checkpoint] | None = None,
+    acked_checkpoint_ids: set[str] | None = None,
 ) -> Task:
     """Construct an in-memory Task without touching disk."""
     return Task(
@@ -42,6 +44,8 @@ def _make_task(
         subtasks=list(subtasks or []),
         decisions=list(decisions or []),
         stages=list(stages or []),
+        checkpoints=list(checkpoints or []),
+        acked_checkpoint_ids=set(acked_checkpoint_ids or set()),
         state_root=state_root,
     )
 
@@ -304,6 +308,128 @@ class TestRenderSubtaskSections:
 
 
 # ---------------------------------------------------------------------------
+# render_resume_summary — pending checkpoints (Phase 5 §5)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderCheckpoints:
+
+    def test_pending_checkpoint_section_rendered(self, empty_ledger):
+        task = _make_task(
+            subtasks=[
+                Subtask(subtask_id="s1", prompt="p", status="done"),
+                Subtask(subtask_id="s2", prompt="p", status="pending"),
+                Subtask(subtask_id="s3", prompt="p", status="pending"),
+            ],
+            checkpoints=[
+                Checkpoint(
+                    checkpoint_id="review-after-s1",
+                    before_subtask="s2",
+                    description="Review s1's output before s2.",
+                    kind="review-commit",
+                ),
+            ],
+        )
+        body = resume_summary_mod.render_resume_summary(
+            task, buffer_ledger=empty_ledger,
+        )
+        assert "## Pending checkpoint" in body
+        assert "**`review-after-s1`**" in body
+        assert "before `s2`" in body
+        assert "kind: `review-commit`" in body
+        assert "Review s1's output before s2." in body
+
+    def test_pending_section_omitted_when_no_checkpoints_declared(
+        self, empty_ledger,
+    ):
+        task = _make_task(
+            subtasks=[
+                Subtask(subtask_id="s1", prompt="p", status="pending"),
+            ],
+        )
+        body = resume_summary_mod.render_resume_summary(
+            task, buffer_ledger=empty_ledger,
+        )
+        assert "## Pending checkpoint" not in body
+
+    def test_pending_section_omitted_when_all_acked(self, empty_ledger):
+        task = _make_task(
+            subtasks=[
+                Subtask(subtask_id="s1", prompt="p", status="done"),
+                Subtask(subtask_id="s2", prompt="p", status="pending"),
+            ],
+            checkpoints=[
+                Checkpoint(
+                    checkpoint_id="c1", before_subtask="s2",
+                ),
+            ],
+            acked_checkpoint_ids={"c1"},
+        )
+        body = resume_summary_mod.render_resume_summary(
+            task, buffer_ledger=empty_ledger,
+        )
+        assert "## Pending checkpoint" not in body
+
+    def test_pending_section_omitted_when_position_does_not_match(
+        self, empty_ledger,
+    ):
+        # Checkpoint declared for a subtask that's already done; the
+        # next pending subtask is unrelated → not pending.
+        task = _make_task(
+            subtasks=[
+                Subtask(subtask_id="s1", prompt="p", status="done"),
+                Subtask(subtask_id="s2", prompt="p", status="pending"),
+            ],
+            checkpoints=[
+                # Position before s1 (already done; loop is past it).
+                Checkpoint(checkpoint_id="c1", before_subtask="s1"),
+            ],
+        )
+        body = resume_summary_mod.render_resume_summary(
+            task, buffer_ledger=empty_ledger,
+        )
+        assert "## Pending checkpoint" not in body
+
+    def test_pending_section_without_optional_fields(self, empty_ledger):
+        # Description / kind both empty → those lines must be
+        # omitted (the section header + the id/before line still
+        # render).
+        task = _make_task(
+            subtasks=[
+                Subtask(subtask_id="s1", prompt="p", status="pending"),
+            ],
+            checkpoints=[
+                Checkpoint(checkpoint_id="bare", before_subtask="s1"),
+            ],
+        )
+        body = resume_summary_mod.render_resume_summary(
+            task, buffer_ledger=empty_ledger,
+        )
+        assert "## Pending checkpoint" in body
+        assert "**`bare`**" in body
+        assert "kind:" not in body
+
+    def test_pending_section_with_no_pending_subtasks_omitted(
+        self, empty_ledger,
+    ):
+        # Defensive: every subtask is done, so there's no "next
+        # pending" position to match against.
+        task = _make_task(
+            subtasks=[
+                Subtask(subtask_id="s1", prompt="p", status="done"),
+                Subtask(subtask_id="s2", prompt="p", status="done"),
+            ],
+            checkpoints=[
+                Checkpoint(checkpoint_id="c1", before_subtask="s2"),
+            ],
+        )
+        body = resume_summary_mod.render_resume_summary(
+            task, buffer_ledger=empty_ledger,
+        )
+        assert "## Pending checkpoint" not in body
+
+
+# ---------------------------------------------------------------------------
 # render_resume_summary — spend section
 # ---------------------------------------------------------------------------
 
@@ -527,6 +653,79 @@ class TestSuggestNextAction:
             ],
         )
         assert "uas-orchestrate resume t1" in s
+
+    def test_checkpoint_pause_suggests_ack_command(self):
+        # Phase 5 §5: the suggestion line must contain the exact
+        # ack command including the pending checkpoint id, so a
+        # reader can copy/paste without parsing the rest of the
+        # digest.
+        task = _make_task(
+            decisions=[
+                Decision(timestamp="t", kind="task_create", note=""),
+                Decision(
+                    timestamp="t", kind="checkpoint_pause",
+                    note="pause",
+                ),
+            ],
+            subtasks=[
+                Subtask(subtask_id="s2", prompt="p", status="pending"),
+            ],
+            checkpoints=[
+                Checkpoint(
+                    checkpoint_id="review-after-s1",
+                    before_subtask="s2",
+                    description="Review s1.",
+                ),
+            ],
+        )
+        s = resume_summary_mod._suggest_next_action(task)
+        assert (
+            "./uas-orchestrate resume t1 --ack-checkpoint "
+            "review-after-s1"
+        ) in s
+        # Halt offer is included so the operator has a clear out
+        # if they decide not to proceed.
+        assert "halt" in s
+
+    def test_checkpoint_pause_without_pending_subtask_falls_back(self):
+        # Defensive: if for some reason there's no pending subtask
+        # (e.g., log corruption or all subtasks already done), the
+        # suggestion still tells the operator a checkpoint is
+        # pending.
+        task = _make_task(
+            decisions=[
+                Decision(timestamp="t", kind="task_create", note=""),
+                Decision(
+                    timestamp="t", kind="checkpoint_pause", note="pause",
+                ),
+            ],
+            subtasks=[
+                Subtask(subtask_id="s2", prompt="p", status="done"),
+            ],
+            checkpoints=[
+                Checkpoint(
+                    checkpoint_id="ckpt-1", before_subtask="s2",
+                ),
+            ],
+            acked_checkpoint_ids={"ckpt-1"},
+        )
+        s = resume_summary_mod._suggest_next_action(task)
+        # Generic fallback: still tells the operator how to ack.
+        assert "checkpoint" in s.lower()
+        assert "--ack-checkpoint <id>" in s
+
+    def test_checkpoint_ack_suggests_resume(self):
+        s = self._suggest(
+            decisions=[
+                Decision(timestamp="t", kind="task_create", note=""),
+                Decision(timestamp="t", kind="checkpoint_ack", note=""),
+            ],
+            subtasks=[
+                Subtask(subtask_id="s1", prompt="p", status="pending"),
+            ],
+        )
+        assert "Checkpoint acknowledged" in s
+        assert "./uas-orchestrate resume t1" in s
 
 
 # ---------------------------------------------------------------------------

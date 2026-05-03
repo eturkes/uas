@@ -48,7 +48,12 @@ def _print_summary(task: Task, *, file=None) -> None:
     ``cmd_status`` / ``cmd_start`` (after fresh creation).
 
     Format: task id + goal, subtask counts per status, total spend
-    across all subtasks, last decision (kind + note).
+    across all subtasks, last decision (kind + note). When a
+    checkpoint is pending at the next subtask position (Phase 5 §5),
+    a "Pending checkpoint" line is appended so a status check
+    surfaces the operator's required action — the digest at
+    ``resume_summary.md`` is the richer surface, but a single status
+    print should still make the gate obvious.
     """
     if file is None:
         file = sys.stdout
@@ -77,6 +82,17 @@ def _print_summary(task: Task, *, file=None) -> None:
         )
     else:
         print("Last decision: (none)", file=file)
+    next_pending = _find_next_pending(task)
+    if next_pending is not None:
+        ckpt = task.pending_checkpoint(next_pending.subtask_id)
+        if ckpt is not None:
+            line = (
+                f"Pending checkpoint: {ckpt.checkpoint_id} "
+                f"(before {ckpt.before_subtask})"
+            )
+            if ckpt.description:
+                line += f" — {ckpt.description}"
+            print(line, file=file)
 
 
 def _resolve_paths(args: argparse.Namespace) -> tuple[str, str, str]:
@@ -313,6 +329,28 @@ def _run_loop(
         if next_st is None:
             return
 
+        # Phase 5 §5 — checkpoint gate. If a declared checkpoint
+        # is positioned at this subtask's id and has not been
+        # acked yet, record ``checkpoint_pause`` (carrying the
+        # id) and exit. The operator clears it via
+        # ``./uas-orchestrate resume <task> --ack-checkpoint <id>``;
+        # plain ``resume`` re-enters the loop and re-pauses at
+        # the same checkpoint position, by design.
+        ckpt = task.pending_checkpoint(next_st.subtask_id)
+        if ckpt is not None:
+            note = (
+                f"checkpoint {ckpt.checkpoint_id!r} pending before "
+                f"subtask {next_st.subtask_id!r}"
+            )
+            if ckpt.description:
+                note += f": {ckpt.description}"
+            task.record_decision(
+                "checkpoint_pause",
+                note,
+                checkpoint_id=ckpt.checkpoint_id,
+            )
+            return
+
         task.record_decision(
             "worker_spawn", f"spawn {next_st.subtask_id}",
         )
@@ -429,9 +467,45 @@ def cmd_resume(args: argparse.Namespace) -> int:
     state, and writes the §4 ``resume_summary.md`` digest.
     ``--simulate-rate-status`` is forwarded into the loop the same
     way ``cmd_start`` does.
+
+    Phase 5 §5: when ``--ack-checkpoint <id>`` is set, validates
+    the id against the declared checkpoints (must reference a
+    declared checkpoint; must not already be acked) and records a
+    ``checkpoint_ack`` decision before entering the loop. A
+    validation failure prints to stderr and returns ``2`` without
+    entering the loop. Plain ``resume`` (no flag) is unchanged;
+    any pending checkpoint will re-pause the loop at its
+    declared position so the operator's intent must be explicit.
     """
     state_root, _cases_dir, workspaces_dir = _resolve_paths(args)
     task = task_mod.load_task(args.task, state_root=state_root)
+
+    ack_id = getattr(args, "ack_checkpoint", None)
+    if ack_id is not None:
+        declared = {ckpt.checkpoint_id for ckpt in task.checkpoints}
+        if ack_id not in declared:
+            print(
+                f"error: --ack-checkpoint {ack_id!r} does not "
+                f"reference a declared checkpoint; declared ids: "
+                f"{sorted(declared)}",
+                file=sys.stderr,
+            )
+            _emit_resume_summary(task, state_root)
+            return 2
+        if ack_id in task.acked_checkpoint_ids:
+            print(
+                f"error: checkpoint {ack_id!r} is already "
+                f"acknowledged; nothing to do",
+                file=sys.stderr,
+            )
+            _emit_resume_summary(task, state_root)
+            return 2
+        task.record_decision(
+            "checkpoint_ack",
+            f"acknowledged checkpoint {ack_id!r}",
+            checkpoint_id=ack_id,
+        )
+
     workspace_mod.setup_task_workspace(
         task.task_id, workspaces_dir=workspaces_dir,
     )
@@ -568,6 +642,30 @@ def _add_simulate_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_ack_checkpoint_flag(parser: argparse.ArgumentParser) -> None:
+    """Attach the Phase 5 §5 ``--ack-checkpoint`` resume flag.
+
+    Only ``resume`` consumes the flag — ``start`` / ``status`` /
+    ``pause`` / ``halt`` do not. The flag clears one declared
+    checkpoint by id; the loop's checkpoint gate skips the cleared
+    position on the next iteration. Plain ``resume`` (no flag)
+    re-pauses at the same checkpoint so unacknowledged
+    checkpoints cannot be silently bypassed.
+    """
+    parser.add_argument(
+        "--ack-checkpoint",
+        default=None,
+        metavar="ID",
+        help=(
+            "Acknowledge the declared checkpoint with the given id "
+            "before entering the resume loop. Records a "
+            "checkpoint_ack decision in task_events.jsonl carrying "
+            "the id. Errors if the id does not reference a declared "
+            "checkpoint, or if the id has already been acked."
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="uas-orchestrate",
@@ -605,6 +703,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume.add_argument("task", help="Task id.")
     _add_path_flags(p_resume)
     _add_simulate_flag(p_resume)
+    _add_ack_checkpoint_flag(p_resume)
     p_resume.set_defaults(func=cmd_resume)
 
     p_pause = subparsers.add_parser(

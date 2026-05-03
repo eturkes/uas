@@ -177,6 +177,26 @@ def render_resume_summary(
             lines.append(f"- ... plus {len(pending) - 1} more pending")
         lines.append("")
 
+    # Phase 5 §5 pending-checkpoint block. Rendered when a declared
+    # checkpoint is positioned at the next pending subtask and has
+    # not been acknowledged yet.
+    pending_ckpt = (
+        task.pending_checkpoint(pending[0].subtask_id)
+        if pending else None
+    )
+    if pending_ckpt is not None:
+        lines.append("## Pending checkpoint")
+        lines.append("")
+        lines.append(
+            f"- **`{pending_ckpt.checkpoint_id}`** "
+            f"(before `{pending_ckpt.before_subtask}`)"
+        )
+        if pending_ckpt.kind:
+            lines.append(f"- kind: `{pending_ckpt.kind}`")
+        if pending_ckpt.description:
+            lines.append(f"- {pending_ckpt.description}")
+        lines.append("")
+
     # Spend block.
     lines.append("## Spend")
     lines.append("")
@@ -303,6 +323,36 @@ def _suggest_next_action(task: Task) -> str:
             "Auto-resume just woke the loop. The next iteration's "
             "policy verdict will determine whether the loop spawns or "
             "pauses again."
+        )
+    if last.kind == "checkpoint_pause":
+        # Phase 5 §5 — recover the checkpoint id from the pending
+        # checkpoint at the head of the queue. The decision note
+        # carries the id in repr form too, but the queue lookup is
+        # the canonical source.
+        pending = next(
+            (s for s in task.subtasks if s.status == "pending"), None,
+        )
+        ckpt = (
+            task.pending_checkpoint(pending.subtask_id)
+            if pending is not None else None
+        )
+        if ckpt is not None:
+            return (
+                f"Acknowledge with `./uas-orchestrate resume "
+                f"{task.task_id} --ack-checkpoint "
+                f"{ckpt.checkpoint_id}` to clear the checkpoint and "
+                f"continue, or run `./uas-orchestrate halt "
+                f"{task.task_id}` to stop the task entirely."
+            )
+        return (
+            f"A checkpoint is pending; ack it with "
+            f"`./uas-orchestrate resume {task.task_id} "
+            f"--ack-checkpoint <id>`."
+        )
+    if last.kind == "checkpoint_ack":
+        return (
+            f"Checkpoint acknowledged. Run `./uas-orchestrate "
+            f"resume {task.task_id}` to continue."
         )
 
     if (

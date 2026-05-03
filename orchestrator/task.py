@@ -51,6 +51,27 @@ same reason. The §2 schema commits the declarative shape only —
 runtime eligibility / dependency-aware ordering is left to later
 phases.
 
+Phase 5 §5 schema additions (additive; backward-compatible). The
+TOML loader accepts an optional ``[[checkpoints]]`` array of
+tables, each declaring a human-checkpoint pause point identified
+by ``checkpoint_id`` and positioned via ``before_subtask`` (which
+must reference a declared ``[[subtasks]].subtask_id``). The
+orchestrator's main loop pauses with a ``checkpoint_pause``
+decision when about to spawn a subtask whose id matches a pending
+checkpoint's ``before_subtask``; resume requires explicit
+acknowledgement via ``./uas-orchestrate resume <task>
+--ack-checkpoint <id>``, which records a ``checkpoint_ack``
+decision carrying ``checkpoint_id`` in its payload. The
+``checkpoints`` list is persisted in the ``task_create`` event so
+``load_task`` reconstructs it on resume; the in-memory
+``Task.acked_checkpoint_ids`` set is rebuilt from the
+``checkpoint_ack`` decisions encountered during replay so a
+multi-window cycle's ack state survives invocation boundaries.
+Pre-§5 logs lack both the ``checkpoints`` payload and any
+checkpoint decisions; replay tolerates the absence and leaves
+both ``Task.checkpoints`` and ``Task.acked_checkpoint_ids``
+empty.
+
 Per-event resume gate (§7). Every persisted row carries a
 ``survives_git_sha_flip: bool`` field (default ``True``). On
 replay, rows with ``survives_git_sha_flip == False`` whose recorded
@@ -87,11 +108,16 @@ DecisionKind = Literal[
     "worker_fail",
     "task_create",
     "task_resume",
+    "checkpoint_pause",
+    "checkpoint_ack",
 ]
 
 # Single source of truth for the Decision kind allow-list. Mirrors
 # the ``DecisionKind`` Literal above; runtime checks compare against
-# the frozenset.
+# the frozenset. Phase 5 §5 added ``checkpoint_pause`` /
+# ``checkpoint_ack``; ``ORCHESTRATOR_VERSION`` stays at ``"phase5"``
+# because §3 already bumped from ``"phase3"`` to ``"phase5"`` and
+# both §3 and §5 additions are additive on the same schema marker.
 _VALID_DECISION_KINDS: frozenset[str] = frozenset({
     "policy_pause",
     "policy_wrap_up",
@@ -102,7 +128,17 @@ _VALID_DECISION_KINDS: frozenset[str] = frozenset({
     "worker_fail",
     "task_create",
     "task_resume",
+    "checkpoint_pause",
+    "checkpoint_ack",
 })
+
+# The Phase 5 §5 checkpoint decision kinds. Both require a
+# ``checkpoint_id`` payload field (validated by ``record_decision``);
+# all other kinds reject the kwarg. Kept as a tuple so call sites
+# can ``in`` against it without copying the frozenset.
+_CHECKPOINT_DECISION_KINDS: tuple[str, ...] = (
+    "checkpoint_pause", "checkpoint_ack",
+)
 
 
 class TaskError(ValueError):
@@ -258,6 +294,92 @@ def _validate_stages(raw_stages, path: str) -> list[dict]:
     return records
 
 
+def _validate_checkpoints(
+    raw_checkpoints,
+    path: str,
+    seen_subtask_ids: set[str],
+) -> list[dict]:
+    """Validate the optional ``[[checkpoints]]`` array (Phase 5 §5).
+
+    Each entry must be a table with a non-empty ``checkpoint_id``
+    (unique across the task) and a non-empty ``before_subtask``
+    that references a declared ``[[subtasks]].subtask_id``.
+    Optional ``description`` and ``kind`` are strings (default
+    ``""``).
+
+    Returns a list of dicts mirroring the ``Checkpoint`` dataclass
+    field set; ``Task.from_toml`` constructs ``Checkpoint(**rec)``
+    from each record and persists the same dicts in the
+    ``task_create`` event payload so ``load_task`` can reconstruct
+    in-memory ``Checkpoint`` instances on resume without re-parsing
+    the original TOML. Cross-references are checked here rather
+    than inline in the subtasks loop because checkpoints reference
+    subtasks (not the other way around) — the caller pre-passes
+    subtasks to populate ``seen_subtask_ids`` before invoking this
+    validator.
+    """
+    if not isinstance(raw_checkpoints, list):
+        raise TaskError(
+            f"task TOML at {path}: [[checkpoints]] must be an array of "
+            f"tables; got {raw_checkpoints!r}"
+        )
+
+    records: list[dict] = []
+    seen_ids: set[str] = set()
+    for raw in raw_checkpoints:
+        if not isinstance(raw, dict):
+            raise TaskError(
+                f"task TOML at {path}: each [[checkpoints]] entry must "
+                f"be a table; got {raw!r}"
+            )
+        cid = raw.get("checkpoint_id")
+        if not isinstance(cid, str) or not cid:
+            raise TaskError(
+                f"task TOML at {path}: each [[checkpoints]].checkpoint_id "
+                f"must be a non-empty string; got {cid!r}"
+            )
+        if cid in seen_ids:
+            raise TaskError(
+                f"task TOML at {path}: duplicate checkpoint_id {cid!r}"
+            )
+        seen_ids.add(cid)
+
+        before_subtask = raw.get("before_subtask")
+        if not isinstance(before_subtask, str) or not before_subtask:
+            raise TaskError(
+                f"task TOML at {path}: checkpoint {cid!r} before_subtask "
+                f"must be a non-empty string; got {before_subtask!r}"
+            )
+        if before_subtask not in seen_subtask_ids:
+            raise TaskError(
+                f"task TOML at {path}: checkpoint {cid!r} references "
+                f"unknown subtask_id {before_subtask!r}"
+            )
+
+        description = raw.get("description", "")
+        if not isinstance(description, str):
+            raise TaskError(
+                f"task TOML at {path}: checkpoint {cid!r} description "
+                f"must be a string; got {description!r}"
+            )
+
+        kind = raw.get("kind", "")
+        if not isinstance(kind, str):
+            raise TaskError(
+                f"task TOML at {path}: checkpoint {cid!r} kind must "
+                f"be a string; got {kind!r}"
+            )
+
+        records.append({
+            "checkpoint_id": cid,
+            "before_subtask": before_subtask,
+            "description": description,
+            "kind": kind,
+        })
+
+    return records
+
+
 @dataclass
 class Stage:
     """One stage in a multi-stage long-horizon task (Phase 5 §2).
@@ -286,6 +408,36 @@ class Stage:
     depends_on: list[str] = field(default_factory=list)
     expected_duration_seconds: float | None = None
     expected_spend_usd: float | None = None
+
+
+@dataclass
+class Checkpoint:
+    """One human-checkpoint declared in a task's TOML (Phase 5 §5).
+
+    A checkpoint expresses an explicit pause point: when the
+    orchestrator's main loop is about to spawn a subtask whose
+    ``subtask_id`` matches ``before_subtask`` and no
+    ``checkpoint_ack`` decision has been recorded yet for this
+    ``checkpoint_id``, the loop records a ``checkpoint_pause``
+    decision and exits. Resume requires explicit acknowledgement
+    via ``./uas-orchestrate resume <task> --ack-checkpoint <id>``,
+    which records a ``checkpoint_ack`` decision; subsequent
+    iterations skip the now-acknowledged checkpoint's pause
+    position.
+
+    ``checkpoint_id`` must be unique within a task.
+    ``before_subtask`` must reference a declared
+    ``[[subtasks]].subtask_id``; the ``Task.from_toml`` validator
+    enforces both at load time. ``description`` and ``kind`` are
+    free-form annotations carried into the persisted log and the
+    resume_summary digest for operator-readable context; the
+    orchestrator's control flow does not consume them.
+    """
+
+    checkpoint_id: str
+    before_subtask: str
+    description: str = ""
+    kind: str = ""
 
 
 @dataclass
@@ -352,6 +504,8 @@ class Task:
     subtasks: list[Subtask] = field(default_factory=list)
     decisions: list[Decision] = field(default_factory=list)
     stages: list[Stage] = field(default_factory=list)
+    checkpoints: list[Checkpoint] = field(default_factory=list)
+    acked_checkpoint_ids: set[str] = field(default_factory=set)
     state_root: str = field(default=DEFAULT_STATE_ROOT)
 
     # ------------------------------------------------------------------
@@ -382,17 +536,34 @@ class Task:
           non-empty ``subtask_id`` (unique within the task) and
           ``prompt``; optional ``stage_id`` referencing a declared
           ``[[stages]].stage_id``.
+        - ``[[checkpoints]]``: optional array of tables (Phase 5 §5).
+          Each entry needs non-empty ``checkpoint_id`` (unique
+          within the task) and non-empty ``before_subtask``
+          referencing a declared ``[[subtasks]].subtask_id``;
+          optional ``description`` / ``kind`` strings (default
+          ``""``).
 
         Computes ``workspace_path`` as ``<workspaces_dir>/<task_id>``;
         ``created_at`` is captured at call time.
 
         Persists exactly one ``task_create`` event (carrying
         ``goal`` / ``workspace_path`` / ``created_at`` / ``stages``
-        plus the decision note) and one ``enqueue_subtask`` event per
-        ``[[subtasks]]`` row (each carrying the optional
-        ``stage_id``). Also appends a ``task_create`` ``Decision`` to
-        the in-memory ``decisions`` list so the replay-equivalent
-        timeline is unified.
+        / ``checkpoints`` plus the decision note) and one
+        ``enqueue_subtask`` event per ``[[subtasks]]`` row (each
+        carrying the optional ``stage_id``). Also appends a
+        ``task_create`` ``Decision`` to the in-memory ``decisions``
+        list so the replay-equivalent timeline is unified.
+
+        Phase 5 §5 restructure: subtasks are validated in a
+        structural pre-pass that builds ``seen_subtask_ids`` for
+        the checkpoint validator, then the bootstrap event is
+        written carrying both stages and checkpoints, then the
+        subtasks are enqueued (each writing its own
+        ``enqueue_subtask`` event). Order matters because the
+        checkpoint cross-references subtasks; doing the
+        ``task_create`` write before checkpoints are validated
+        would either leak partially-validated state or require a
+        compensating delete on failure.
 
         Tests pass ``state_root`` (where ``task_events.jsonl`` is
         written) and ``workspaces_dir`` (where ``workspace_path`` is
@@ -422,57 +593,26 @@ class Task:
                 f"string; got {goal!r}"
             )
 
-        # Phase 5 §2: validate optional [[stages]] before constructing
-        # the Task so the task_create event can persist them in the
-        # bootstrap row that load_task replays.
+        # Phase 5 §2: validate optional [[stages]] before the
+        # subtasks pre-pass so subtask_id-to-stage_id refs can be
+        # checked inline.
         stage_records = _validate_stages(config.get("stages", []), path)
         seen_stage_ids = {rec["stage_id"] for rec in stage_records}
 
-        sr = state_root if state_root is not None else DEFAULT_STATE_ROOT
-        wd = workspaces_dir if workspaces_dir is not None else DEFAULT_WORKSPACES_DIR
-        workspace_path = os.path.join(wd, task_id)
-        created_at = _now_iso()
-
-        task = cls(
-            task_id=task_id,
-            goal=goal,
-            workspace_path=workspace_path,
-            created_at=created_at,
-            stages=[Stage(**rec) for rec in stage_records],
-            state_root=sr,
-        )
-
-        # Single bootstrap event: it both initialises the on-disk log
-        # and acts as the task_create Decision row. The
-        # ``decision_note`` field carries the human-readable note so
-        # §7's replay can append to ``decisions`` without
-        # reconstructing it from the goal field. ``stages`` is
-        # serialised as a list of dicts mirroring the Stage dataclass
-        # so load_task can reconstruct the in-memory Stage objects
-        # without having to re-parse the original TOML.
-        decision_note = f"goal: {goal}"
-        task._append_event(
-            "task_create",
-            {
-                "goal": goal,
-                "workspace_path": workspace_path,
-                "created_at": created_at,
-                "decision_note": decision_note,
-                "stages": stage_records,
-            },
-        )
-        task.decisions.append(
-            Decision(timestamp=created_at, kind="task_create", note=decision_note),
-        )
-
-        # Validate and enqueue [[subtasks]] entries (each writes its
-        # own enqueue_subtask event via the operation below).
+        # Phase 5 §5: pre-pass [[subtasks]] for structural validation
+        # plus id collection. The pre-pass turns the pre-§5 one-shot
+        # enqueue loop into a build-records-then-enqueue two-pass so
+        # ``[[checkpoints]]`` cross-references can be validated
+        # against ``seen_subtask_ids`` before the bootstrap event is
+        # written.
         raw_subtasks = config.get("subtasks", [])
         if not isinstance(raw_subtasks, list):
             raise TaskError(
                 f"task TOML at {path}: [[subtasks]] must be an array of "
                 f"tables; got {raw_subtasks!r}"
             )
+        subtask_records: list[dict] = []
+        seen_subtask_ids: set[str] = set()
         for raw in raw_subtasks:
             if not isinstance(raw, dict):
                 raise TaskError(
@@ -491,6 +631,11 @@ class Task:
                     f"task TOML at {path}: each [[subtasks]].prompt must "
                     f"be a non-empty string; got {prompt!r}"
                 )
+            if sid in seen_subtask_ids:
+                raise TaskError(
+                    f"task TOML at {path}: duplicate subtask_id {sid!r}"
+                )
+            seen_subtask_ids.add(sid)
             stage_id = raw.get("stage_id")
             if stage_id is not None:
                 if not isinstance(stage_id, str) or not stage_id:
@@ -504,7 +649,64 @@ class Task:
                         f"task TOML at {path}: subtask {sid!r} references "
                         f"unknown stage_id {stage_id!r}"
                     )
-            task.enqueue_subtask(sid, prompt, stage_id=stage_id)
+            subtask_records.append({
+                "subtask_id": sid,
+                "prompt": prompt,
+                "stage_id": stage_id,
+            })
+
+        # Phase 5 §5: validate [[checkpoints]] now that
+        # ``seen_subtask_ids`` is fully populated.
+        checkpoint_records = _validate_checkpoints(
+            config.get("checkpoints", []), path, seen_subtask_ids,
+        )
+
+        sr = state_root if state_root is not None else DEFAULT_STATE_ROOT
+        wd = workspaces_dir if workspaces_dir is not None else DEFAULT_WORKSPACES_DIR
+        workspace_path = os.path.join(wd, task_id)
+        created_at = _now_iso()
+
+        task = cls(
+            task_id=task_id,
+            goal=goal,
+            workspace_path=workspace_path,
+            created_at=created_at,
+            stages=[Stage(**rec) for rec in stage_records],
+            checkpoints=[Checkpoint(**rec) for rec in checkpoint_records],
+            state_root=sr,
+        )
+
+        # Single bootstrap event: it both initialises the on-disk log
+        # and acts as the task_create Decision row. The
+        # ``decision_note`` field carries the human-readable note so
+        # §7's replay can append to ``decisions`` without
+        # reconstructing it from the goal field. ``stages`` and
+        # ``checkpoints`` are serialised as lists of dicts mirroring
+        # their dataclass field sets so load_task can reconstruct the
+        # in-memory objects without having to re-parse the original
+        # TOML.
+        decision_note = f"goal: {goal}"
+        task._append_event(
+            "task_create",
+            {
+                "goal": goal,
+                "workspace_path": workspace_path,
+                "created_at": created_at,
+                "decision_note": decision_note,
+                "stages": stage_records,
+                "checkpoints": checkpoint_records,
+            },
+        )
+        task.decisions.append(
+            Decision(timestamp=created_at, kind="task_create", note=decision_note),
+        )
+
+        # Enqueue subtasks from the pre-validated records (each writes
+        # its own enqueue_subtask event via the operation below).
+        for rec in subtask_records:
+            task.enqueue_subtask(
+                rec["subtask_id"], rec["prompt"], stage_id=rec["stage_id"],
+            )
 
         return task
 
@@ -704,16 +906,32 @@ class Task:
             },
         )
 
-    def record_decision(self, kind: str, note: str) -> Decision:
+    def record_decision(
+        self,
+        kind: str,
+        note: str,
+        *,
+        checkpoint_id: str | None = None,
+    ) -> Decision:
         """Append a Decision to ``decisions``; persist one event.
 
         ``kind`` must be one of the canonical Decision kinds
-        (policy_pause / wrap_up / halt, worker_spawn / complete /
-        fail, task_create / task_resume). The PLAN §6 enumeration
-        is the closed allow-list — unknown kinds raise
-        ``TaskError`` so the timeline cannot accumulate
-        free-form strings that future tooling has to defend
-        against.
+        (policy_pause / wrap_up / halt / auto_resume,
+        worker_spawn / complete / fail, task_create / task_resume,
+        checkpoint_pause / checkpoint_ack). The PLAN §6 enumeration
+        plus the §3 / §5 additive bumps form the closed allow-list
+        — unknown kinds raise ``TaskError`` so the timeline cannot
+        accumulate free-form strings that future tooling has to
+        defend against.
+
+        ``checkpoint_id`` (Phase 5 §5) is required when ``kind``
+        is ``checkpoint_pause`` or ``checkpoint_ack`` and rejected
+        for every other kind. When provided it is persisted in the
+        event payload so ``load_task`` can reconstruct
+        ``acked_checkpoint_ids`` on replay; for ``checkpoint_ack``
+        it is also added to the in-memory
+        ``acked_checkpoint_ids`` set so ``pending_checkpoint``
+        skips the acknowledged entry on subsequent calls.
         """
         if kind not in _VALID_DECISION_KINDS:
             raise TaskError(
@@ -722,14 +940,63 @@ class Task:
             )
         if not isinstance(note, str):
             raise TaskError(f"note must be a string; got {note!r}")
+        if kind in _CHECKPOINT_DECISION_KINDS:
+            if not isinstance(checkpoint_id, str) or not checkpoint_id:
+                raise TaskError(
+                    f"checkpoint_id required for kind={kind!r}; got "
+                    f"{checkpoint_id!r}"
+                )
+        elif checkpoint_id is not None:
+            raise TaskError(
+                f"checkpoint_id only valid for {list(_CHECKPOINT_DECISION_KINDS)}; "
+                f"got kind={kind!r} with checkpoint_id={checkpoint_id!r}"
+            )
         timestamp = _now_iso()
         decision = Decision(timestamp=timestamp, kind=kind, note=note)
         self.decisions.append(decision)
-        self._append_event(
-            "decision",
-            {"kind": kind, "note": note, "decision_timestamp": timestamp},
-        )
+        if kind == "checkpoint_ack":
+            self.acked_checkpoint_ids.add(checkpoint_id)
+        payload = {
+            "kind": kind, "note": note, "decision_timestamp": timestamp,
+        }
+        if checkpoint_id is not None:
+            payload["checkpoint_id"] = checkpoint_id
+        self._append_event("decision", payload)
         return decision
+
+    def pending_checkpoint(
+        self, subtask_id: str,
+    ) -> "Checkpoint | None":
+        """Return the first declared checkpoint pending at ``subtask_id``.
+
+        Phase 5 §5 helper consumed by the orchestrator's main loop.
+        A checkpoint is "pending" when both:
+
+        1. Its ``before_subtask`` matches the ``subtask_id``.
+        2. Its ``checkpoint_id`` is not in
+           ``self.acked_checkpoint_ids``.
+
+        Returns ``None`` if no checkpoint is positioned at this
+        subtask, or if every matching checkpoint has already been
+        acknowledged. If multiple checkpoints share the same
+        ``before_subtask``, they fire in declaration order — the
+        first un-acked match wins; subsequent loops re-evaluate
+        after the first is acked.
+
+        ``subtask_id`` validation is intentionally lenient: an
+        empty string or non-string returns ``None`` rather than
+        raising, so call sites can pass through whatever the
+        next-pending lookup produced without pre-validating.
+        """
+        if not isinstance(subtask_id, str) or not subtask_id:
+            return None
+        for ckpt in self.checkpoints:
+            if (
+                ckpt.before_subtask == subtask_id
+                and ckpt.checkpoint_id not in self.acked_checkpoint_ids
+            ):
+                return ckpt
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +1145,34 @@ def load_task(
                                 float(exp_spend) if exp_spend is not None else None
                             ),
                         ))
+                # Phase 5 §5: reconstruct checkpoints from the
+                # persisted task_create row. Pre-§5 logs lack the
+                # field; the forgiving reader leaves
+                # task.checkpoints empty (and the empty
+                # acked_checkpoint_ids set follows from there).
+                raw_checkpoints = row.get("checkpoints", [])
+                if isinstance(raw_checkpoints, list):
+                    for raw_ckpt in raw_checkpoints:
+                        if not isinstance(raw_ckpt, dict):
+                            continue
+                        cid = raw_ckpt.get("checkpoint_id")
+                        if not isinstance(cid, str) or not cid:
+                            continue
+                        bs = raw_ckpt.get("before_subtask")
+                        if not isinstance(bs, str) or not bs:
+                            continue
+                        desc = raw_ckpt.get("description", "")
+                        if not isinstance(desc, str):
+                            desc = ""
+                        ckpt_kind = raw_ckpt.get("kind", "")
+                        if not isinstance(ckpt_kind, str):
+                            ckpt_kind = ""
+                        task.checkpoints.append(Checkpoint(
+                            checkpoint_id=cid,
+                            before_subtask=bs,
+                            description=desc,
+                            kind=ckpt_kind,
+                        ))
                 task.decisions.append(
                     Decision(
                         timestamp=row.get("created_at", ""),
@@ -941,6 +1236,16 @@ def load_task(
                             note=row.get("note", ""),
                         ),
                     )
+                    # Phase 5 §5: rebuild ``acked_checkpoint_ids`` so
+                    # ``pending_checkpoint`` skips already-acked
+                    # checkpoints across resume boundaries. Forgiving:
+                    # missing / non-string ``checkpoint_id`` payload
+                    # is silently ignored (the decision itself still
+                    # replays as a Decision row).
+                    if kind == "checkpoint_ack":
+                        ckpt_id = row.get("checkpoint_id")
+                        if isinstance(ckpt_id, str) and ckpt_id:
+                            task.acked_checkpoint_ids.add(ckpt_id)
             # else: unknown event_type — silently skip.
 
     if task is None:

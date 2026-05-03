@@ -21,6 +21,7 @@ import pytest
 from orchestrator import cli as cli_mod
 from orchestrator import task as task_mod
 from orchestrator.task import (
+    Checkpoint,
     Decision,
     Stage,
     Subtask,
@@ -980,6 +981,239 @@ prompt = "p"
         assert loaded.stages[0].expected_duration_seconds == 600.0
         assert loaded.stages[0].expected_spend_usd == 5.0
         assert loaded.subtasks[0].stage_id == "stage_a"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 §5 — checkpoints replay
+# ---------------------------------------------------------------------------
+
+
+class TestCheckpointsReplay:
+    """``load_task`` reconstructs Phase 5 §5 checkpoints and the
+    ``acked_checkpoint_ids`` set from the persisted JSONL log."""
+
+    def test_checkpoints_replayed_from_task_create_event(self, state_root):
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(checkpoints=[
+                {
+                    "checkpoint_id": "c1",
+                    "before_subtask": "s2",
+                    "description": "Review s1.",
+                    "kind": "review-commit",
+                },
+                {
+                    "checkpoint_id": "c2",
+                    "before_subtask": "s4",
+                    "description": "",
+                    "kind": "",
+                },
+            ]),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert len(t.checkpoints) == 2
+        assert t.checkpoints[0].checkpoint_id == "c1"
+        assert t.checkpoints[0].before_subtask == "s2"
+        assert t.checkpoints[0].description == "Review s1."
+        assert t.checkpoints[0].kind == "review-commit"
+        assert t.checkpoints[1].checkpoint_id == "c2"
+        assert t.acked_checkpoint_ids == set()
+
+    def test_pre_checkpoint_log_replays_with_empty_list(self, state_root):
+        # Pre-§5 logs lack the ``checkpoints`` field on the
+        # task_create row. Replay must produce
+        # ``Task.checkpoints == []`` and an empty
+        # ``acked_checkpoint_ids`` set. ``_bootstrap_row()`` already
+        # omits the field so it stands in for a pre-§5 log.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(),
+            _baseline_meta(
+                event="enqueue_subtask", subtask_id="s1", prompt="p",
+            ),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.checkpoints == []
+        assert t.acked_checkpoint_ids == set()
+
+    def test_corrupted_checkpoints_payload_dropped(self, state_root):
+        # Forgiving reader: a non-list ``checkpoints`` field on the
+        # task_create row leaves ``task.checkpoints`` empty rather
+        # than crashing the reconstruction.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(checkpoints="not a list"),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.checkpoints == []
+
+    def test_corrupted_checkpoint_entry_skipped(self, state_root):
+        # One valid checkpoint + several malformed entries. Replay
+        # keeps the valid one, drops the rest.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(checkpoints=[
+                "not a dict",
+                {"checkpoint_id": ""},  # empty id
+                {"checkpoint_id": 42},  # wrong type
+                {"checkpoint_id": "no-ref"},  # missing before_subtask
+                {"checkpoint_id": "empty-bs", "before_subtask": ""},
+                {"checkpoint_id": "wrong-bs-type", "before_subtask": 99},
+                {
+                    "checkpoint_id": "good",
+                    "before_subtask": "s1",
+                    "description": "ok",
+                    "kind": "review-plan",
+                },
+            ]),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert len(t.checkpoints) == 1
+        assert t.checkpoints[0].checkpoint_id == "good"
+        assert t.checkpoints[0].kind == "review-plan"
+
+    def test_corrupted_checkpoint_optional_fields_normalised(self, state_root):
+        # Non-string description / kind get reset to "" on replay.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(checkpoints=[
+                {
+                    "checkpoint_id": "c1",
+                    "before_subtask": "s1",
+                    "description": 42,
+                    "kind": True,
+                },
+            ]),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.checkpoints[0].description == ""
+        assert t.checkpoints[0].kind == ""
+
+    def test_checkpoint_ack_decision_populates_set(self, state_root):
+        # A persisted checkpoint_ack decision row carrying
+        # checkpoint_id should re-populate acked_checkpoint_ids on
+        # replay so subsequent loop iterations skip the cleared
+        # checkpoint.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(checkpoints=[
+                {"checkpoint_id": "c1", "before_subtask": "s2"},
+                {"checkpoint_id": "c2", "before_subtask": "s4"},
+            ]),
+            _baseline_meta(
+                event="decision",
+                kind="checkpoint_ack",
+                note="acknowledged checkpoint 'c1'",
+                decision_timestamp="2026-05-01T01:00:00+00:00",
+                checkpoint_id="c1",
+            ),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.acked_checkpoint_ids == {"c1"}
+        # The decision itself replays into the timeline too.
+        kinds = [d.kind for d in t.decisions]
+        assert "checkpoint_ack" in kinds
+
+    def test_checkpoint_pause_decision_does_not_populate_set(self, state_root):
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(checkpoints=[
+                {"checkpoint_id": "c1", "before_subtask": "s2"},
+            ]),
+            _baseline_meta(
+                event="decision",
+                kind="checkpoint_pause",
+                note="checkpoint 'c1' pending before subtask 's2'",
+                decision_timestamp="2026-05-01T01:00:00+00:00",
+                checkpoint_id="c1",
+            ),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        # checkpoint_pause is the pause decision, not the ack —
+        # acked_checkpoint_ids remains empty.
+        assert t.acked_checkpoint_ids == set()
+        kinds = [d.kind for d in t.decisions]
+        assert "checkpoint_pause" in kinds
+
+    def test_checkpoint_ack_without_id_payload_tolerated(self, state_root):
+        # Forgiving reader: a checkpoint_ack row missing
+        # checkpoint_id is replayed as a Decision without populating
+        # the set. (This shape shouldn't normally occur because the
+        # write path requires checkpoint_id, but log corruption
+        # tolerance matters across long-horizon runs.)
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(checkpoints=[
+                {"checkpoint_id": "c1", "before_subtask": "s2"},
+            ]),
+            _baseline_meta(
+                event="decision",
+                kind="checkpoint_ack",
+                note="malformed ack",
+                decision_timestamp="2026-05-01T01:00:00+00:00",
+                # checkpoint_id deliberately omitted
+            ),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        assert t.acked_checkpoint_ids == set()
+        kinds = [d.kind for d in t.decisions]
+        assert "checkpoint_ack" in kinds
+
+    def test_pause_then_ack_replay_round_trip(self, state_root):
+        # Realistic timeline: pause, then ack from a later resume.
+        _write_rows(state_root, "t1", [
+            _bootstrap_row(checkpoints=[
+                {"checkpoint_id": "c1", "before_subtask": "s1"},
+            ]),
+            _baseline_meta(
+                event="enqueue_subtask",
+                subtask_id="s1", prompt="p",
+            ),
+            _baseline_meta(
+                event="decision",
+                kind="checkpoint_pause",
+                note="pause",
+                decision_timestamp="2026-05-01T01:00:00+00:00",
+                checkpoint_id="c1",
+            ),
+            _baseline_meta(
+                event="decision",
+                kind="checkpoint_ack",
+                note="ack",
+                decision_timestamp="2026-05-01T02:00:00+00:00",
+                checkpoint_id="c1",
+            ),
+        ])
+        t = load_task("t1", state_root=state_root, mark_resume=False)
+        # After replay, the acked set carries the ack id.
+        assert t.acked_checkpoint_ids == {"c1"}
+        # pending_checkpoint reflects the cleared state.
+        assert t.pending_checkpoint("s1") is None
+
+    def test_from_toml_then_load_round_trip_preserves_checkpoints(
+        self, tmp_path, state_root, workspaces_dir,
+    ):
+        toml_path = str(tmp_path / "t1.toml")
+        with open(toml_path, "w", encoding="utf-8") as fh:
+            fh.write("""\
+task_id = "t1"
+goal = "g"
+[[subtasks]]
+subtask_id = "s1"
+prompt = "first"
+[[subtasks]]
+subtask_id = "s2"
+prompt = "second"
+[[checkpoints]]
+checkpoint_id = "c1"
+before_subtask = "s2"
+description = "Review s1."
+kind = "review-commit"
+""")
+        t_orig = Task.from_toml(
+            toml_path, state_root=state_root, workspaces_dir=workspaces_dir,
+        )
+        loaded = load_task("t1", state_root=state_root, mark_resume=False)
+        assert len(loaded.checkpoints) == 1
+        assert loaded.checkpoints[0].checkpoint_id == (
+            t_orig.checkpoints[0].checkpoint_id
+        )
+        assert loaded.checkpoints[0].before_subtask == "s2"
+        assert loaded.checkpoints[0].description == "Review s1."
+        assert loaded.checkpoints[0].kind == "review-commit"
+        assert loaded.acked_checkpoint_ids == set()
 
 
 # ---------------------------------------------------------------------------

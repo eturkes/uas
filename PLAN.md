@@ -345,6 +345,43 @@ c. **Match against candidates A–H.** The pick is an
    published literature; project owner's domain
    familiarity helps post-run assessment.
 
+#### §6 amendment — done-enough criterion 4
+
+Recorded at §6 step 8 ahead of step 9 kickoff. Project
+owner picked resolution (a) at the §6 step 7 review
+gate: keep `auto_resume_enabled=true` (already committed
+in `agent-survey-2026-policy.toml`) and amend done-
+enough criterion 4 to match the §3 resume mechanism.
+
+Original criterion 4:
+
+> At least one window-boundary transition successfully
+> traversed (`policy_pause` decision present + a later
+> `task_resume` decision after operator re-invocation).
+
+Amended criterion 4:
+
+> At least one window-boundary transition successfully
+> traversed. Either: a `policy_pause` decision present
+> + a later `task_resume` decision after operator
+> re-invocation (auto-resume disabled branch), or a
+> `policy_pause` followed by a `policy_auto_resume`
+> decision (auto-resume enabled branch — the
+> agent-survey-2026 actual configuration).
+
+Rationale. §1 was authored before §3 closed; §3
+committed `auto_resume_enabled=true` in
+`agent-survey-2026-policy.toml` to satisfy the §1
+"owner unavailable" assumption. The amendment evolves
+the resume marker to match the §3 mechanism without
+weakening the underlying acceptance signal — "at least
+one window-boundary transition successfully traversed"
+remains the bar; whether the resume was operator-driven
+or auto-driven is implementation detail. The other
+three done-enough criteria (`survey.md` produced ≥10k
+words, ≥18/22 subtasks completed, total spend below
+$200 hard-stop) are unchanged.
+
 ## Section 2 — Long-horizon task definition spec
 
 **Goal.** Extend `orchestrator/cases/<task>.toml` schema as

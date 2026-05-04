@@ -2020,6 +2020,135 @@ experiment). Capture findings.
 
 **Status:** pending
 
+### Results
+
+#### Iteration 1 — entry conditions, decision, next-session pointer
+
+Session opened on commit `d775150` (clean tree). §6 closed
+on `policy_wrap_up` (seven_day `allowed_warning`, 75%
+utilization, `surpassedThreshold=0.75`); state-root at
+`orchestrator/state/agent-survey-2026/` intact (32 events /
+3 rate-limit rows / 2 buffer rows / `policy.toml` /
+`resume_summary.md` all match §6 close mtimes 2026-05-03
+20:11 local).
+
+**Resume precondition.** The wrap_up trigger row carries
+`rate_limit_info.resetsAt = 1777885200` →
+**2026-05-04T09:00:00Z**. Session start was
+2026-05-04T03:04:19Z; **5 h 56 min** wall to reset, which
+exceeds CLAUDE.md § "Long-wait handling" 1 h threshold. No
+`ScheduleWakeup` / sleep; record the next-session pointer
+and end cleanly. The five_hour cap had already reset
+(`resetsAt 1777858800` = 2026-05-04T01:40:00Z, past at
+session open), so the seven_day cap is the lone gate.
+
+**Continue / adjust / abort decision: continue, no
+adjustments.** Justification:
+
+- Output quality on the 2 stage-1 subtasks looked
+  fit-for-purpose (§6 spot-check: substantive prose,
+  citations to real published work — ReAct, SWE-agent,
+  CoT, Toolformer, Lost-in-the-middle).
+- Spend is on track. $1.03 across 2 / 22 subtasks
+  extrapolates to ~$11 total (Haiku-rate); §1 envelope
+  was $20–$80 Opus-relative, so realised cost is well
+  under expectation and well under the $200 hard-stop.
+- The wrap_up was a legitimate budget gate, not an
+  off-rails signal. No subtask failures, no degenerate
+  loop, no auth issues.
+
+**No pre-resume edits.** Considered and explicitly
+deferred:
+
+- **Haiku-vs-Opus model gap** (§6 Substrate finding 1).
+  Workers ran on Haiku 4.5 because `claude --print`
+  defaults to Haiku; the unified ROADMAP §"Model
+  policy" intent is Opus. Forcing `--model
+  claude-opus-4-7` in `orchestrator/worker.py` is the
+  fix, but it's a worker-spawn architectural change
+  and §6 already flagged it as a **Phase 6+ candidate**
+  ("justified by real-task evidence; ablatable from day
+  one"). Mid-task model swap would also break
+  consistency within the agent-survey-2026 run, since
+  stage-1 outputs were drafted on Haiku — synthesis
+  expects to consume those outputs. Keep Haiku for the
+  rest of agent-survey-2026; let Phase 6+ make the
+  worker-spawn change with its own evidence + ablation
+  story.
+- **Resume-summary wishlist** (§6 step 14). Two cheap
+  §4 writer additions (human-readable `resetsAt`,
+  per-stage cumulative spend) — also Phase 6+
+  candidates per the §6 capture, not §7 in-place edits.
+- **`_parse_iso8601` numeric-`resetsAt` gap** (§6
+  Substrate finding 3). The §1 done-enough criterion 4
+  (auto-resume branch) needs this to work for full
+  validation, but §6 wrap_up exited rather than auto-
+  resuming so the gap is still untriggered. The first
+  real exercise will be when iteration 2's resume hits
+  a `policy_pause` (5 h cap) — then we observe whether
+  `_compute_pause_sleep_seconds` falls back to
+  `auto_resume_fallback_seconds=1800` or computes
+  against the epoch correctly. No code edit until we
+  see what shape iteration 2 produces.
+
+**Next-session command.** After
+**2026-05-04T09:00:00Z** (epoch 1777885200) — seven_day
+window reset:
+
+```
+./uas-orchestrate resume agent-survey-2026
+```
+
+The resume will replay the JSONL state, find no
+`in_flight` subtasks (both §6 spawns completed cleanly),
+and dispatch the next pending subtask `s1-3-tot`.
+
+**Sanity checks the next session should run before
+`resume`** (all read-only, no spend):
+
+1. `date -u +%s` → confirm epoch ≥ 1777885200 (i.e.,
+   we're past the seven_day reset). If not, end the
+   session again with an updated pointer.
+2. `git status` → clean tree expected (this session
+   commits only the §7 Results edit + the
+   "Author Section 7 entry conditions" commit).
+3. `ls -la orchestrator/state/agent-survey-2026/` →
+   confirm state-root mtimes still match §6 close
+   (no out-of-session run between sessions).
+4. `tail -1 orchestrator/state/agent-survey-2026/task_events.jsonl
+   | python3 -c 'import sys, json; print(json.loads(sys.stdin.read())["event"])'`
+   → expect `decision` (the `policy_wrap_up`).
+
+**Stop condition for iteration 2 onward.** §7 step 3:
+loop until §1 exit criterion is met OR project owner
+stops the experiment. §1 done-enough criteria recap:
+
+1. `survey.md` produced in `<workspace>/synthesis/`,
+   ≥10k words, sections for each of stages 1–4 + intro
+   + conclusion.
+2. ≥18 / 22 subtasks completed; <5 `worker_fail`.
+3. Total spend < $200 hard-stop (no `policy_halt`).
+4. ≥1 window-boundary transition (the §6 close
+   amendment widened this to accept `policy_pause` +
+   `policy_auto_resume` for the auto-resume branch
+   we're on).
+
+Currently: 1 ✗ (no synthesis), 2 ✗ (2/22), 3 ✓ ($1.03),
+4 partially ✓ (`policy_wrap_up` is a window-boundary
+event but not the criterion-4-named pair; need a real
+`policy_pause` + `policy_auto_resume` pair to fully
+satisfy). The agent-survey-2026 run is therefore
+expected to need ≥1 more iteration after this session
+to satisfy criteria 1–2 and probably criterion 4 as
+well; iteration count depends on how many seven_day /
+five_hour boundaries the remaining 20 subtasks
+traverse.
+
+**§7 step 4 ("Post-run write-up") deferred** until §1
+done-enough is met or the experiment is formally
+stopped. `docs/phase5_findings.md` does not exist yet;
+its authoring is the closing iteration's deliverable.
+
 ## Section 8 — Phase 5 close
 
 **Goal.** Standard phase-close: ROADMAP delta + PLAN removal.

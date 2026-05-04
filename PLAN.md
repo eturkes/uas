@@ -1663,7 +1663,7 @@ budget; steps 13–14 record the §6 outcome.
   pause, what triggered the pause, project owner's
   observations.
 
-**Status:** pending
+**Status:** completed
 
 ### Results
 
@@ -1744,12 +1744,241 @@ Run on commit `1fd2e07` (clean). Findings:
    call rather than baked as fixed dates) and surfaces as a
    Phase 6+ candidate but is not a §6 blocker.
 
-#### Project-owner review gate
+#### Project-owner review gate (steps 7–8)
 
-Pending. Step 7 is the next action; the §1 ↔ §3 done-enough-
-criterion-4 reconciliation pick goes here, plus the explicit
-go for step 9. §6 Results will append the pick + kickoff
-timestamps after the gate clears.
+Resolved across two session turns:
+
+- **Reconciliation pick (resolution a).** Project owner
+  picked (a) at the §6 step 7 review gate; the §1 Results
+  "§6 amendment — done-enough criterion 4" subsection
+  records the verbatim amendment. Committed in `6ebbaef`
+  ahead of step 9 per PLAN's "record separately" instruction.
+- **Explicit go for step 9.** Given as "Go for it" at the
+  start of the §6-execution session.
+- **Reuse vs wipe pick (forced by discovered state — see
+  next subsection).** Project owner picked **reuse** ("A")
+  in the same session. Existing run kept; no wipe; no
+  re-kick.
+
+#### Discovered state — kickoff already executed
+
+When the §6-execution session opened (commit `6ebbaef`,
+clean tree), the
+`orchestrator/state/agent-survey-2026/` directory was
+already populated with a real run. Forensics:
+
+- `policy.toml` mtime 2026-05-03 20:03 (matches §6
+  amendment commit timestamp — written at fresh-task
+  bootstrap by `_seed_policy_override`).
+- `task_events.jsonl` / `rate_limits.jsonl` /
+  `buffer.jsonl` / `resume_summary.md` mtimes 20:11 —
+  written ~8 minutes after the bootstrap, by an
+  out-of-session `./uas-orchestrate start
+  agent-survey-2026` invocation.
+- All event rows carry
+  `git_sha=6ebbaefb3b9037c56aee02d488d3702c61010623`
+  matching the §6 amendment commit, confirming the run
+  executed against the intended commit state.
+- No orchestrator process currently running.
+
+The discovery contradicted §6 step 5's pre-flight
+assumption ("the kickoff at step 9 will start from a
+clean fresh-task bootstrap"), so the §6 step 5 explicit
+decision (reuse vs. wipe) was raised to the project
+owner. Owner picked **reuse**: 12.2k words of stage1
+output + $1.03 spend + the window-boundary signal
+already in hand satisfied the §6 acceptance criteria;
+no value in re-kicking.
+
+#### Run summary (kickoff → §12 stop)
+
+Kickoff git_sha:
+`6ebbaefb3b9037c56aee02d488d3702c61010623` (§6
+amendment commit; clean tree). Kickoff and exit
+timestamps recovered from `task_events.jsonl` (no
+captured stdout — the run was external to the
+§6-execution session):
+
+- First event (`task_create`):
+  2026-05-04T00:03:44.950877+00:00.
+- First worker spawn (`s1-1-react`): 2026-05-04T00:03:45
+  (within ~5 ms of `task_create`; the bulk of the first
+  25 events are stage / subtask enqueues clustered at
+  00:03:44–45).
+- `complete_subtask s1-1-react`:
+  2026-05-04T00:07:56.700 — first subtask end-to-end
+  ~4.2 minutes wallclock.
+- `complete_subtask s1-2-reflexion`:
+  2026-05-04T00:11:48.907 — second subtask ~3.9 minutes
+  wallclock.
+- Final decision (`policy_wrap_up`):
+  2026-05-04T00:11:48.925 (~9 ms after the s1-2 complete
+  event, on the same `rate_limit_event` line as the
+  trigger).
+
+Total wallclock: 8 m 4 s. Subtasks completed: 2 / 22
+(`s1-1-react`, `s1-2-reflexion`). Subtasks failed: 0.
+Subtasks remaining: 20.
+
+Stage-1 outputs landed at
+`integration/workspace/agent-survey-2026/stage1/`:
+`react.md` (222 lines, 5519 words),
+`reflexion.md` (221 lines, 6691 words). Total stage-1
+volume: 12,210 words across 2 / 6 stage-1 subtasks.
+Spot-check on `react.md` first 30 lines: substantive
+prose with citations to Yao et al. 2023 ReAct paper,
+SWE-agent (Yang et al. 2024), Wei et al. CoT,
+Toolformer, Lost-in-the-middle (Liu et al. 2023). Output
+quality looks fit-for-purpose for the §1 task definition;
+no signs of degenerate behaviour.
+
+#### Four-state-artefact verification (§6 step 13)
+
+| Artefact | Rows / state | OK? |
+|---|---|---|
+| `task_events.jsonl` | 32 events; last decision `policy_wrap_up` matches the §12 stop signal | ✓ |
+| `rate_limits.jsonl` | 3 `rate_limit_event` rows (2 × `five_hour` `allowed`, 1 × `seven_day` `allowed_warning` triggering wrap_up) | ✓ |
+| `buffer.jsonl` | 2 buffer rows; cumulative `claude_reported_cost_usd` = $1.0291; cumulative locally-priced = $0.2056 | ✓ |
+| `policy.toml` | Present with `[auto_resume] enabled = true` per the §3 override | ✓ |
+
+#### Stop trigger
+
+`policy_wrap_up` decision recorded after a `seven_day`
+`rate_limit_event` with `status='allowed_warning'` and
+`utilization=0.75`. Policy machine matched the
+`seven_day.soft_cap_action='wrap_up'` rule (committed
+default in `orchestrator/policy.default.toml`);
+orchestrator drained in-flight subtasks (s1-2-reflexion
+was already mid-flight; it completed cleanly) and
+exited.
+
+**§12 PLAN gap.** Step 12's named stop conditions are
+`policy_pause` / `policy_auto_resume` / `checkpoint_pause`
+/ "all 22 subtasks terminal". `policy_wrap_up` is NOT
+listed but IS named in step 10 as a monitor-trigger
+event class, and the §6 acceptance criterion ("window
+boundary, checkpoint, or natural pause") is broader and
+is satisfied. Looks like an authoring oversight in step
+12, not an exclusion. Flagging for §7's stop-condition
+surface (the same omission likely affects §7's "continue
+/ adjust / abort" decision loop) and for any future
+§6-shaped section in Phase 6+.
+
+#### Resume summary observations (§6 step 14)
+
+Resume summary at
+`orchestrator/state/agent-survey-2026/resume_summary.md`,
+generated 2026-05-04T00:11:48 UTC by the §4 writer.
+Digest sections present per the §4 Results enumeration:
+Goal, Subtasks (totals + per-stage breakdown +
+next-pending + "plus N more"), Spend (cumulative
+Claude-reported + cumulative locally-priced +
+this-invocation), Decisions this invocation (in order,
+with notes), Suggested next action.
+
+_Owner judgement (assistant stand-in pending owner async
+review)._ Readable and fit-for-purpose. The "Suggested
+next action" wording correctly identifies the seven_day
+cap as the wrap_up cause and proposes the right recovery
+(`./uas-orchestrate resume agent-survey-2026` after the
+7-day window resets). The per-stage breakdown surfaces
+that only stage-1 has any progress; this is the right
+level of detail for a 5-stage / 22-subtask task. The
+"Decisions this invocation" list is in arrival order
+with clear `worker_spawn` ↔ `worker_complete` pairing,
+which is what a multi-hour-gap resume needs.
+
+Wishlist captured for §7 first-iteration findings or
+Phase 6+ (NOT in-place §4 edits — §4 writer is not on
+this PLAN's revision surface unless a hard bug
+surfaces):
+
+- Seven_day `resetsAt` (epoch 1777885200) is not
+  surfaced in human-readable form. The "resume after the
+  7-day window resets" suggestion would benefit from
+  "(resets at YYYY-MM-DD HH:MM UTC, ~Xh from generation
+  time)" so the operator knows when to re-open. Cheap
+  addition to the §4 writer.
+- Per-stage cumulative spend is not in the digest. With
+  $1.03 across 2 stage-1 subtasks (~$0.50 each on Haiku
+  — see Substrate findings 1 below), a per-stage spend
+  column would let an operator forecast remaining cost
+  more directly.
+
+#### Substrate findings (forwarded to §7 / Phase 6+)
+
+1. **Workers ran on Haiku 4.5, not Opus 4.7.**
+   `buffer.jsonl` rows record `model:
+   "claude-haiku-4-5-20251001"`. Documented Phase 3 close
+   substrate finding: "the headless `claude --print`
+   path defaulted to Haiku 4.5 per the CLI's own default
+   for that subcommand." Per-subtask cost realised at
+   ~$0.50 Haiku instead of the §1 estimate's $1–$3
+   Opus-relative range, so the §1 budget envelope
+   ($20–$80) likely overshoots the realised cost by
+   ~3–6×. Two follow-up choices for §7 / Phase 6+:
+   (a) accept the Haiku run and adjust the §1 budget
+   read in §7 Results; (b) force `--model
+   claude-opus-4-7` in `orchestrator/worker.py` spawn
+   args so the unified Opus policy actually applies to
+   headless workers. (b) is the intent of the unified
+   model policy; the gap is a Phase 3 close artefact.
+   Phase 6+ candidate: clears the §6+ standing rules
+   (justified by real-task evidence; ablatable from day
+   one — single conditional in worker spawn line; does
+   not re-implement Claude Code natives).
+
+2. **`config_hash="unavailable"` in every event row** —
+   expected per Phase 4 §7 substrate finding (the
+   soft-load in
+   `integration/provenance.py:_hash_active_config`
+   falls through after `uas_config.py` was cut).
+   Cosmetic; not a §6 blocker.
+
+3. **`rate_limit_info.resetsAt` is unix epoch in real
+   stream-json output**, matching Phase 3 close note.
+   `_parse_iso8601` returns `None` for numeric input
+   which would matter for `pause_until.until`-based
+   auto-resume sleeping. The §6 run did not reach an
+   auto-resume branch (wrap_up exited rather than
+   pausing), so this gap is still only theoretical
+   until a real `auto_resume_enabled=true` pause
+   traverses a window boundary. §7 will exercise this on
+   first resume — flag for §7 to surface whether
+   auto-resume sleep math degrades to fallback_seconds
+   or works against the epoch correctly.
+
+4. **No `[oauth] invalid_grant` warning in the run.**
+   The Phase 3 close note flagged this as expected on
+   first spawn. Either auth state was warm (probable —
+   the §6 pre-flight noted the auth surface had been
+   used recently) or the warning printed to stderr / a
+   non-captured stream. Not a blocker; flag for §7 to
+   confirm the warning still surfaces on a true
+   cold-auth resume.
+
+5. **§12 stop-condition list omits `policy_wrap_up`** —
+   see "Stop trigger" subsection above. PLAN gap; flag
+   for §7 stop-condition design.
+
+#### §6 close
+
+§6 acceptance criteria all met:
+
+- [x] Task started via `./uas-orchestrate start`.
+- [x] At least one window boundary encountered
+  (`policy_wrap_up` on the seven_day soft cap).
+- [x] All four state artefacts populated.
+- [x] §4's `resume_summary.md` written; assistant
+  stand-in observations recorded above.
+- [x] §6 Results subsection records start time, spend at
+  pause, what triggered the pause, and observations.
+
+§7 entry conditions: state-root at
+`orchestrator/state/agent-survey-2026/` ready for
+`./uas-orchestrate resume`; resume should not be
+attempted until the seven_day window resets (epoch
+1777885200 — see §7 Step 1 first iteration).
 
 ## Section 7 — Real-task continuation + post-run write-up
 
